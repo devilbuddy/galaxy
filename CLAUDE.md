@@ -128,6 +128,7 @@ failure and so work in CI as-is:
 ```bash
 sh tools/verify_cross_runtime.sh      # BitOp and arithmetic paths agree
 luajit tools/verify_determinism.lua   # a seed reproduces exactly, across processes
+luajit tools/test_sim.lua             # turn resolution, combat, fog of war
 luajit tools/test_wire.lua            # client/server wire format round-trips
 luajit tools/test_gestures.lua        # pan / pinch / tap recognition
 luajit tools/lint_shared.lua          # no idioms gopher-lua miscompiles
@@ -152,6 +153,52 @@ luajit -e 'package.path="./?.lua;"..package.path
 | `main/` | Defold client: rendering, camera, HUD, backend client. |
 | `server/modules/` | Nakama entry points. `docker-compose.yml` mounts `./galaxy` into Nakama's module path, so there is one generator, not two. |
 | `tools/` | Offline harnesses and tests, run under `luajit`. |
+
+### Simulation (`galaxy/sim/`, engine-free)
+
+A server-authoritative, asynchronous 4X for 2-10 players: discrete turns resolve
+on a schedule (typically twice a day), players issue orders between them, and
+the star map is public while everything about *state* is fogged.
+
+`resolve.turn(galaxy, state, orders)` advances exactly one turn and returns the
+events it produced. It is a pure function of its inputs plus a per-turn seeded
+RNG (`rng.stream(seed, "turn:" .. n)`), so a turn replays identically and a
+whole game is reconstructable from `(seed, order history)`. That is what lets a
+400-turn game be simulated in 220 ms under LuaJIT while the same code runs on
+Nakama's much slower interpreter in production.
+
+| module | role |
+|---|---|
+| `rules.lua` | every balance constant, so tuning never means reading logic |
+| `state.lua` | opening state; home systems by farthest-point sampling |
+| `path.lua` | Dijkstra along lanes; fleets never move in straight lines |
+| `resolve.lua` | production, departures, movement, battles, aftermath |
+| `view.lua` | fog of war: visibility, remembered state, per-player projection |
+
+Turn order is production → departures → movement → battles → aftermath. Fleets
+stop at the first hostile system on their path, so lanes can be blockaded.
+
+**Fog of war** is geometry-public, state-private. Players always see stars,
+lanes and names; they see *ownership, population and ships* only for systems
+they own, systems one lane away, and systems where they have a fleet. What was
+once seen is remembered and returned stamped with the turn it was observed, so
+the map does not flicker as scouts move. `view.project` omits unseen systems
+entirely rather than sending zeroes, so the payload cannot leak strength by its
+shape. Enemy fleets in transit are never visible.
+
+**Fleet strength is capped by population** (`fleet_cap_per_pop`). This is not
+cosmetic: without a ceiling, garrisons grow without bound, defence compounds and
+the map freezes into a permanent stalemate by about turn 75 — `tools/play.lua`
+demonstrated exactly that. Tying the cap to territory makes losing ground
+genuinely weaken you.
+
+**Pacing is not yet tuned.** `tools/play.lua` plays a full game with a greedy AI
+and reports turns-to-decision. Current results range from 16 days to never
+across seeds and galaxy sizes, and that spread is dominated by the AI (which
+never defends, retreats, or concentrates beyond one frontier) rather than by the
+rules. Tuning the constants against it would be fitting to noise. The reliable
+fix for an async game is probably a fixed end turn plus a score, which is also
+what the BBS-era games did.
 
 ### Generation pipeline (`galaxy/`, engine-free)
 
