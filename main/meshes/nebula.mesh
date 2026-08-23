@@ -1,0 +1,6 @@
+material: "/main/materials/galaxy_nebula.material"
+vertices: "/main/meshes/nebula.buffer"
+textures: "/main/assets/nebula.png"
+primitive_type: PRIMITIVE_TRIANGLES
+position_stream: "position"
+normal_stream: ""

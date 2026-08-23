@@ -1,0 +1,5 @@
+material: "/main/materials/galaxy_star.material"
+vertices: "/main/meshes/stars.buffer"
+primitive_type: PRIMITIVE_TRIANGLES
+position_stream: "position"
+normal_stream: ""

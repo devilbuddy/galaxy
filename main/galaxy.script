@@ -1,0 +1,220 @@
+--- Generates a galaxy and uploads it to the mesh layers.
+--
+-- Everything visual is built once per seed and then left alone: the camera
+-- moves, the geometry does not. That is why the whole map costs six draw calls
+-- and no per-frame CPU work beyond the parallax backdrop.
+
+local generate = require("galaxy.generate")
+local meshbuild = require("main.meshbuild")
+local store = require("main.store")
+local rng = require("galaxy.rng")
+local digest = require("galaxy.digest")
+
+-- A go.property number is stored as a 32-bit float, so any integer above 2^24
+-- cannot round-trip: 20260823 silently comes back as 20260824. For a game whose
+-- whole premise is "this seed reproduces this galaxy", that is a correctness
+-- bug, so seeds are kept inside the exactly-representable range and the
+-- property is floored on the way in. Leave it at 0 to use the configured seed.
+go.property("seed", 0)
+
+local MAX_SEED = 16777215
+
+-- Layer sizes as fractions of world_size, so retuning the map's scale does not
+-- silently change how the map looks.
+local CORE_SCALE = 0.0027
+local GLOW_SCALE = 0.0130
+local WASH_SCALE = 0.0520
+local LANE_WIDTH = 0.0010
+local NEBULA_OVERSCAN = 2.2
+local DUST_COUNT = 1500
+
+-- Layer depths. Only the ordering matters (depth testing is off), but keeping
+-- them distinct documents the intended stacking.
+local Z_NEBULA, Z_DUST, Z_WASH, Z_LANE, Z_GLOW, Z_STAR = -50, -40, -30, -20, -10, 0
+
+--- Region territory washes: one soft blob per star, tinted by its region.
+-- Overlapping blobs merge into an organic territory outline, which reads far
+-- better than one circle drawn at each region's centroid.
+local function build_wash(g, world)
+	local b = meshbuild.new(#g.stars)
+	local radius = world * WASH_SCALE
+	for i = 1, #g.stars do
+		local s = g.stars[i]
+		local c = g.regions[s.region].colour
+		b:sprite(s.x, s.y, radius, Z_WASH, c[1], c[2], c[3], 0.20)
+	end
+	b:apply("/galaxy#wash")
+end
+
+--- Hyperlanes, tinted by the region they run through. Lanes that cross a
+--- border get a neutral grey so the chokepoints between territories read.
+local function build_lanes(g, world)
+	local b = meshbuild.new(#g.lanes)
+	local width = world * LANE_WIDTH
+	for i = 1, #g.lanes do
+		local l = g.lanes[i]
+		local sa, sb = g.stars[l.a], g.stars[l.b]
+		local r, gr, bl, a
+		if l.border then
+			r, gr, bl, a = 0.50, 0.54, 0.66, 0.42
+		else
+			local c = g.regions[sa.region].colour
+			r = math.min(1, c[1] * 1.45 + 0.22)
+			gr = math.min(1, c[2] * 1.45 + 0.26)
+			bl = math.min(1, c[3] * 1.45 + 0.32)
+			a = 0.62
+		end
+		b:segment(sa.x, sa.y, sb.x, sb.y, width, Z_LANE, r, gr, bl, a)
+	end
+	b:apply("/galaxy#lanes")
+end
+
+--- Additive halos. Their size follows the star class, which is what separates
+--- a blue giant from a red dwarf at a glance when zoomed out.
+local function build_glow(g, world)
+	local b = meshbuild.new(#g.stars)
+	local base = world * GLOW_SCALE
+	for i = 1, #g.stars do
+		local s = g.stars[i]
+		local c = s.colour
+		local size = base * s.glow * s.size_jitter
+		b:sprite(s.x, s.y, size, Z_GLOW, c[1], c[2], c[3], 0.52)
+	end
+	b:apply("/galaxy#glow")
+end
+
+--- Star cores. Pushed towards white because a bright source reads as white
+--- with a coloured fringe, not as a saturated disc.
+local function build_stars(g, world)
+	local b = meshbuild.new(#g.stars)
+	local base = world * CORE_SCALE
+	for i = 1, #g.stars do
+		local s = g.stars[i]
+		local c = s.colour
+		local size = base * s.radius * s.size_jitter
+		b:sprite(s.x, s.y, size, Z_STAR,
+			math.min(1, c[1] * 0.42 + 0.62),
+			math.min(1, c[2] * 0.42 + 0.62),
+			math.min(1, c[3] * 0.42 + 0.62), 1.0)
+	end
+	b:apply("/galaxy#stars")
+end
+
+--- A single oversized quad for the nebula backdrop.
+local function build_nebula(world)
+	local b = meshbuild.new(1)
+	local half = world * NEBULA_OVERSCAN * 0.5
+	b:rect(0, 0, half, half, Z_NEBULA, 1, 1, 1, 0.62)
+	b:apply("/backdrop#nebula")
+end
+
+--- Background starfield. Derived from the seed like everything else, so the
+--- same seed reproduces the backdrop as well as the map.
+local function build_dust(seed, world)
+	local b = meshbuild.new(DUST_COUNT)
+	local r = rng.stream(seed, "dust")
+	local half = world * NEBULA_OVERSCAN * 0.5
+	for _ = 1, DUST_COUNT do
+		local x = r:range(-half, half)
+		local y = r:range(-half, half)
+		-- A spread of sizes and brightnesses reads as depth; a uniform field
+		-- reads as noise.
+		local size = world * r:range(0.0006, 0.0022)
+		local bright = r:range(0.18, 0.75)
+		-- Slight blue-white variation.
+		local warm = r:range(0.85, 1.0)
+		b:sprite(x, y, size, Z_DUST, bright * warm, bright * 0.96, bright, 1.0)
+	end
+	b:apply("/backdrop#dust")
+end
+
+local function build(self, seed)
+	local t0 = os.clock()
+	local g = generate.build(seed)
+	local generated = (os.clock() - t0) * 1000
+
+	t0 = os.clock()
+	local world = g.world_size
+	build_nebula(world)
+	build_dust(seed, world)
+	build_wash(g, world)
+	build_lanes(g, world)
+	build_glow(g, world)
+	build_stars(g, world)
+	local meshed = (os.clock() - t0) * 1000
+
+	store.galaxy = g
+	store.selected = nil
+	store.revision = store.revision + 1
+
+	print(string.format(
+		"galaxy seed=%d  %d stars  %d lanes  %d regions  degree %.2f  connected=%s  digest=%d",
+		g.seed, g.stats.star_count, g.stats.lane_count, g.stats.region_count,
+		g.stats.mean_degree, tostring(g.stats.connected), digest.of(g)))
+	print(string.format("  generated in %.0f ms, meshed in %.0f ms", generated, meshed))
+
+	msg.post("/camera#camera_script", "map_ready", {
+		world = world,
+		centre_x = g.content.centre_x,
+		centre_y = g.content.centre_y,
+		content_width = g.content.width,
+		content_height = g.content.height,
+	})
+end
+
+--- Clamp anything arriving from outside into a seed we can represent exactly.
+local function sanitise_seed(value, fallback)
+	local seed = math.floor(tonumber(value) or 0)
+	if seed <= 0 then return fallback end
+	return seed % MAX_SEED
+end
+
+function init(self)
+	self.backdrop = msg.url(nil, "/backdrop", nil)
+	self.backdrop_fade = nil
+	self.seed = sanitise_seed(self.seed, require("galaxy.config").default_seed)
+	build(self, self.seed)
+end
+
+-- The backdrop is a fixed-resolution texture spread over the whole world, so
+-- magnifying it far enough turns it into a smear. Fading it out as the player
+-- zooms in keeps the close-up view clean and matches how a map should behave:
+-- ambience at a distance, detail up close.
+local BACKDROP_FULL_ZOOM = 0.6   -- at or below this, the backdrop is at full strength
+local BACKDROP_GONE_ZOOM = 2.2   -- at or above this, it has faded out entirely
+
+-- The region washes are smooth rather than blurry, but at close range they
+-- dominate the frame. They are eased back rather than removed: territory still
+-- has to be readable when you are looking at two systems side by side.
+local WASH_MIN_STRENGTH = 0.45
+
+function update(self, dt)
+	-- Parallax: the backdrop follows the camera part of the way, so it drifts
+	-- more slowly than the map and reads as further away.
+	local cam = store.camera
+	go.set_position(vmath.vector3(cam.x * 0.55, cam.y * 0.55, 0), self.backdrop)
+
+	local t = (cam.zoom - BACKDROP_FULL_ZOOM) / (BACKDROP_GONE_ZOOM - BACKDROP_FULL_ZOOM)
+	t = t < 0 and 0 or (t > 1 and 1 or t)
+	local fade = 1.0 - t * t * (3 - 2 * t) -- smoothstep, so the change is not abrupt
+	if fade ~= self.backdrop_fade then
+		self.backdrop_fade = fade
+		local tint = vmath.vector4(1, 1, 1, fade)
+		go.set("/backdrop#nebula", "tint", tint)
+		go.set("/backdrop#dust", "tint", tint)
+		local wash = WASH_MIN_STRENGTH + (1.0 - WASH_MIN_STRENGTH) * fade
+		go.set("/galaxy#wash", "tint", vmath.vector4(1, 1, 1, wash))
+	end
+end
+
+function on_message(self, message_id, message)
+	if message_id == hash("regenerate") then
+		-- Walking the seed by one gives a completely different galaxy (the seed
+		-- is hashed per subsystem) while staying reproducible: the player can
+		-- always count back to one they liked.
+		local next_seed = message.seed and sanitise_seed(message.seed, self.seed)
+			or (self.seed % MAX_SEED) + 1
+		self.seed = next_seed
+		build(self, next_seed)
+	end
+end

@@ -1,0 +1,27 @@
+#version 140
+
+// Shared by every galaxy mesh layer. The layers differ only in their texture
+// and blend mode, so one shader pair serves all of them.
+//
+// Vertex colour is what makes a whole layer a single draw call: the tint for
+// each star class, region and lane is baked into the buffer rather than set as
+// a per-component uniform, which would break batching.
+
+in highp vec4 position;
+in mediump vec2 texcoord0;
+in mediump vec4 color;
+
+out mediump vec2 var_texcoord0;
+out mediump vec4 var_color;
+
+uniform vs_uniforms
+{
+    highp mat4 mtx_worldviewproj;
+};
+
+void main()
+{
+    gl_Position = mtx_worldviewproj * vec4(position.xyz, 1.0);
+    var_texcoord0 = texcoord0;
+    var_color = color;
+}

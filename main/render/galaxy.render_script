@@ -1,0 +1,161 @@
+--- Render pipeline for the galaxy map.
+--
+-- The layer order and blend modes here are the whole visual treatment:
+--
+--   nebula   alpha     dim parallax background
+--   dust     additive  background starfield
+--   wash     alpha     region territory tints
+--   lanes    alpha     hyperlane network
+--   glow     additive  star halos - additive is what makes them read as light
+--   stars    alpha     star cores
+--   gui      alpha     labels and HUD, in screen space
+--
+-- Depth testing is off throughout: this is a 2D map and the draw order above
+-- *is* the depth order. Every texture is premultiplied (Defold does that at
+-- build time), so alpha blending uses ONE / ONE_MINUS_SRC_ALPHA rather than
+-- SRC_ALPHA / ONE_MINUS_SRC_ALPHA.
+
+local store = require("main.store")
+
+local WORLD_LAYERS = {
+	"galaxy_nebula",
+	"galaxy_dust",
+	"galaxy_wash",
+	"galaxy_lane",
+	"galaxy_glow",
+	"galaxy_star",
+}
+
+-- Layers that add light rather than occlude what is behind them.
+local ADDITIVE = {
+	galaxy_dust = true,
+	galaxy_glow = true,
+}
+
+local MSG_CLEAR_COLOR = hash("clear_color")
+local MSG_WINDOW_RESIZED = hash("window_resized")
+
+--- Establish the single coordinate space used by the world, the GUI and input.
+--
+-- The design width from game.project is held fixed and the height is derived
+-- from the framebuffer's real aspect ratio. Using the design height directly
+-- would stretch the map on any device whose aspect differs from 720x1280 - on a
+-- 1080x2340 phone that is a 22% vertical stretch, which turns every star into
+-- an ellipse. Deriving the height instead means taller screens simply see more
+-- galaxy, which is the right behaviour for a map you pan around anyway.
+--
+-- Input needs a correction to match. Defold always normalises touches to the
+-- *configured* display size, so a tap at the top of a 2340-tall screen arrives
+-- as y = 1280 no matter what we render; `input_scale_y` converts that into this
+-- view space. Without it, taps drift further from their target the further they
+-- are from the bottom of the screen.
+local function update_window(self)
+	self.window_width = render.get_window_width()
+	self.window_height = render.get_window_height()
+	local design_w = render.get_width()
+	local design_h = render.get_height()
+	self.valid = self.window_width > 0 and self.window_height > 0
+		and design_w > 0 and design_h > 0
+	if self.valid then
+		self.width = design_w
+		self.height = design_w * (self.window_height / self.window_width)
+
+		self.gui_projection = vmath.matrix4_orthographic(0, self.width, 0, self.height, -1, 1)
+
+		local screen = store.screen
+		screen.width = self.width
+		screen.height = self.height
+		screen.input_scale_x = self.width / design_w
+		screen.input_scale_y = self.height / design_h
+		screen.framebuffer_width = self.window_width
+		screen.framebuffer_height = self.window_height
+	end
+end
+
+function init(self)
+	self.predicates = {}
+	for i, tag in ipairs(WORLD_LAYERS) do
+		self.predicates[i] = { tag = tag, predicate = render.predicate({ tag }) }
+	end
+	self.gui_predicate = render.predicate({ "gui" })
+	self.text_predicate = render.predicate({ "debug_text" })
+
+	self.clear_buffers = {
+		[graphics.BUFFER_TYPE_COLOR0_BIT] = vmath.vector4(
+			sys.get_config_number("render.clear_color_red", 0.012),
+			sys.get_config_number("render.clear_color_green", 0.014),
+			sys.get_config_number("render.clear_color_blue", 0.030),
+			1),
+		[graphics.BUFFER_TYPE_DEPTH_BIT] = 1,
+		[graphics.BUFFER_TYPE_STENCIL_BIT] = 0,
+	}
+
+	self.gui_view = vmath.matrix4()
+	update_window(self)
+end
+
+--- Build the world projection from the shared camera state.
+--
+-- Done here rather than with a camera component so the visible world width is
+-- exactly design_width / zoom. That relationship is what lets the HUD place a
+-- label with `(world_x - cam_x) * zoom + width/2` and have it land on the star.
+local function set_world_camera(self)
+	local cam = store.camera
+	local zoom = cam.zoom
+	if not zoom or zoom <= 0 then zoom = 1 end
+	local hw = (self.width * 0.5) / zoom
+	local hh = (self.height * 0.5) / zoom
+	render.set_view(vmath.matrix4())
+	-- Near/far are generous: the layers sit at z -50..0 and nothing should ever
+	-- be clipped by the depth range in a 2D map.
+	render.set_projection(vmath.matrix4_orthographic(
+		cam.x - hw, cam.x + hw, cam.y - hh, cam.y + hh, -1000, 1000))
+end
+
+function update(self)
+	if not self.valid then
+		update_window(self)
+		if not self.valid then return end
+	end
+
+	render.set_depth_mask(true)
+	render.set_stencil_mask(0xff)
+	render.clear(self.clear_buffers)
+	render.set_viewport(0, 0, self.window_width, self.window_height)
+
+	-- 2D map: nothing should ever occlude anything by depth.
+	render.set_depth_mask(false)
+	render.disable_state(graphics.STATE_DEPTH_TEST)
+	render.disable_state(graphics.STATE_CULL_FACE)
+	render.enable_state(graphics.STATE_BLEND)
+
+	set_world_camera(self)
+	for i = 1, #self.predicates do
+		local layer = self.predicates[i]
+		if ADDITIVE[layer.tag] then
+			render.set_blend_func(graphics.BLEND_FACTOR_ONE, graphics.BLEND_FACTOR_ONE)
+		else
+			render.set_blend_func(graphics.BLEND_FACTOR_ONE,
+				graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+		end
+		render.draw(layer.predicate)
+	end
+
+	-- GUI in screen space: labels and HUD.
+	render.set_blend_func(graphics.BLEND_FACTOR_ONE, graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+	render.set_view(self.gui_view)
+	render.set_projection(self.gui_projection)
+	render.enable_state(graphics.STATE_STENCIL_TEST)
+	render.draw(self.gui_predicate)
+	render.draw(self.text_predicate)
+	render.disable_state(graphics.STATE_STENCIL_TEST)
+	render.disable_state(graphics.STATE_BLEND)
+end
+
+function on_message(self, message_id, message)
+	if message_id == MSG_WINDOW_RESIZED then
+		update_window(self)
+	elseif message_id == MSG_CLEAR_COLOR and message.color then
+		self.clear_buffers[graphics.BUFFER_TYPE_COLOR0_BIT] = message.color
+	end
+end

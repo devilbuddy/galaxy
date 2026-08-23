@@ -1,0 +1,5 @@
+material: "/main/materials/galaxy_dust.material"
+vertices: "/main/meshes/dust.buffer"
+primitive_type: PRIMITIVE_TRIANGLES
+position_stream: "position"
+normal_stream: ""

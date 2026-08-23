@@ -1,0 +1,303 @@
+--- Screen-space labels and HUD.
+--
+-- Labels are GUI nodes rather than world geometry so text stays crisp and a
+-- constant size at every zoom level, the way a real map's labels behave. A
+-- fixed pool of nodes is recycled each frame: only what is on screen and worth
+-- naming gets a node, so the count stays flat however large the galaxy is.
+
+local store = require("main.store")
+
+local STAR_LABEL_POOL = 80
+local REGION_LABEL_POOL = 12
+
+-- Below this zoom individual systems are too dense to label legibly, and only
+-- region names are drawn.
+local STAR_LABEL_MIN_ZOOM = 0.30
+-- How many system labels to show at the extremes of the zoom range. Filling the
+-- screen with names at full zoom-out turns the map into a wall of text, so the
+-- budget grows as the player zooms in and the map earns the detail.
+local STAR_LABELS_AT_MIN_ZOOM = 14
+local STAR_LABELS_AT_MAX_ZOOM = 80
+-- Above this, region names would sit uselessly far off screen.
+local REGION_LABEL_MAX_ZOOM = 1.10
+
+-- Base sizes are expressed against the 720x1280 design resolution and then
+-- multiplied by the device pixel ratio, because GUI nodes are positioned in
+-- framebuffer pixels (see store.screen).
+local STAR_FONT_SCALE = 0.62
+local REGION_FONT_SCALE = 1.05
+
+-- Height of the bottom HUD bar. The camera ignores drags that start inside it
+-- so panning cannot fight the buttons.
+local HUD_BAR_HEIGHT = 104
+
+local STAR_COLOUR = vmath.vector4(0.76, 0.81, 0.92, 1.0)
+local SELECTED_COLOUR = vmath.vector4(1.0, 0.92, 0.62, 1.0)
+
+local function make_text(pool, size, colour)
+	local node = gui.new_text_node(vmath.vector3(0, 0, 0), "")
+	gui.set_font(node, "map")
+	gui.set_scale(node, vmath.vector3(size, size, 1))
+	gui.set_color(node, colour)
+	gui.set_pivot(node, gui.PIVOT_W)
+	gui.set_enabled(node, false)
+	pool[#pool + 1] = node
+	return node
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+
+	self.star_nodes = {}
+	for _ = 1, STAR_LABEL_POOL do
+		make_text(self.star_nodes, STAR_FONT_SCALE, STAR_COLOUR)
+	end
+	self.region_nodes = {}
+	for _ = 1, REGION_LABEL_POOL do
+		local n = make_text(self.region_nodes, REGION_FONT_SCALE, STAR_COLOUR)
+		gui.set_pivot(n, gui.PIVOT_CENTER)
+	end
+
+	-- HUD chrome.
+	self.bar = gui.new_box_node(vmath.vector3(0, 0, 0), vmath.vector3(10, HUD_BAR_HEIGHT, 0))
+	gui.set_color(self.bar, vmath.vector4(0.03, 0.04, 0.08, 0.86))
+	gui.set_pivot(self.bar, gui.PIVOT_SW)
+
+	self.button = gui.new_box_node(vmath.vector3(0, 0, 0), vmath.vector3(168, 52, 0))
+	gui.set_color(self.button, vmath.vector4(0.14, 0.20, 0.36, 0.95))
+	gui.set_pivot(self.button, gui.PIVOT_CENTER)
+
+	self.button_text = gui.new_text_node(vmath.vector3(0, 0, 0), "NEW GALAXY")
+	gui.set_font(self.button_text, "map")
+	gui.set_scale(self.button_text, vmath.vector3(0.95, 0.95, 1))
+	gui.set_pivot(self.button_text, gui.PIVOT_CENTER)
+	gui.set_color(self.button_text, vmath.vector4(0.82, 0.88, 1.0, 1.0))
+
+	self.seed_text = gui.new_text_node(vmath.vector3(0, 0, 0), "")
+	gui.set_font(self.seed_text, "map")
+	gui.set_scale(self.seed_text, vmath.vector3(0.78, 0.78, 1))
+	gui.set_pivot(self.seed_text, gui.PIVOT_W)
+	gui.set_color(self.seed_text, vmath.vector4(0.52, 0.58, 0.72, 1.0))
+
+	self.info_text = gui.new_text_node(vmath.vector3(0, 0, 0), "")
+	gui.set_font(self.info_text, "map")
+	gui.set_scale(self.info_text, vmath.vector3(0.85, 0.85, 1))
+	gui.set_pivot(self.info_text, gui.PIVOT_NW)
+	gui.set_color(self.info_text, vmath.vector4(0.86, 0.90, 1.0, 1.0))
+	gui.set_line_break(self.info_text, true)
+
+	self.bar_height = HUD_BAR_HEIGHT
+	self.button_rect = nil
+	store.hud_bar_height = HUD_BAR_HEIGHT
+	self.revision = -1
+	self.layout_w, self.layout_h = -1, -1
+end
+
+--- Position the fixed chrome. Re-run whenever the window size changes.
+local function layout(self, w, h)
+	self.bar_height = HUD_BAR_HEIGHT
+	store.hud_bar_height = HUD_BAR_HEIGHT
+
+	gui.set_position(self.bar, vmath.vector3(0, 0, 0))
+	gui.set_size(self.bar, vmath.vector3(w, self.bar_height, 0))
+
+	local button_w, button_h = 190, 58
+	local bx = w - button_w * 0.5 - 20
+	local by = self.bar_height * 0.5
+	gui.set_size(self.button, vmath.vector3(button_w, button_h, 0))
+	gui.set_position(self.button, vmath.vector3(bx, by, 0))
+	gui.set_position(self.button_text, vmath.vector3(bx, by, 0))
+	-- Hit-test against this rectangle rather than gui.pick_node. pick_node
+	-- applies the scene's own screen-to-node conversion, which is a different
+	-- space again from the design coordinates input arrives in; testing the
+	-- rectangle we positioned ourselves keeps everything in one space.
+	self.button_rect = {
+		bx - button_w * 0.5, by - button_h * 0.5,
+		bx + button_w * 0.5, by + button_h * 0.5,
+	}
+	gui.set_scale(self.button_text, vmath.vector3(0.95, 0.95, 1))
+
+	gui.set_position(self.seed_text, vmath.vector3(20, self.bar_height * 0.5, 0))
+	gui.set_scale(self.seed_text, vmath.vector3(0.85, 0.85, 1))
+
+	gui.set_position(self.info_text, vmath.vector3(20, h - 20, 0))
+	gui.set_size(self.info_text, vmath.vector3((w - 40) / 0.95, 240, 0))
+	gui.set_scale(self.info_text, vmath.vector3(0.95, 0.95, 1))
+
+	self.layout_w, self.layout_h = w, h
+end
+
+--- Cheap text width estimate in pixels.
+--
+-- gui.get_text_metrics is exact but costs a measurement per call, and this runs
+-- over every candidate label every frame. The monospace-ish default font makes
+-- a per-character estimate accurate enough for overlap rejection.
+local function text_width(text, scale)
+	return #text * 11.0 * scale
+end
+
+local function update_labels(self, g, cam, w, h)
+	local zoom = cam.zoom
+	local half_w, half_h = w * 0.5, h * 0.5
+
+	local function to_screen(wx, wy)
+		return (wx - cam.x) * zoom + half_w, (wy - cam.y) * zoom + half_h
+	end
+
+	-- Region names first: they own the space, and star labels avoid them.
+	local placed = {}
+	local used_regions = 0
+	if zoom <= REGION_LABEL_MAX_ZOOM then
+		for i = 1, #g.regions do
+			if used_regions >= REGION_LABEL_POOL then break end
+			local r = g.regions[i]
+			local sx, sy = to_screen(r.cx, r.cy)
+			local text_probe = r.name:upper()
+			local pw = text_width(text_probe, REGION_FONT_SCALE)
+			local pbox = { sx - pw * 0.5, sy - 14, sx + pw * 0.5, sy + 14 }
+			local blocked = false
+			for pi = 1, #placed do
+				local q = placed[pi]
+				if not (pbox[3] < q[1] or pbox[1] > q[3] or pbox[4] < q[2] or pbox[2] > q[4]) then
+					blocked = true
+					break
+				end
+			end
+			if not blocked and sx > -200 and sx < w + 200
+				and sy > self.bar_height and sy < h then
+				used_regions = used_regions + 1
+				local node = self.region_nodes[used_regions]
+				local text = r.name:upper()
+				gui.set_enabled(node, true)
+				gui.set_text(node, text)
+				gui.set_position(node, vmath.vector3(sx, sy, 0))
+				local c = r.colour
+				-- Fade the region name out as the player zooms into it.
+				local fade = 1.0 - math.max(0, math.min(1,
+					(zoom - REGION_LABEL_MAX_ZOOM * 0.55) / (REGION_LABEL_MAX_ZOOM * 0.45)))
+				gui.set_color(node, vmath.vector4(
+					math.min(1, c[1] * 0.5 + 0.5),
+					math.min(1, c[2] * 0.5 + 0.5),
+					math.min(1, c[3] * 0.5 + 0.5), 0.30 + 0.55 * fade))
+				placed[#placed + 1] = pbox
+			end
+		end
+	end
+	for i = used_regions + 1, REGION_LABEL_POOL do
+		gui.set_enabled(self.region_nodes[i], false)
+	end
+
+	-- Star names, brightest first, skipping any that would collide.
+	local used_stars = 0
+	-- Interpolate the budget over the usable zoom range.
+	local span = math.max(0.01, 1.4 - STAR_LABEL_MIN_ZOOM)
+	local t = math.max(0, math.min(1, (zoom - STAR_LABEL_MIN_ZOOM) / span))
+	local budget = math.floor(STAR_LABELS_AT_MIN_ZOOM
+		+ (STAR_LABELS_AT_MAX_ZOOM - STAR_LABELS_AT_MIN_ZOOM) * t + 0.5)
+	if zoom >= STAR_LABEL_MIN_ZOOM then
+		local order = self.label_order
+		for oi = 1, #order do
+			if used_stars >= budget then break end
+			local s = g.stars[order[oi]]
+			local sx, sy = to_screen(s.x, s.y)
+			if sx > -100 and sx < w + 60 and sy > self.bar_height - 20 and sy < h + 20 then
+				local tw = text_width(s.name, STAR_FONT_SCALE)
+				local gap = 10
+				-- Place to the right normally, but flip to the left rather than
+				-- let the name run off the edge of the screen.
+				local x0 = sx + gap
+				local flip = (x0 + tw) > (w - 8)
+				if flip then x0 = sx - gap - tw end
+				local box = { x0, sy - 10, x0 + tw, sy + 10 }
+				local clash = false
+				for p = 1, #placed do
+					local q = placed[p]
+					if not (box[3] < q[1] or box[1] > q[3] or box[4] < q[2] or box[2] > q[4]) then
+						clash = true
+						break
+					end
+				end
+				if not clash then
+					used_stars = used_stars + 1
+					local node = self.star_nodes[used_stars]
+					gui.set_enabled(node, true)
+					gui.set_text(node, s.name)
+					gui.set_position(node, vmath.vector3(x0, sy, 0))
+					gui.set_color(node, store.selected == s.id and SELECTED_COLOUR or STAR_COLOUR)
+					placed[#placed + 1] = box
+				end
+			end
+		end
+	end
+	for i = used_stars + 1, STAR_LABEL_POOL do
+		gui.set_enabled(self.star_nodes[i], false)
+	end
+end
+
+local function update_info(self, g)
+	local id = store.selected
+	if not id then
+		gui.set_text(self.info_text, "")
+		return
+	end
+	local s = g.stars[id]
+	local region = g.regions[s.region]
+	local links = #g.adjacency[id]
+	local parts = {
+		s.name,
+		s.class_label .. "  -  " .. region.name,
+		links .. (links == 1 and " lane" or " lanes"),
+	}
+	if s.feature_label ~= "" then parts[#parts + 1] = s.feature_label end
+	if s.habitable then parts[#parts + 1] = "Habitable world" end
+	gui.set_text(self.info_text, table.concat(parts, "\n"))
+end
+
+function update(self, dt)
+	local g = store.galaxy
+	if not g then return end
+	local cam = store.camera
+	local w, h = store.screen.width, store.screen.height
+
+	if w ~= self.layout_w or h ~= self.layout_h then
+		layout(self, w, h)
+	end
+
+	-- Rank stars once per galaxy: brightest and largest get labelled first.
+	if self.revision ~= store.revision then
+		self.revision = store.revision
+		local order = {}
+		for i = 1, #g.stars do order[i] = i end
+		table.sort(order, function(a, b)
+			local sa, sb = g.stars[a], g.stars[b]
+			local wa = sa.radius * sa.glow
+			local wb = sb.radius * sb.glow
+			if wa ~= wb then return wa > wb end
+			return a < b
+		end)
+		self.label_order = order
+		gui.set_text(self.seed_text, "SEED " .. g.seed)
+	end
+
+	update_labels(self, g, cam, w, h)
+	update_info(self, g)
+end
+
+--- Is a design-space point inside a rectangle {x0, y0, x1, y1}?
+local function inside(rect, x, y)
+	return rect and x >= rect[1] and x <= rect[3] and y >= rect[2] and y <= rect[4]
+end
+
+function on_input(self, action_id, action)
+	if action_id == hash("touch") and action.released then
+		local ax, ay = store.input_point(action.x or 0, action.y or 0)
+		if inside(self.button_rect, ax, ay) then
+			msg.post("/galaxy#galaxy_script", "regenerate", {})
+			return true
+		end
+	elseif action_id == hash("reroll") and action.released then
+		msg.post("/galaxy#galaxy_script", "regenerate", {})
+		return true
+	end
+	return false
+end

@@ -1,0 +1,5 @@
+material: "/main/materials/galaxy_lane.material"
+vertices: "/main/meshes/lanes.buffer"
+primitive_type: PRIMITIVE_TRIANGLES
+position_stream: "position"
+normal_stream: ""

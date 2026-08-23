@@ -1,0 +1,37 @@
+[bootstrap]
+main_collection = /main/main.collectionc
+render = /main/render/galaxy.renderc
+
+[script]
+shared_state = 1
+
+[display]
+width = 720
+height = 1280
+high_dpi = 1
+samples = 4
+
+[render]
+clear_color_red = 0.012
+clear_color_green = 0.014
+clear_color_blue = 0.030
+clear_color_alpha = 1.0
+
+[input]
+game_binding = /input/game.input_bindingc
+use_accelerometer = 0
+
+[android]
+package = com.dg.galaxy
+input_method = HiddenInputField
+immersive_mode = 1
+
+[physics]
+gravity_y = -1000.0
+scale = 0.01
+
+[html5]
+scale_mode = fit
+
+[project]
+title = galaxy

@@ -1,0 +1,250 @@
+--- Touch panning and pinch zoom over a map larger than the viewport.
+--
+-- Written for a phone first: one finger pans, two fingers pinch. Mouse drag
+-- and the scroll wheel mirror those on desktop so the prototype is testable
+-- without a device.
+
+local store = require("main.store")
+local gestures = require("main.gestures")
+
+-- Zoom is world-pixels per screen-pixel: 1.0 shows the map at native scale.
+-- The lower bound is recomputed on start so the whole galaxy always fits.
+local ZOOM_MAX = 9.0
+local ZOOM_MIN_FLOOR = 0.05
+local WHEEL_STEP = 1.18
+
+-- How far past the map's edge the camera may travel, as a fraction of the
+-- viewport. A little overscroll stops the rim from feeling walled off.
+local OVERSCROLL = 0.25
+
+-- Drags shorter than this (in screen pixels) count as a tap, not a pan.
+local TAP_SLOP = 12
+
+--- The design-resolution viewport, as published by the render script.
+local function viewport(self)
+	return store.screen.width, store.screen.height
+end
+
+--- Keep the camera near the populated part of the map, with some overscroll.
+local function clamp_position(self)
+	local w, h = viewport(self)
+	local half_view_x = (w * 0.5) / self.zoom
+	local half_view_y = (h * 0.5) / self.zoom
+
+	local margin_x = half_view_x * OVERSCROLL
+	local margin_y = half_view_y * OVERSCROLL
+	local limit_x = self.content_w * 0.5
+	local limit_y = self.content_h * 0.5
+
+	-- When the content is smaller than the viewport on an axis, centre it
+	-- rather than letting it drift against a nonsensical clamp.
+	local range_x = limit_x - half_view_x + margin_x
+	local range_y = limit_y - half_view_y + margin_y
+	if range_x < 0 then
+		self.x = self.centre_x
+	else
+		self.x = math.max(self.centre_x - range_x, math.min(self.centre_x + range_x, self.x))
+	end
+	if range_y < 0 then
+		self.y = self.centre_y + self.frame_offset_y
+	else
+		self.y = math.max(self.centre_y - range_y, math.min(self.centre_y + range_y, self.y))
+	end
+end
+
+--- Publish the camera to the store. The render script reads it to build the
+--- projection, and the HUD reads it to place labels.
+local function apply(self)
+	clamp_position(self)
+	local cam = store.camera
+	cam.x, cam.y, cam.zoom = self.x, self.y, self.zoom
+end
+
+--- Zoom about a screen point, so the world under the finger stays under it.
+local function zoom_to(self, target, screen_x, screen_y)
+	local w, h = viewport(self)
+	target = math.max(self.zoom_min, math.min(ZOOM_MAX, target))
+	if target == self.zoom then return end
+
+	-- World position currently under the anchor point.
+	local wx = self.x + (screen_x - w * 0.5) / self.zoom
+	local wy = self.y + (screen_y - h * 0.5) / self.zoom
+	self.zoom = target
+	-- Solve for the camera position that puts it back under the same point.
+	self.x = wx - (screen_x - w * 0.5) / self.zoom
+	self.y = wy - (screen_y - h * 0.5) / self.zoom
+	apply(self)
+end
+
+--- Recompute the zoom floor so the whole populated map fits the window.
+--
+-- The usable height excludes the HUD bar, so the galaxy is framed in the space
+-- the player can actually see rather than partly behind the controls.
+local function refresh_zoom_bounds(self)
+	local w, h = viewport(self)
+	local bar = store.hud_bar_height or 0
+	local usable_h = math.max(1, h - bar)
+	local pad = 1.08
+	local fit = math.min(w / (self.content_w * pad), usable_h / (self.content_h * pad))
+	self.zoom_min = math.max(ZOOM_MIN_FLOOR, fit)
+	self.zoom = math.max(self.zoom_min, math.min(ZOOM_MAX, self.zoom))
+	-- Shift the framed centre up by half the HUD bar so the map sits in the
+	-- visible area rather than the geometric centre of the window.
+	self.frame_offset_y = (bar * 0.5) / self.zoom
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	self.world = 2600
+	-- Sensible defaults until the generator reports the real extent.
+	self.content_w, self.content_h = 2600, 2600
+	self.centre_x, self.centre_y = 0, 0
+	self.frame_offset_y = 0
+	self.x, self.y = 0, 0
+	self.zoom = 0.42
+	self.zoom_min = ZOOM_MIN_FLOOR
+	-- Pan/pinch/tap recognition lives in main/gestures.lua so it can be tested
+	-- without a device (tools/test_gestures.lua).
+	self.recognizer = gestures.new({ tap_slop = TAP_SLOP })
+	self.touch_driven = false
+	self.mouse_down = false
+	-- Once the player zooms, stop re-fitting the view on window changes.
+	self.user_zoomed = false
+	self.last_w, self.last_h = -1, -1
+	refresh_zoom_bounds(self)
+	apply(self)
+end
+
+--- Active (not lifted) touch points, converted into view space.
+local function active_touches(action)
+	local out = {}
+	local list = action.touch
+	if not list then return out end
+	for i = 1, #list do
+		local p = list[i]
+		-- A lifted finger is still reported on the frame it releases; counting
+		-- it would keep a two-finger pinch alive for one frame too long and
+		-- make the map jump as the remaining finger takes over.
+		if not p.released then
+			local x, y = store.input_point(p.x, p.y)
+			out[#out + 1] = { x = x, y = y }
+		end
+	end
+	return out
+end
+
+--- Nearest star to a world point, within a screen-space radius.
+local function pick_star(self, screen_x, screen_y)
+	local g = store.galaxy
+	if not g then return nil end
+	local w, h = viewport(self)
+	local wx = self.x + (screen_x - w * 0.5) / self.zoom
+	local wy = self.y + (screen_y - h * 0.5) / self.zoom
+	-- A generous fixed *screen* radius: at low zoom the stars are tiny, and a
+	-- world-space radius would make them impossible to hit.
+	local reach = 26 / self.zoom
+	local best, best_d = nil, reach * reach
+	for i = 1, #g.stars do
+		local s = g.stars[i]
+		local dx, dy = s.x - wx, s.y - wy
+		local d = dx * dx + dy * dy
+		if d < best_d then best, best_d = i, d end
+	end
+	return best
+end
+
+--- The framebuffer size is not known until the render script has run once,
+--- so re-fit the view when it changes.
+function update(self, dt)
+	local w, h = viewport(self)
+	if w ~= self.last_w or h ~= self.last_h then
+		self.last_w, self.last_h = w, h
+		refresh_zoom_bounds(self)
+		if not self.user_zoomed then
+			self.zoom = self.zoom_min
+			refresh_zoom_bounds(self)
+			self.x = self.centre_x
+			self.y = self.centre_y + self.frame_offset_y
+		end
+		apply(self)
+	end
+end
+
+--- Apply one frame of recognised gesture to the camera.
+local function apply_gesture(self, g)
+	if g.zoom ~= 1 and g.anchor_x then
+		zoom_to(self, self.zoom * g.zoom, g.anchor_x, g.anchor_y)
+	end
+	if g.pan_dx ~= 0 or g.pan_dy ~= 0 then
+		-- Drag the map, not the camera: content follows the finger.
+		self.x = self.x - g.pan_dx / self.zoom
+		self.y = self.y - g.pan_dy / self.zoom
+		apply(self)
+	end
+	if g.tap_x then
+		store.selected = pick_star(self, g.tap_x, g.tap_y)
+	end
+end
+
+function on_input(self, action_id, action)
+	-- On a device the touch stream is authoritative. Defold also synthesises a
+	-- MOUSE_BUTTON_1 "touch" action for the primary finger, and letting both
+	-- act would apply every pan twice, so the first frame carrying a touch
+	-- table latches `touch_driven` and the mouse path below stops running.
+	if action.touch then
+		self.touch_driven = true
+		apply_gesture(self, self.recognizer:update(
+			active_touches(action), store.hud_bar_height or 0))
+		return true
+	end
+
+	-- Mouse fallback, for developing on desktop.
+	local ax, ay = store.input_point(action.x or 0, action.y or 0)
+
+	-- Mouse *movement* arrives with a nil action_id - only the button press and
+	-- release carry the bound one - so a handler keyed solely on "touch" sees
+	-- the click but never the drag, and panning silently does nothing.
+	local is_button = action_id == hash("touch")
+	if not self.touch_driven and (is_button or action_id == nil) then
+		local points
+		if is_button and action.pressed then
+			self.mouse_down = true
+			points = { { x = ax, y = ay } }
+		elseif is_button and action.released then
+			self.mouse_down = false
+			points = {}
+		elseif self.mouse_down then
+			points = { { x = ax, y = ay } }
+		else
+			return false
+		end
+		-- Feed the same recogniser as the device, so both share one code path.
+		apply_gesture(self, self.recognizer:update(points, store.hud_bar_height or 0))
+		return is_button
+	elseif action_id == hash("zoom_in") and action.pressed then
+		zoom_to(self, self.zoom * WHEEL_STEP, ax, ay)
+	elseif action_id == hash("zoom_out") and action.pressed then
+		zoom_to(self, self.zoom / WHEEL_STEP, ax, ay)
+	end
+end
+
+function on_message(self, message_id, message)
+	if message_id == hash("map_ready") then
+		self.world = message.world
+		self.content_w = math.max(1, message.content_width)
+		self.content_h = math.max(1, message.content_height)
+		self.centre_x = message.centre_x
+		self.centre_y = message.centre_y
+		refresh_zoom_bounds(self)
+		-- Start framed on the whole galaxy, then let the player zoom in.
+		self.user_zoomed = false
+		self.zoom = self.zoom_min
+		refresh_zoom_bounds(self)
+		self.x = self.centre_x
+		self.y = self.centre_y + self.frame_offset_y
+		apply(self)
+	elseif message_id == hash("window_resized") then
+		refresh_zoom_bounds(self)
+		apply(self)
+	end
+end
