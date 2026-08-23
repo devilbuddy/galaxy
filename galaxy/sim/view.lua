@@ -69,10 +69,14 @@ function M.project(galaxy, state, player)
 	local visible = M.visible_systems(galaxy, state, player)
 	local memory = state.knowledge[player] or {}
 
+	-- Keyed by *string* id. A Lua table with sparse integer keys is encoded
+	-- ambiguously as JSON - some encoders produce an object, others a
+	-- null-padded array - and the client must be able to tell which system each
+	-- entry describes. String keys always encode as an object.
 	local systems = {}
 	for id in pairs(visible) do
 		local sys = state.systems[id]
-		systems[id] = {
+		systems[tostring(id)] = {
 			owner = sys.owner,
 			population = sys.population,
 			ships = sys.ships,
@@ -82,8 +86,8 @@ function M.project(galaxy, state, player)
 		}
 	end
 	for id, seen in pairs(memory) do
-		if not systems[id] then
-			systems[id] = {
+		if not systems[tostring(id)] then
+			systems[tostring(id)] = {
 				owner = seen.owner,
 				population = seen.population,
 				ships = seen.ships,

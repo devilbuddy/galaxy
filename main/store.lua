@@ -34,6 +34,24 @@ M.selected = nil
 -- "server" or "local": where the current galaxy came from.
 M.source = nil
 
+-- The active game's id, and the player's projected view of it.
+M.game_id = nil
+M.game_view = nil
+M.game = nil
+-- Highest turn whose events the player has already been shown.
+M.seen_turn = 0
+
+-- The server's clock, sampled on each state response and advanced locally
+-- between them. Used for the "next turn in ..." countdown; the device clock
+-- cannot be trusted to agree with the server's.
+M.now_estimate = 0
+
+-- Orders queued locally for the coming turn, as { from =, to =, ships = }.
+-- They are only sent when the player submits, so a plan can be revised freely.
+M.orders = {}
+-- The system a move is being planned from, if the player has picked one.
+M.order_source = nil
+
 -- Transient status line for the HUD ("connecting...", "requesting galaxy...").
 M.status = nil
 

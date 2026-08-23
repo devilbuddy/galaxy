@@ -35,7 +35,7 @@ Prefer the editor HTTP API (below) for anything the user will also see in the ed
 `bob.jar` is compiled for Java 25; the system `java` (SDKMAN, Java 21) fails with `UnsupportedClassVersionError`. Use the JDK bundled with the editor:
 
 ```bash
-/Applications/Defold.app/Contents/Resources/packages/jdk-25+36/bin/java -jar ~/Defold/bob.jar resolve build
+/Applications/Defold.app/Contents/Resources/packages/jdk-25+36/bin/java -jar ~/Defold/bob-1.13.1.jar resolve build
 ```
 
 `resolve` fetches library dependencies (no-op while `[project] dependencies` is empty); drop it for a faster inner loop. Output lands in `build/default/` (gitignored). Add `distclean` before `build` for a clean rebuild.
@@ -96,7 +96,7 @@ The device build is bundled and installed straight from the CLI (`adb` lives at
 
 ```bash
 JAVA=/Applications/Defold.app/Contents/Resources/packages/jdk-25+36/bin/java
-$JAVA -jar ~/Defold/bob.jar --platform armv7-android --architectures arm64-android \
+$JAVA -jar ~/Defold/bob-1.13.1.jar --platform armv7-android --architectures arm64-android \
   --archive --bundle-output /tmp/android --variant debug --bundle-format apk build bundle
 ~/Library/Android/sdk/platform-tools/adb install -r /tmp/android/galaxy/galaxy.apk
 ```
@@ -225,6 +225,49 @@ failure of the simpler thing:
 5. **`names` / `starclass`** — weighted templates over invented and borrowed
    vocabulary, with global uniqueness; classes biased towards exotics near the
    galactic core.
+
+### The game (server-authoritative, asynchronous)
+
+2-10 players compete for the galaxy. Turns resolve on a schedule, players issue
+orders between them, and the map is public while state is fogged.
+
+RPCs in `server/modules/game_rpc.lua`:
+
+| rpc | purpose |
+|---|---|
+| `game.create` | new lobby; rolls a seed, sets turn interval and size |
+| `game.list` | open lobbies, **and separately** the caller's own games |
+| `game.join` / `game.start` | lobby management |
+| `game.state` | the caller's fogged view plus events since a given turn |
+| `game.orders` | submit (and freely revise) orders for the coming turn |
+
+**Turns resolve lazily.** There is no scheduler: every RPC first asks whether
+turns are due and resolves however many were missed. For a game checked twice a
+day that is exactly right, needs neither cron nor Nakama's Go runtime, and
+cannot drift. The consequence is that an untouched game does not advance until
+somebody touches it. Concurrent resolution is prevented by version-guarded
+storage writes — the loser of the race discards its work and re-reads.
+
+Storage layout (Nakama storage; the Lua runtime has **no SQL access**):
+
+```
+games      / <id>          system-owned   lobby, schedule, roster
+game_state / <id>          system-owned   the simulation state
+game_events/ <id>:<turn>   system-owned   one turn's events
+game_orders/ <id>:<turn>   per-user       that player's orders
+```
+
+Everything is system-owned except orders, so a player cannot read another
+player's pending moves straight from storage.
+
+**Sim state is repaired on read** (`normalise_state`). It round-trips as JSON,
+and while dense arrays survive, `knowledge[player]` is keyed by star id and
+*sparse*, so it returns with string keys. Indexing it with a number would then
+silently miss and every player's fog memory would look empty after each turn.
+
+For the same reason `view.project` keys systems by **string** id: a Lua table
+with sparse integer keys encodes ambiguously, and the client must be able to
+tell which system each entry describes.
 
 ### Backend (Nakama)
 
@@ -361,6 +404,43 @@ Textures are premultiplied by Defold at build time, so alpha layers use
 `ONE / ONE_MINUS_SRC_ALPHA` (not `SRC_ALPHA / ...`) and the shader premultiplies
 the vertex colour to match.
 
+### Client screens (Monarch) and UI (Druid)
+
+`main/main.collection` is a bootstrap holding `main/app.script` plus one Monarch
+screen proxy per screen. The proxies are **embedded instances** with their
+`screen_id` set inline, matching Monarch's own example — a `screen_id` override
+placed in a separate `.go` file did not take effect, and every screen silently
+registered under Monarch's default id (`UNIQUE ID HERE`), so `monarch.show`
+found nothing.
+
+| screen | collection | role |
+|---|---|---|
+| `lobby` | `main/screens/lobby.collection` | list/create/join/start games |
+| `map` | `main/screens/map.collection` | the galaxy view (was the old bootstrap) |
+| `report` | `main/screens/report.collection` | turn digest; a **popup** over the map |
+
+`app.script` authenticates once and then shows the lobby, so moving between
+screens never re-authenticates. Screens are handed their parameters through
+Monarch (`monarch.data`), which is how the map learns which game to load.
+
+Screens are built in code rather than laid out in `.gui` files (`main/ui.lua`
+holds the shared look). Their content is dynamic — a list of games, a list of
+turn events — so most of it would be script-created anyway.
+
+**Druid needs two adaptations here, both in `main/ui.lua`:**
+
+- `ui.gui_action(action)` — Defold reports input in the configured display size
+  while this project lays GUI out in the aspect-derived view space. Druid
+  hit-tests with whatever action it is given, so it must be converted. It
+  returns a *copy*, because the same action goes to other listeners.
+- `ui.install_druid_picking()` — replaces `druid.helper.pick_node`. Druid asks
+  `gui.pick_node`, which resolves against the configured 720x1280 display no
+  matter what projection the render script used, so **any node laid out above
+  y=1280 is unpickable**. Buttons near the bottom of the screen worked and
+  buttons near the top silently did nothing, in every coordinate space. Since
+  every node here is created in code with a known position, size and pivot, an
+  axis-aligned test against those is exact. Call it before `druid.new`.
+
 ### Input and gestures
 
 `main/gestures.lua` is a pure state machine turning a list of active touch
@@ -404,6 +484,9 @@ publishes the viewport into it; the camera publishes its position and zoom.
 Hit-test HUD widgets against rectangles you positioned yourself, not
 `gui.pick_node` — pick_node applies the scene's own screen-to-node conversion,
 which is a different space again.
+
+`game.project` has no comment syntax — a `#` line makes bob fail with a bare
+"Could not parse" and no line number. Keep explanations in this file instead.
 
 ## Non-default `game.project` settings
 

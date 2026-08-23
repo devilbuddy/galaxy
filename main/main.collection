@@ -1,29 +1,79 @@
-name: "main"
+name: "bootstrap"
 scale_along_z: 0
 instances {
-  id: "backdrop"
-  prototype: "/main/backdrop.go"
+  id: "app"
+  prototype: "/main/app.go"
   position { x: 0.0 y: 0.0 z: 0.0 }
   rotation { x: 0.0 y: 0.0 z: 0.0 w: 1.0 }
   scale3 { x: 1.0 y: 1.0 z: 1.0 }
 }
-instances {
-  id: "galaxy"
-  prototype: "/main/galaxy.go"
+embedded_instances {
+  id: "lobby_screen"
+  data: "components {\n"
+  "  id: \"screen\"\n"
+  "  component: \"/monarch/screen_proxy.script\"\n"
+  "  properties {\n"
+  "    id: \"screen_id\"\n"
+  "    value: \"lobby\"\n"
+  "    type: PROPERTY_TYPE_HASH\n"
+  "  }\n"
+  "}\n"
+  "embedded_components {\n"
+  "  id: \"collectionproxy\"\n"
+  "  type: \"collectionproxy\"\n"
+  "  data: \"collection: \\\"/main/screens/lobby.collection\\\"\\n\"\n"
+  "  \"\"\n"
+  "}\n"
+  ""
   position { x: 0.0 y: 0.0 z: 0.0 }
   rotation { x: 0.0 y: 0.0 z: 0.0 w: 1.0 }
   scale3 { x: 1.0 y: 1.0 z: 1.0 }
 }
-instances {
-  id: "camera"
-  prototype: "/main/camera.go"
+embedded_instances {
+  id: "map_screen"
+  data: "components {\n"
+  "  id: \"screen\"\n"
+  "  component: \"/monarch/screen_proxy.script\"\n"
+  "  properties {\n"
+  "    id: \"screen_id\"\n"
+  "    value: \"map\"\n"
+  "    type: PROPERTY_TYPE_HASH\n"
+  "  }\n"
+  "}\n"
+  "embedded_components {\n"
+  "  id: \"collectionproxy\"\n"
+  "  type: \"collectionproxy\"\n"
+  "  data: \"collection: \\\"/main/screens/map.collection\\\"\\n\"\n"
+  "  \"\"\n"
+  "}\n"
+  ""
   position { x: 0.0 y: 0.0 z: 0.0 }
   rotation { x: 0.0 y: 0.0 z: 0.0 w: 1.0 }
   scale3 { x: 1.0 y: 1.0 z: 1.0 }
 }
-instances {
-  id: "hud"
-  prototype: "/main/hud.go"
+embedded_instances {
+  id: "report_screen"
+  data: "components {\n"
+  "  id: \"screen\"\n"
+  "  component: \"/monarch/screen_proxy.script\"\n"
+  "  properties {\n"
+  "    id: \"screen_id\"\n"
+  "    value: \"report\"\n"
+  "    type: PROPERTY_TYPE_HASH\n"
+  "  }\n"
+  "  properties {\n"
+  "    id: \"popup\"\n"
+  "    value: \"true\"\n"
+  "    type: PROPERTY_TYPE_BOOLEAN\n"
+  "  }\n"
+  "}\n"
+  "embedded_components {\n"
+  "  id: \"collectionproxy\"\n"
+  "  type: \"collectionproxy\"\n"
+  "  data: \"collection: \\\"/main/screens/report.collection\\\"\\n\"\n"
+  "  \"\"\n"
+  "}\n"
+  ""
   position { x: 0.0 y: 0.0 z: 0.0 }
   rotation { x: 0.0 y: 0.0 z: 0.0 w: 1.0 }
   scale3 { x: 1.0 y: 1.0 z: 1.0 }

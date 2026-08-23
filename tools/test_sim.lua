@@ -157,8 +157,10 @@ do
 	check("you do not see a distant enemy home", not vis[theirs])
 
 	local projected = view.project(GALAXY, s, 1)
-	check("projection omits unseen systems entirely", projected.systems[theirs] == nil)
-	check("projection includes your own", projected.systems[mine] ~= nil)
+	-- Keyed by string id so the JSON encoding is unambiguous; see view.project.
+	check("projection omits unseen systems entirely", projected.systems[tostring(theirs)] == nil)
+	check("projection includes your own", projected.systems[tostring(mine)] ~= nil)
+	check("projection keys are strings, not numbers", projected.systems[mine] == nil)
 	check("projection reports only your fleets",
 		#projected.fleets == 0 or projected.fleets[1].id ~= nil)
 

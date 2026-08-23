@@ -14,6 +14,9 @@
 local nakama = require("nakama.nakama")
 local nakama_engine = require("nakama.engine.defold")
 local nakama_log = require("nakama.util.log")
+-- The extension swaps in Defold's native json.encode when it exists and falls
+-- back to a pure-Lua one otherwise, so this is safe on every target.
+local njson = require("nakama.util.json")
 local wire = require("galaxy.wire")
 
 local M = {}
@@ -96,6 +99,63 @@ end
 
 function M.ready()
 	return M.state == "ready"
+end
+
+--- Call a server RPC with a table payload.
+--
+-- rpc_func (not rpc_func2) because the latter passes the payload as a query
+-- parameter, which Nakama delivers to the RPC as an empty string.
+-- @param done function(result_table, err)
+function M.rpc(name, payload, done)
+	if not M.ready() then
+		done(nil, "not connected")
+		return
+	end
+
+	nakama.sync(function()
+		local body = njson.encode(payload or {})
+		local result = nakama.rpc_func(client, name, body, nil)
+
+		if not result or result.error then
+			-- Nakama returns RPC errors as a JSON body; surface the message the
+			-- server actually wrote rather than a bare status code.
+			local message = result and (result.message or tostring(result.error)) or "no response"
+			done(nil, message)
+			return
+		end
+
+		local ok, decoded = pcall(json.decode, result.payload)
+		if not ok or type(decoded) ~= "table" then
+			done(nil, "malformed response from " .. name)
+			return
+		end
+		done(decoded)
+	end)
+end
+
+--- Game lifecycle. Thin wrappers so screens never build payloads by hand.
+function M.game_list(done)
+	M.rpc("game.list", {}, done)
+end
+
+function M.game_create(options, done)
+	M.rpc("game.create", options or {}, done)
+end
+
+function M.game_join(game_id, player_name, done)
+	M.rpc("game.join", { game_id = game_id, player_name = player_name }, done)
+end
+
+function M.game_start(game_id, done)
+	M.rpc("game.start", { game_id = game_id }, done)
+end
+
+function M.game_state(game_id, since_turn, done)
+	M.rpc("game.state", { game_id = game_id, since_turn = since_turn or 0 }, done)
+end
+
+function M.game_orders(game_id, orders, done)
+	M.rpc("game.orders", { game_id = game_id, orders = orders or {} }, done)
 end
 
 --- Ask the server for the galaxy with this seed.

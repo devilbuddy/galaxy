@@ -1,0 +1,30 @@
+name: "map"
+scale_along_z: 0
+instances {
+  id: "backdrop"
+  prototype: "/main/backdrop.go"
+  position { x: 0.0 y: 0.0 z: 0.0 }
+  rotation { x: 0.0 y: 0.0 z: 0.0 w: 1.0 }
+  scale3 { x: 1.0 y: 1.0 z: 1.0 }
+}
+instances {
+  id: "galaxy"
+  prototype: "/main/galaxy.go"
+  position { x: 0.0 y: 0.0 z: 0.0 }
+  rotation { x: 0.0 y: 0.0 z: 0.0 w: 1.0 }
+  scale3 { x: 1.0 y: 1.0 z: 1.0 }
+}
+instances {
+  id: "camera"
+  prototype: "/main/camera.go"
+  position { x: 0.0 y: 0.0 z: 0.0 }
+  rotation { x: 0.0 y: 0.0 z: 0.0 w: 1.0 }
+  scale3 { x: 1.0 y: 1.0 z: 1.0 }
+}
+instances {
+  id: "hud"
+  prototype: "/main/hud.go"
+  position { x: 0.0 y: 0.0 z: 0.0 }
+  rotation { x: 0.0 y: 0.0 z: 0.0 w: 1.0 }
+  scale3 { x: 1.0 y: 1.0 z: 1.0 }
+}

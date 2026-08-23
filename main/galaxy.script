@@ -8,8 +8,9 @@ local generate = require("galaxy.generate")
 local meshbuild = require("main.meshbuild")
 local store = require("main.store")
 local backend = require("main.backend")
+local monarch = require("monarch.monarch")
+local config = require("galaxy.config")
 local rng = require("galaxy.rng")
-local digest = require("galaxy.digest")
 
 -- A go.property number is stored as a 32-bit float, so any integer above 2^24
 -- cannot round-trip: 20260823 silently comes back as 20260824. For a game whose
@@ -31,25 +32,64 @@ local DUST_COUNT = 1500
 
 -- Layer depths. Only the ordering matters (depth testing is off), but keeping
 -- them distinct documents the intended stacking.
-local Z_NEBULA, Z_DUST, Z_WASH, Z_LANE, Z_GLOW, Z_STAR = -50, -40, -30, -20, -10, 0
+local Z_NEBULA, Z_DUST, Z_WASH, Z_LANE, Z_GLOW, Z_OWNER, Z_STAR = -50, -40, -30, -20, -10, -5, 0
+
+-- How visible a system is, by what the player knows about it. Unknown systems
+-- are dimmed rather than hidden: the geometry is public, so the map stays
+-- readable and the fog reads as "not scouted" rather than "not there".
+local ALPHA_LIVE, ALPHA_REMEMBERED, ALPHA_UNKNOWN = 1.0, 0.62, 0.34
+
+--- Per-system knowledge for the current game, or nil when just browsing a seed.
+-- Returns visibility alpha and the owning player (0 for none/unknown).
+local function knowledge(self, id)
+	local view = self.view
+	if not view then return ALPHA_LIVE, 0 end
+	local entry = view.systems[tostring(id)]
+	if not entry then return ALPHA_UNKNOWN, 0 end
+	return entry.live and ALPHA_LIVE or ALPHA_REMEMBERED, entry.owner or 0
+end
+
+local function player_colour(index)
+	local palette = config.player_palette
+	return palette[((index - 1) % #palette) + 1]
+end
 
 --- Region territory washes: one soft blob per star, tinted by its region.
 -- Overlapping blobs merge into an organic territory outline, which reads far
 -- better than one circle drawn at each region's centroid.
-local function build_wash(g, world)
+--- Territory wash.
+--
+-- In a game this shows *ownership*, which is what a player needs to read at a
+-- glance; the region tint it replaces is scenery. Outside a game (browsing a
+-- seed) it falls back to regions so the map is not blank.
+local function build_wash(self, g, world)
 	local b = meshbuild.new(#g.stars)
 	local radius = world * WASH_SCALE
 	for i = 1, #g.stars do
 		local s = g.stars[i]
-		local c = g.regions[s.region].colour
-		b:sprite(s.x, s.y, radius, Z_WASH, c[1], c[2], c[3], 0.20)
+		local alpha, owner = knowledge(self, i)
+		local c, a
+		if self.view then
+			if owner and owner > 0 then
+				c = player_colour(owner)
+				a = 0.26 * alpha
+			else
+				-- Known-but-unowned and unknown space both stay neutral.
+				c = { 0.30, 0.34, 0.46 }
+				a = 0.05 * alpha
+			end
+		else
+			c = g.regions[s.region].colour
+			a = 0.20
+		end
+		b:sprite(s.x, s.y, radius, Z_WASH, c[1], c[2], c[3], a)
 	end
 	b:apply("/galaxy#wash")
 end
 
 --- Hyperlanes, tinted by the region they run through. Lanes that cross a
 --- border get a neutral grey so the chokepoints between territories read.
-local function build_lanes(g, world)
+local function build_lanes(self, g, world)
 	local b = meshbuild.new(#g.lanes)
 	local width = world * LANE_WIDTH
 	for i = 1, #g.lanes do
@@ -65,28 +105,51 @@ local function build_lanes(g, world)
 			bl = math.min(1, c[3] * 1.45 + 0.32)
 			a = 0.62
 		end
-		b:segment(sa.x, sa.y, sb.x, sb.y, width, Z_LANE, r, gr, bl, a)
+		-- A lane is only as visible as the dimmer of the systems it joins.
+		local va = select(1, knowledge(self, l.a))
+		local vb = select(1, knowledge(self, l.b))
+		b:segment(sa.x, sa.y, sb.x, sb.y, width, Z_LANE, r, gr, bl, a * math.min(va, vb))
 	end
 	b:apply("/galaxy#lanes")
 end
 
 --- Additive halos. Their size follows the star class, which is what separates
 --- a blue giant from a red dwarf at a glance when zoomed out.
-local function build_glow(g, world)
+local function build_glow(self, g, world)
 	local b = meshbuild.new(#g.stars)
 	local base = world * GLOW_SCALE
 	for i = 1, #g.stars do
 		local s = g.stars[i]
 		local c = s.colour
 		local size = base * s.glow * s.size_jitter
-		b:sprite(s.x, s.y, size, Z_GLOW, c[1], c[2], c[3], 0.52)
+		b:sprite(s.x, s.y, size, Z_GLOW, c[1], c[2], c[3], 0.52 * knowledge(self, i))
 	end
 	b:apply("/galaxy#glow")
 end
 
+--- Ownership rings. One quad per system; unowned systems contribute a
+--- transparent quad so the buffer size stays constant and predictable.
+local function build_owners(self, g, world)
+	local b = meshbuild.new(#g.stars)
+	local base = world * CORE_SCALE
+	for i = 1, #g.stars do
+		local s = g.stars[i]
+		local alpha, owner = knowledge(self, i)
+		if owner and owner > 0 then
+			local c = player_colour(owner)
+			local size = base * s.radius * s.size_jitter * 3.4
+			-- Remembered ownership is drawn fainter: it may already be stale.
+			b:sprite(s.x, s.y, size, Z_OWNER, c[1], c[2], c[3], 0.95 * alpha)
+		else
+			b:sprite(s.x, s.y, 0, Z_OWNER, 0, 0, 0, 0)
+		end
+	end
+	b:apply("/galaxy#owners")
+end
+
 --- Star cores. Pushed towards white because a bright source reads as white
 --- with a coloured fringe, not as a saturated disc.
-local function build_stars(g, world)
+local function build_stars(self, g, world)
 	local b = meshbuild.new(#g.stars)
 	local base = world * CORE_SCALE
 	for i = 1, #g.stars do
@@ -96,7 +159,7 @@ local function build_stars(g, world)
 		b:sprite(s.x, s.y, size, Z_STAR,
 			math.min(1, c[1] * 0.42 + 0.62),
 			math.min(1, c[2] * 0.42 + 0.62),
-			math.min(1, c[3] * 0.42 + 0.62), 1.0)
+			math.min(1, c[3] * 0.42 + 0.62), knowledge(self, i))
 	end
 	b:apply("/galaxy#stars")
 end
@@ -136,10 +199,11 @@ local function present(self, g, source, note)
 	local world = g.world_size
 	build_nebula(world)
 	build_dust(seed, world)
-	build_wash(g, world)
-	build_lanes(g, world)
-	build_glow(g, world)
-	build_stars(g, world)
+	build_wash(self, g, world)
+	build_lanes(self, g, world)
+	build_glow(self, g, world)
+	build_owners(self, g, world)
+	build_stars(self, g, world)
 	local meshed = (os.clock() - t0) * 1000
 
 	store.galaxy = g
@@ -161,6 +225,64 @@ local function present(self, g, source, note)
 		content_width = g.content.width,
 		content_height = g.content.height,
 	})
+end
+
+--- Load a game: its state, then the galaxy its seed describes.
+--
+-- The state comes first because it carries the seed, and because the view has
+-- to be in place before the meshes are built - the fog decides how every layer
+-- is shaded, so building first and re-shading after would mean doing it twice.
+local function load_game(self, game_id, silent)
+	if not silent then store.status = "loading game..." end
+
+	backend.game_state(game_id, store.seen_turn, function(res, err)
+		if err then
+			store.status = nil
+			print("galaxy: could not load game (" .. tostring(err) .. ")")
+			return
+		end
+
+		self.game = res.game
+		self.view = res.view
+		self.me = res.you
+		store.now_estimate = res.now or store.now_estimate
+		store.game = res.game
+		store.game_view = res.view
+		store.game_id = game_id
+
+		local events = res.events or {}
+		local turn = res.view and res.view.turn or 0
+
+		local function show(galaxy, source)
+			present(self, galaxy, source)
+			-- Only on arrival. Polling in the background must not throw a popup
+			-- over a player who is in the middle of reading the map; the turn
+			-- simply appears, and the digest waits until they next come back.
+			if not silent and #events > 0 and turn > store.seen_turn then
+				monarch.show(hash("report"), nil, { events = events, you = res.you })
+			end
+			store.seen_turn = turn
+		end
+
+		-- The galaxy is immutable and cacheable, so it is fetched separately
+		-- from the mutable state rather than bundled into every state response.
+		if self.galaxy_seed == res.game.seed and self.galaxy then
+			show(self.galaxy, store.source or "server")
+			return
+		end
+
+		backend.fetch_galaxy(res.game.seed, function(galaxy, gerr)
+			if not galaxy then
+				print("galaxy: falling back to local generation (" .. tostring(gerr) .. ")")
+				galaxy = generate.build(res.game.seed)
+				self.galaxy, self.galaxy_seed = galaxy, res.game.seed
+				show(galaxy, "local")
+			else
+				self.galaxy, self.galaxy_seed = galaxy, res.game.seed
+				show(galaxy, "server")
+			end
+		end)
+	end)
 end
 
 --- Fetch a galaxy for `seed` and show it.
@@ -197,25 +319,27 @@ local function sanitise_seed(value, fallback)
 	return seed % MAX_SEED
 end
 
+-- How often to re-ask the server while the map is open. Turns resolve on a
+-- schedule measured in hours, so this only needs to be brisk enough that a
+-- player watching the screen sees the turn land.
+local POLL_SECONDS = 10
+
 function init(self)
 	self.backdrop = msg.url(nil, "/backdrop", nil)
 	self.backdrop_fade = nil
-	self.seed = sanitise_seed(self.seed, require("galaxy.config").default_seed)
+	self.since_poll = 0
+	self.view = nil
 
-	if not backend.enabled() then
-		load_galaxy(self, self.seed)
+	-- Monarch hands the screen its parameters; a game id means play, no game id
+	-- means browse a generated seed, which keeps the map useful with no backend.
+	local data = monarch.data(hash("map"))
+	if data and data.game_id and backend.ready() then
+		load_game(self, data.game_id)
 		return
 	end
 
-	store.status = "connecting to " .. backend.address()
-	backend.connect(function(ok, err)
-		if ok then
-			print("galaxy: authenticated with " .. backend.address())
-		else
-			print("galaxy: backend unavailable (" .. tostring(err) .. "), running offline")
-		end
-		load_galaxy(self, self.seed)
-	end)
+	self.seed = sanitise_seed(self.seed, require("galaxy.config").default_seed)
+	load_galaxy(self, self.seed)
 end
 
 -- The backdrop is a fixed-resolution texture spread over the whole world, so
@@ -231,6 +355,19 @@ local BACKDROP_GONE_ZOOM = 2.2   -- at or above this, it has faded out entirely
 local WASH_MIN_STRENGTH = 0.45
 
 function update(self, dt)
+	-- While a game is open, keep asking: a turn may resolve at any moment, and
+	-- the request is also what drives the server's lazy turn resolution.
+	if self.game and store.game_id then
+		-- Advance the sampled server clock so the countdown ticks smoothly
+		-- between polls rather than jumping every ten seconds.
+		store.now_estimate = store.now_estimate + dt
+		self.since_poll = self.since_poll + dt
+		if self.since_poll >= POLL_SECONDS then
+			self.since_poll = 0
+			load_game(self, store.game_id, true)
+		end
+	end
+
 	-- Parallax: the backdrop follows the camera part of the way, so it drifts
 	-- more slowly than the map and reads as further away.
 	local cam = store.camera
@@ -250,7 +387,7 @@ function update(self, dt)
 end
 
 function on_message(self, message_id, message)
-	if message_id == hash("regenerate") then
+	if message_id == hash("regenerate") and not store.game_id then
 		-- Walking the seed by one gives a completely different galaxy (the seed
 		-- is hashed per subsystem) while staying reproducible: the player can
 		-- always count back to one they liked.

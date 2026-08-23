@@ -1,0 +1,8 @@
+script: "/main/screens/lobby.gui_script"
+fonts {
+  name: "map"
+  font: "/main/fonts/map.font"
+}
+material: "/builtins/materials/gui.material"
+adjust_reference: ADJUST_REFERENCE_DISABLED
+max_nodes: 512

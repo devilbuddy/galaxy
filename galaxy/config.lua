@@ -26,6 +26,22 @@ return {
 	-- phone viewport; panning across it is the point.
 	world_size = 2600,
 
+	-- Player colours. Deliberately more saturated than the region palette so
+	-- ownership never reads as terrain, and ordered so the first few are the
+	-- most distinguishable from each other.
+	player_palette = {
+		{ 0.30, 0.68, 1.00 }, -- blue
+		{ 1.00, 0.42, 0.32 }, -- red
+		{ 0.42, 0.90, 0.48 }, -- green
+		{ 1.00, 0.80, 0.28 }, -- amber
+		{ 0.80, 0.44, 1.00 }, -- violet
+		{ 0.30, 0.90, 0.86 }, -- cyan
+		{ 1.00, 0.55, 0.80 }, -- pink
+		{ 0.70, 0.75, 0.35 }, -- olive
+		{ 0.95, 0.95, 0.95 }, -- white
+		{ 0.55, 0.55, 0.72 }, -- slate
+	},
+
 	-- Region tints, chosen to stay distinguishable against a near-black field
 	-- and against each other when two regions border.
 	region_palette = {

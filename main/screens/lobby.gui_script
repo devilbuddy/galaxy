@@ -1,0 +1,202 @@
+--- Lobby: pick a game to play, or start a new one.
+--
+-- Everything is drawn in code (see main/ui.lua for why) and Druid supplies the
+-- button behaviour. The list is rebuilt wholesale whenever the server answers,
+-- which at a handful of games costs nothing and avoids diffing logic.
+
+local druid = require("druid.druid")
+local monarch = require("monarch.monarch")
+local backend = require("main.backend")
+local store = require("main.store")
+local ui = require("main.ui")
+
+local MARGIN = 24
+local ROW_HEIGHT = 92
+local REFRESH_SECONDS = 5
+
+local function screen()
+	return store.screen.width, store.screen.height
+end
+
+--- Rebuild the scrollable middle section from the last server response.
+local function render_games(self)
+	ui.clear(self.rows)
+	-- Druid components attached to deleted nodes must go too, or they keep
+	-- responding to input against nodes that no longer exist.
+	for i = 1, #self.row_buttons do self.druid:remove(self.row_buttons[i]) end
+	self.row_buttons = {}
+
+	local w = select(1, screen())
+	local y = self.list_top
+	local games = self.games or {}
+
+	if self.mine then
+		local g = self.mine
+		local panel = ui.panel(MARGIN, y, w - MARGIN * 2, ROW_HEIGHT + 40, ui.PANEL_ALT)
+		self.rows[#self.rows + 1] = panel
+		self.rows[#self.rows + 1] = ui.label(MARGIN + 16, y - 26, g.name, 0.85, ui.TEXT)
+		local who = {}
+		for i = 1, #g.players do who[#who + 1] = g.players[i].name end
+		self.rows[#self.rows + 1] = ui.label(MARGIN + 16, y - 56,
+			string.format("%d/%d  %s", #g.players, g.max_players, table.concat(who, ", ")),
+			0.6, ui.DIM)
+		self.rows[#self.rows + 1] = ui.label(MARGIN + 16, y - 84,
+			g.status == "lobby" and "waiting to start" or ("turn " .. g.turn), 0.6, ui.DIM)
+
+		local can_start = g.status == "lobby" and #g.players >= 2
+		local bw, bh = 190, 56
+		local box, text = ui.button(w - MARGIN - bw, y - 24, bw, bh,
+			g.status == "lobby" and "START" or "RESUME")
+		ui.set_button_enabled(box, text, can_start or g.status ~= "lobby")
+		self.rows[#self.rows + 1] = box
+		self.rows[#self.rows + 1] = text
+
+		if g.status ~= "lobby" then
+			self.row_buttons[#self.row_buttons + 1] = self.druid:new_button(box, function()
+				monarch.show(hash("map"), nil, { game_id = g.id })
+			end)
+		elseif can_start then
+			self.row_buttons[#self.row_buttons + 1] = self.druid:new_button(box, function()
+				self:set_status("starting...")
+				backend.game_start(g.id, function(res, err)
+					if err then self:set_status("could not start: " .. err) return end
+					monarch.show(hash("map"), nil, { game_id = g.id })
+				end)
+			end)
+		end
+		y = y - (ROW_HEIGHT + 40) - 14
+	end
+
+	if #games == 0 and not self.mine then
+		self.rows[#self.rows + 1] = ui.label(MARGIN + 4, y - 30,
+			"No open games. Start one.", 0.7, ui.DIM)
+		return
+	end
+
+	for i = 1, #games do
+		local g = games[i]
+		local panel = ui.panel(MARGIN, y, w - MARGIN * 2, ROW_HEIGHT)
+		self.rows[#self.rows + 1] = panel
+		self.rows[#self.rows + 1] = ui.label(MARGIN + 16, y - 28, g.name, 0.8, ui.TEXT)
+		self.rows[#self.rows + 1] = ui.label(MARGIN + 16, y - 60,
+			string.format("%d/%d players   seed %d", #g.players, g.max_players, g.seed),
+			0.6, ui.DIM)
+
+		local bw, bh = 150, 52
+		local box, text = ui.button(w - MARGIN - bw - 12, y - 20, bw, bh, "JOIN", 0.75)
+		self.rows[#self.rows + 1] = box
+		self.rows[#self.rows + 1] = text
+		self.row_buttons[#self.row_buttons + 1] = self.druid:new_button(box, function()
+			self:set_status("joining " .. g.name .. "...")
+			backend.game_join(g.id, nil, function(res, err)
+				if err then self:set_status("could not join: " .. err) return end
+				self:refresh()
+			end)
+		end)
+
+		y = y - ROW_HEIGHT - 12
+		if y < 180 then break end -- keep the action bar clear
+	end
+end
+
+local function build(self)
+	local w, h = screen()
+
+	ui.panel(0, h, w, h, ui.BACKGROUND)
+	ui.label(MARGIN, h - 48, "GALAXY", 1.6, ui.TEXT)
+	self.subtitle = ui.label(MARGIN, h - 88, "asynchronous conquest", 0.65, ui.DIM)
+
+	self.status_label = ui.label(MARGIN, h - 128, "", 0.65, ui.DIM)
+	self.list_top = h - 160
+
+	-- Action bar along the bottom.
+	local bar_h = 96
+	ui.panel(0, bar_h, w, bar_h, ui.PANEL)
+	local bw = (w - MARGIN * 3) / 2
+	local new_box, new_text = ui.button(MARGIN, bar_h - 20, bw, 56, "NEW GAME")
+	local refresh_box, refresh_text = ui.button(MARGIN * 2 + bw, bar_h - 20, bw, 56, "REFRESH")
+
+	self.druid:new_button(new_box, function()
+		self:set_status("creating game...")
+		backend.game_create({
+			name = "Game " .. tostring(math.random(1000, 9999)),
+			max_players = 4,
+			-- Short turns by default so the prototype can actually be played
+			-- through; a real game would use the 12 hour default.
+			turn_interval = 60,
+			star_count = 120,
+		}, function(res, err)
+			if err then self:set_status("could not create: " .. err) return end
+			self:refresh()
+		end)
+	end)
+	self.druid:new_button(refresh_box, function() self:refresh() end)
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	ui.install_druid_picking()
+	self.druid = druid.new(self)
+	self.rows = {}
+	self.row_buttons = {}
+	self.games = {}
+	self.mine = nil
+	self.since_refresh = 0
+
+	self.set_status = function(_, text)
+		if self.status_label then gui.set_text(self.status_label, text or "") end
+	end
+
+	self.refresh = function()
+		if not backend.ready() then
+			self:set_status("offline - no backend at " .. backend.address())
+			return
+		end
+		self:set_status("loading games...")
+		backend.game_list(function(res, err)
+			if err then self:set_status("server error: " .. err) return end
+			self.games = res.games or {}
+			-- Only one game at a time is supported in the UI for now; the most
+			-- recently created is the one offered.
+			self.mine = res.mine and res.mine[#res.mine] or nil
+			self:set_status(string.format("%d open, %d of yours",
+				#self.games, res.mine and #res.mine or 0))
+			render_games(self)
+		end)
+	end
+
+	build(self)
+	self:refresh()
+end
+
+function final(self)
+	self.druid:final()
+end
+
+function update(self, dt)
+	self.druid:update(dt)
+	-- A lobby is inherently multiplayer: poll so a second player appearing shows
+	-- up without the first having to prod it.
+	self.since_refresh = self.since_refresh + dt
+	if self.since_refresh > REFRESH_SECONDS then
+		self.since_refresh = 0
+		if backend.ready() then
+			backend.game_list(function(res, err)
+				if not err and res.games then
+					self.games = res.games
+					self.mine = res.mine and res.mine[#res.mine] or nil
+					render_games(self)
+				end
+			end)
+		end
+	end
+end
+
+function on_input(self, action_id, action)
+	-- Druid hit-tests with the action it is given; it must be in GUI space.
+	return self.druid:on_input(action_id, ui.gui_action(action))
+end
+
+function on_message(self, message_id, message, sender)
+	self.druid:on_message(message_id, message, sender)
+end

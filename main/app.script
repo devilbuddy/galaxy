@@ -1,0 +1,39 @@
+--- Application controller.
+--
+-- Owns the one-time work that must happen before any screen is useful:
+-- authenticating with the backend. Screens are Monarch collections, and the
+-- session lives here rather than in any of them, so moving between screens
+-- never re-authenticates.
+
+local monarch = require("monarch.monarch")
+local backend = require("main.backend")
+local store = require("main.store")
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	-- Deferred by one message so every screen proxy has registered itself with
+	-- Monarch before anything tries to show a screen.
+	msg.post("#", "boot")
+end
+
+function on_message(self, message_id, message, sender)
+	if message_id == hash("boot") then
+		if not backend.enabled() then
+			print("galaxy: offline mode, skipping sign-in")
+			store.status = nil
+			monarch.show(hash("lobby"))
+			return
+		end
+
+		store.status = "signing in to " .. backend.address()
+		backend.connect(function(ok, err)
+			if ok then
+				print("galaxy: signed in to " .. backend.address())
+			else
+				print("galaxy: backend unavailable (" .. tostring(err) .. "), running offline")
+			end
+			store.status = nil
+			monarch.show(hash("lobby"))
+		end)
+	end
+end

@@ -6,6 +6,8 @@
 -- naming gets a node, so the count stays flat however large the galaxy is.
 
 local store = require("main.store")
+local backend = require("main.backend")
+local ui = require("main.ui")
 
 local STAR_LABEL_POOL = 80
 local REGION_LABEL_POOL = 12
@@ -243,6 +245,58 @@ local function update_labels(self, g, cam, w, h)
 	end
 end
 
+--- What the player knows about a system, or nil if they have never seen it.
+local function known(id)
+	local view = store.game_view
+	if not view then return nil end
+	return view.systems[tostring(id)]
+end
+
+--- Turn a pair of taps into a queued move.
+--
+-- First tap on a system you own picks the origin; the next tap on any other
+-- system queues a move of half the garrison. Half rather than all, because
+-- emptying a system by accident is the most expensive mistake available and
+-- this is a two-tap gesture.
+local function plan_orders(self)
+	local selected = store.selected
+	if selected == self.last_selected then return end
+	self.last_selected = selected
+	if not selected or not store.game_view then return end
+
+	local me = store.game_view.you
+	local info = known(selected)
+
+	if not store.order_source then
+		if info and info.owner == me and info.live and (info.ships or 0) > 1 then
+			store.order_source = selected
+		end
+		return
+	end
+
+	if selected == store.order_source then
+		store.order_source = nil
+		return
+	end
+
+	local source = known(store.order_source)
+	local available = source and source.ships or 0
+	-- Subtract what is already committed from that system this turn.
+	for i = 1, #store.orders do
+		if store.orders[i].from == store.order_source then
+			available = available - store.orders[i].ships
+		end
+	end
+
+	local send = math.floor(available * 0.5)
+	if send >= 1 then
+		store.orders[#store.orders + 1] = {
+			from = store.order_source, to = selected, ships = send,
+		}
+	end
+	store.order_source = nil
+end
+
 local function update_info(self, g)
 	local id = store.selected
 	if not id then
@@ -250,15 +304,37 @@ local function update_info(self, g)
 		return
 	end
 	local s = g.stars[id]
-	local region = g.regions[s.region]
-	local links = #g.adjacency[id]
-	local parts = {
-		s.name,
-		s.class_label .. "  -  " .. region.name,
-		links .. (links == 1 and " lane" or " lanes"),
-	}
-	if s.feature_label ~= "" then parts[#parts + 1] = s.feature_label end
-	if s.habitable then parts[#parts + 1] = "Habitable world" end
+	local parts = { s.name }
+
+	local info = known(id)
+	if store.game_view then
+		if not info then
+			parts[#parts + 1] = "unexplored"
+		else
+			local me = store.game_view.you
+			local owner = info.owner or 0
+			local holder = owner == 0 and "unclaimed"
+				or (owner == me and "yours"
+					or ((store.game_view.players[owner] and store.game_view.players[owner].name)
+						or ("Player " .. owner)))
+			parts[#parts + 1] = string.format("%s  -  %d ships, %d pop",
+				holder, info.ships or 0, info.population or 0)
+			if not info.live then
+				parts[#parts + 1] = "last seen turn " .. tostring(info.seen)
+			end
+		end
+		if store.order_source == id then
+			parts[#parts + 1] = "SELECTED - tap a destination"
+		elseif store.order_source then
+			local from = g.stars[store.order_source]
+			parts[#parts + 1] = "tap again to send from " .. from.name
+		end
+	else
+		local region = g.regions[s.region]
+		parts[#parts + 1] = s.class_label .. "  -  " .. region.name
+		if s.feature_label ~= "" then parts[#parts + 1] = s.feature_label end
+	end
+
 	gui.set_text(self.info_text, table.concat(parts, "\n"))
 end
 
@@ -296,12 +372,28 @@ function update(self, dt)
 			return a < b
 		end)
 		self.label_order = order
-		gui.set_text(self.seed_text, string.format("SEED %d  %s", g.seed,
-			(store.source or "?"):upper()))
 	end
 
+	plan_orders(self)
 	update_labels(self, g, cam, w, h)
 	update_info(self, g)
+
+	-- Bottom bar: the game's clock, and the orders waiting to be sent.
+	local game = store.game
+	if game and game.status == "active" then
+		local remaining = math.max(0, (game.next_turn_at or 0) - (store.now_estimate or os.time()))
+		gui.set_text(self.seed_text, string.format("TURN %d   next in %s",
+			game.turn or 0, ui.duration(remaining)))
+		local pending = #store.orders
+		gui.set_text(self.button_text, pending > 0
+			and string.format("SEND %d ORDER%s", pending, pending == 1 and "" or "S")
+			or "NO ORDERS")
+		gui.set_color(self.button, pending > 0 and ui.ACCENT or ui.PANEL_ALT)
+	else
+		gui.set_text(self.seed_text, string.format("SEED %d  %s", g.seed,
+			(store.source or "?"):upper()))
+		gui.set_text(self.button_text, "NEW GALAXY")
+	end
 end
 
 --- Is a design-space point inside a rectangle {x0, y0, x1, y1}?
@@ -309,11 +401,34 @@ local function inside(rect, x, y)
 	return rect and x >= rect[1] and x <= rect[3] and y >= rect[2] and y <= rect[4]
 end
 
+local function submit_orders()
+	local game = store.game
+	if not game or #store.orders == 0 then return end
+	local payload = {}
+	for i = 1, #store.orders do
+		payload[i] = store.orders[i]
+	end
+	backend.game_orders(game.id, payload, function(res, err)
+		if err then
+			print("galaxy: orders rejected (" .. tostring(err) .. ")")
+			return
+		end
+		print(string.format("galaxy: %d order(s) accepted for turn %s",
+			res.accepted or 0, tostring(res.for_turn)))
+		store.orders = {}
+		store.order_source = nil
+	end)
+end
+
 function on_input(self, action_id, action)
 	if action_id == hash("touch") and action.released then
 		local ax, ay = store.input_point(action.x or 0, action.y or 0)
 		if inside(self.button_rect, ax, ay) then
-			msg.post("/galaxy#galaxy_script", "regenerate", {})
+			if store.game and store.game.status == "active" then
+				submit_orders()
+			else
+				msg.post("/galaxy#galaxy_script", "regenerate", {})
+			end
 			return true
 		end
 	elseif action_id == hash("reroll") and action.released then

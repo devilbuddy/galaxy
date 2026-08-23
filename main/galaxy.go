@@ -11,6 +11,10 @@ components {
   component: "/main/meshes/glow.mesh"
 }
 components {
+  id: "owners"
+  component: "/main/meshes/owners.mesh"
+}
+components {
   id: "stars"
   component: "/main/meshes/stars.mesh"
 }

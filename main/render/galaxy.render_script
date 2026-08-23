@@ -23,6 +23,7 @@ local WORLD_LAYERS = {
 	"galaxy_wash",
 	"galaxy_lane",
 	"galaxy_glow",
+	"galaxy_owner",
 	"galaxy_star",
 }
 

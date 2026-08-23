@@ -8,48 +8,13 @@
 
 local nk = require("nakama")
 
-local generate = require("galaxy.generate")
-local wire = require("galaxy.wire")
-local digest = require("galaxy.digest")
+local galaxy_cache = require("galaxy_cache")
 local rng = require("galaxy.rng")
 
 -- Seeds are held below 2^24 so they survive a round trip through a Defold
 -- go.property, which is a 32-bit float.
 local MAX_SEED = 16777215
 local DEFAULT_SEED = require("galaxy.config").default_seed
-
--- Generating a galaxy costs ~100 ms of pure Lua, and every client asking for
--- the same seed must get the same answer anyway, so results are memoised.
--- Nakama pools runtime VMs, so this is a per-VM cache rather than a global one;
--- that is fine, it just warms once per pool member.
-local CACHE_LIMIT = 16
-local cache = {}
-local cache_order = {}
-
-local function cached_galaxy(seed)
-	local hit = cache[seed]
-	if hit then return hit end
-
-	local started = os.time()
-	local g = generate.build(seed)
-	local payload = wire.encode(g)
-	payload.digest = digest.of(g)
-	local encoded = nk.json_encode(payload)
-
-	cache[seed] = encoded
-	cache_order[#cache_order + 1] = seed
-	if #cache_order > CACHE_LIMIT then
-		local evict = table.remove(cache_order, 1)
-		cache[evict] = nil
-	end
-
-	nk.logger_info(string.format(
-		"generated galaxy seed=%d stars=%d lanes=%d regions=%d digest=%d bytes=%d elapsed=%ds bitops=%s",
-		seed, g.stats.star_count, g.stats.lane_count, g.stats.region_count,
-		payload.digest, #encoded, os.time() - started, rng.implementation))
-
-	return encoded
-end
 
 --- Normalise whatever the client sent into a usable seed.
 --
@@ -87,7 +52,7 @@ end
 
 --- RPC "galaxy.get" -> the full generated map for a seed.
 local function rpc_galaxy_get(context, payload)
-	return cached_galaxy(seed_from_payload(payload))
+	return galaxy_cache.get(seed_from_payload(payload)).encoded
 end
 
 nk.register_rpc(rpc_galaxy_get, "galaxy.get")

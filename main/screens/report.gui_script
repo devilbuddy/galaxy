@@ -1,0 +1,141 @@
+--- Turn report: everything that happened while the player was away.
+--
+-- Shown as a Monarch popup over the map, so dismissing it reveals the map
+-- already in its new state rather than triggering another load.
+--
+-- The event log is deliberately raw on the wire (see galaxy/sim/resolve.lua);
+-- turning it into sentences is a presentation concern and lives here, which
+-- means the same log could later drive an animated playback without the server
+-- changing at all.
+
+local druid = require("druid.druid")
+local monarch = require("monarch.monarch")
+local store = require("main.store")
+local ui = require("main.ui")
+
+local MARGIN = 24
+local LINE = 30
+
+local function system_name(id)
+	local g = store.galaxy
+	if g and id and g.stars[id] then return g.stars[id].name end
+	return "system " .. tostring(id)
+end
+
+local function player_name(index)
+	local view = store.game_view
+	if view and view.players and view.players[index] then
+		return view.players[index].name
+	end
+	return "Player " .. tostring(index)
+end
+
+--- One event as a line of text plus a colour.
+local function describe(event, me)
+	local kind = event.kind
+	if kind == "turn_summary" then
+		return string.format("Turn %d  -  %d systems, %d ships, %d built%s",
+			event.turn, event.systems or 0, event.ships or 0, event.built or 0,
+			(event.scrapped or 0) > 0 and (", " .. event.scrapped .. " scrapped") or ""),
+			ui.DIM, true
+	elseif kind == "claimed" then
+		return string.format("Claimed %s with %d ships", system_name(event.at), event.ships or 0),
+			ui.GOOD
+	elseif kind == "reinforced" then
+		return string.format("Reinforced %s with %d ships", system_name(event.at), event.ships or 0),
+			ui.TEXT
+	elseif kind == "battle" then
+		local mine = event.attacker == me
+		local theirs = event.defender == me
+		local who = mine and "You attacked" or (theirs and "You were attacked at" or "Battle at")
+		local outcome
+		if event.winner == me then
+			outcome = event.captured and "captured it" or "held"
+		else
+			outcome = event.captured and "LOST it" or "repelled"
+		end
+		return string.format("%s %s  -  %d vs %d, %s (%d left)",
+			who, system_name(event.at), event.attacker_ships or 0,
+			event.defender_ships or 0, outcome, event.survivors or 0),
+			event.winner == me and ui.GOOD or ui.BAD
+	elseif kind == "order_rejected" then
+		return string.format("Order %s -> %s rejected: %s",
+			system_name(event.from), system_name(event.to), tostring(event.reason)), ui.BAD
+	elseif kind == "eliminated" then
+		return string.format("%s has been eliminated", player_name(event.player)), ui.BAD
+	end
+	return kind .. " at " .. tostring(event.at), ui.DIM
+end
+
+local function build(self, data)
+	local w, h = store.screen.width, store.screen.height
+	local events = (data and data.events) or {}
+	local me = (data and data.you) or 1
+
+	-- Dim the map behind, and swallow taps so they do not reach it.
+	local shade = ui.panel(0, h, w, h, vmath.vector4(0.02, 0.02, 0.05, 0.82))
+	self.druid:new_blocker(shade)
+
+	ui.label(MARGIN, h - 56, "SINCE YOU WERE AWAY", 1.0, ui.TEXT)
+	local turns = {}
+	for i = 1, #events do
+		if events[i].turn then turns[events[i].turn] = true end
+	end
+	local count = 0
+	for _ in pairs(turns) do count = count + 1 end
+	ui.label(MARGIN, h - 92,
+		count == 0 and "nothing has happened yet"
+		or string.format("%d event%s across %d turn%s",
+			#events, #events == 1 and "" or "s", count, count == 1 and "" or "s"),
+		0.65, ui.DIM)
+
+	-- Scrollable list. Druid needs a stencil "view" node and a larger "content"
+	-- node that moves inside it.
+	local top = h - 130
+	local bottom = 130
+	local view_h = top - bottom
+	local view_node = ui.panel(MARGIN, top, w - MARGIN * 2, view_h, vmath.vector4(0, 0, 0, 0.0))
+	gui.set_clipping_mode(view_node, gui.CLIPPING_MODE_STENCIL)
+
+	local content_h = math.max(view_h, #events * LINE + 40)
+	local content = ui.panel(0, 0, w - MARGIN * 2, content_h, vmath.vector4(0, 0, 0, 0))
+	gui.set_parent(content, view_node)
+	gui.set_position(content, vmath.vector3(0, 0, 0))
+	gui.set_pivot(content, gui.PIVOT_NW)
+
+	local y = -12
+	for i = 1, #events do
+		local text, colour, heading = describe(events[i], me)
+		if heading then y = y - 10 end
+		local node = ui.label(12, y, text, heading and 0.68 or 0.62, colour)
+		gui.set_parent(node, content)
+		y = y - LINE
+	end
+	if #events == 0 then
+		local node = ui.label(12, -20, "Your orders are in. Check back after the next turn.",
+			0.65, ui.DIM)
+		gui.set_parent(node, content)
+	end
+
+	self.druid:new_scroll(view_node, content)
+
+	-- Dismiss.
+	local bw = w - MARGIN * 2
+	local box, text = ui.button(MARGIN, 96, bw, 60, "TO THE MAP")
+	self.druid:new_button(box, function()
+		monarch.hide(hash("report"))
+	end)
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	ui.install_druid_picking()
+	self.druid = druid.new(self)
+	build(self, monarch.data(hash("report")))
+end
+
+function final(self) self.druid:final() end
+function update(self, dt) self.druid:update(dt) end
+-- Druid hit-tests with the action it is given; it must be in GUI space.
+function on_input(self, action_id, action) return self.druid:on_input(action_id, ui.gui_action(action)) end
+function on_message(self, message_id, message, sender) self.druid:on_message(message_id, message, sender) end
