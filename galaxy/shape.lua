@@ -9,7 +9,19 @@
 local rng = require("galaxy.rng")
 local noise = require("galaxy.noise")
 
+local floor = math.floor
+
+-- Lua 5.1 (Defold, gopher-lua) has math.atan2; 5.3+ folded it into a two
+-- argument math.atan. Resolving it once keeps the generator runnable on any
+-- host that might end up running the server.
+local atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
+
 local M = {}
+
+-- Resolution of the cached density grid. With three fBm octaves the finest
+-- features span roughly 0.15 normalised units, so cells of 2/72 give about five
+-- samples across each one. Raising this costs build time for no visible gain.
+M.FIELD_RESOLUTION = 72
 
 local Shape = {}
 Shape.__index = Shape
@@ -18,7 +30,7 @@ Shape.__index = Shape
 local function arm_strength(self, x, y)
 	local r = math.sqrt(x * x + y * y)
 	if r < 1e-6 then return 1.0 end
-	local theta = math.atan2(y, x)
+	local theta = atan2(y, x)
 	-- A logarithmic spiral has theta = ln(r) / tan(pitch); the arm ridge is
 	-- wherever the point's angle matches that, modulo the arm spacing.
 	local spiral = math.log(math.max(r, 0.02)) / self.tightness
@@ -57,7 +69,7 @@ function Shape:raw_density(x, y)
 	-- Irregularity. Kept deliberately mild: strong noise washes the spiral
 	-- structure out into an even disc, which is exactly what it looked like
 	-- before this was toned down.
-	local lumps = noise.fbm(self.noise_seed, x * self.lump_scale + 100, y * self.lump_scale + 100, 4)
+	local lumps = noise.fbm(self.noise_seed, x * self.lump_scale + 100, y * self.lump_scale + 100, 3)
 	local irregular = 0.72 + 0.58 * lumps
 
 	local d = radial * structure * irregular
@@ -66,12 +78,30 @@ end
 
 --- Density in [0, 1], normalised so every seed peaks at 1.0.
 --
--- Without this, the rolled parameters move the peak by 2-3x between seeds and
--- any threshold expressed in density units (the rim cutoff, the spacing curve)
--- would mean something different for each galaxy.
+-- Reads from a precomputed grid rather than evaluating the analytic field.
+-- Sampling calls this tens of thousands of times per galaxy, and the analytic
+-- form costs a spiral-arm loop plus a 4-octave fBm - about 80 multiply-heavy
+-- operations. On LuaJIT that was merely wasteful; on Nakama's gopher-lua
+-- interpreter it made a galaxy take two minutes. The field is smooth at this
+-- resolution, so bilinear interpolation is visually identical for ~15 ops.
 function Shape:density(x, y)
-	local d = self:raw_density(x, y) * self.norm
-	return d > 1 and 1 or d
+	if x <= -1 or x >= 1 or y <= -1 or y >= 1 then return 0 end
+	local n = self.field_n
+	local fx = (x + 1) * 0.5 * n
+	local fy = (y + 1) * 0.5 * n
+	local ix, iy = floor(fx), floor(fy)
+	if ix < 0 then ix = 0 elseif ix >= n then ix = n - 1 end
+	if iy < 0 then iy = 0 elseif iy >= n then iy = n - 1 end
+	local tx, ty = fx - ix, fy - iy
+
+	local row0, row1 = self.field[iy], self.field[iy + 1]
+	local a, b = row0[ix], row0[ix + 1]
+	local c, d = row1[ix], row1[ix + 1]
+	local top = a + (b - a) * tx
+	local bottom = c + (d - c) * tx
+	local v = top + (bottom - top) * ty
+	if v < 0 then return 0 end
+	return v > 1 and 1 or v
 end
 
 --- Probability a sampled point survives. This is the *only* place density
@@ -125,22 +155,47 @@ function M.new(seed, cfg)
 	self.cutoff_lo = cfg.cutoff_lo or 0.035
 	self.cutoff_hi = cfg.cutoff_hi or 0.20
 
-	-- Estimate the peak on a fixed grid. Fixed resolution keeps this
-	-- deterministic, and a slight underestimate is harmless: density() clamps.
-	self.norm = 1.0
-	local peak = 0
-	local N = 72
-	for i = 0, N do
-		for j = 0, N do
-			local x = (i / N) * 2 - 1
-			local y = (j / N) * 2 - 1
-			if x * x + y * y <= 1 then
-				local d = self:raw_density(x, y)
-				if d > peak then peak = d end
-			end
+	-- Evaluate the analytic field once onto a grid, then normalise it so every
+	-- seed peaks at 1.0. Without normalisation the rolled parameters move the
+	-- peak by 2-3x between seeds, and any threshold expressed in density units
+	-- (the rim cutoff, the spacing curve) would mean something different for
+	-- each galaxy. Fixed resolution keeps the result deterministic.
+	local n = M.FIELD_RESOLUTION
+	self.field_n = n
+	local step = 2 / n
+	local field, peak = {}, 0
+	for j = 0, n do
+		local y = j * step - 1
+		local row = {}
+		for i = 0, n do
+			local d = self:raw_density(i * step - 1, y)
+			if d > peak then peak = d end
+			row[i] = d
+		end
+		field[j] = row
+	end
+
+	-- Quantise the field to a fixed 16-bit ladder.
+	--
+	-- raw_density is built from exp, log and atan2, and unlike sqrt those are
+	-- not required to be correctly rounded: glibc, macOS libm and Android's
+	-- bionic can disagree in the last bit. A one-ulp difference would be
+	-- invisible on its own, but sampling compares a random draw against this
+	-- value, so it could flip a single accept/reject and cascade into a
+	-- completely different galaxy on one platform. Snapping to a coarse ladder
+	-- makes those last-bit differences disappear.
+	local norm = peak > 1e-9 and (1.0 / peak) or 1.0
+	local LEVELS = 65536
+	for j = 0, n do
+		local row = field[j]
+		for i = 0, n do
+			local v = row[i] * norm
+			if v < 0 then v = 0 elseif v > 1 then v = 1 end
+			row[i] = floor(v * LEVELS + 0.5) / LEVELS
 		end
 	end
-	self.norm = peak > 1e-9 and (1.0 / peak) or 1.0
+	self.field = field
+	self.norm = norm
 	return self
 end
 

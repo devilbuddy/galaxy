@@ -180,15 +180,27 @@ function M.regions(r, pts, lanes, adj, k)
 	local n = #pts
 	local seeds = spread_seeds(r, pts, k)
 
+	-- Nested tables keyed by vertex index, as in delaunay.edges.
 	local cost = {}
 	for i = 1, #lanes do
-		local a, b = pts[lanes[i][1]], pts[lanes[i][2]]
+		local ia, ib = lanes[i][1], lanes[i][2]
+		local a, b = pts[ia], pts[ib]
 		local dx, dy = a.x - b.x, a.y - b.y
-		cost[lanes[i][1] * 1048576 + lanes[i][2]] = sqrt(dx * dx + dy * dy)
+		local row = cost[ia]
+		if not row then
+			row = {}
+			cost[ia] = row
+		end
+		row[ib] = sqrt(dx * dx + dy * dy)
 	end
 	local function lane_cost(a, b)
-		if a > b then a, b = b, a end
-		return cost[a * 1048576 + b] or 0
+		if a > b then
+			local swap = a
+			a = b
+			b = swap
+		end
+		local row = cost[a]
+		return (row and row[b]) or 0
 	end
 
 	local owner = {}

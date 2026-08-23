@@ -1,0 +1,75 @@
+# Local Nakama backend for the galaxy prototype.
+#
+#   docker compose up -d      start
+#   docker compose logs -f nakama
+#   docker compose down       stop
+#
+# Nakama 3.27+ publishes a native arm64 image; earlier tags are amd64-only and
+# run under emulation on Apple Silicon, which made generation ~5x slower again
+# on top of the interpreter cost.
+#
+# The server generates galaxies with the *same* Lua modules the client uses:
+# ./galaxy is mounted straight into Nakama's module path, so there is no second
+# implementation to drift. Nakama's runtime is gopher-lua and has no bit
+# library, which galaxy/rng.lua handles with an arithmetic fallback that
+# produces bit-identical results (tools/verify_cross_runtime.sh).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: galaxy-postgres
+    environment:
+      POSTGRES_DB: nakama
+      POSTGRES_PASSWORD: localdev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nakama"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    expose:
+      - "5432"
+    ports:
+      - "5432:5432"
+
+  nakama:
+    image: registry.heroiclabs.com/heroiclabs/nakama:3.27.0
+    container_name: galaxy-nakama
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - "/bin/sh"
+      - "-ecx"
+      - >
+        /nakama/nakama migrate up --database.address postgres:localdev@postgres:5432/nakama &&
+        exec /nakama/nakama
+        --name nakama1
+        --database.address postgres:localdev@postgres:5432/nakama
+        --logger.level DEBUG
+        --session.token_expiry_sec 7200
+        --runtime.path /nakama/data/modules
+        --runtime.lua_min_count 2
+        --runtime.lua_max_count 8
+    volumes:
+      # The server-side entry points (RPC registration).
+      - ./server/modules:/nakama/data/modules
+      # The generator itself, shared verbatim with the Defold client.
+      - ./galaxy:/nakama/data/modules/galaxy
+    healthcheck:
+      test: ["CMD", "/nakama/nakama", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    # Generation is memory-hungry on an interpreted runtime, and an unbounded
+    # container simply gets OOM-killed by the VM with no useful diagnostic.
+    # A limit turns that into a clear, attributable failure.
+    mem_limit: 4g
+    ports:
+      - "7349:7349"   # gRPC
+      - "7350:7350"   # client API (HTTP/rt)
+      - "7351:7351"   # developer console
+
+volumes:
+  postgres-data:

@@ -10,6 +10,10 @@ systems joined by a non-crossing hyperlane network, carved into named regions,
 rendered on a world much larger than the viewport that the player pans and
 zooms around.
 
+A local **Nakama** backend (docker compose) authenticates by device id and is
+authoritative for the map: it generates the galaxy and ships it to the client.
+The client keeps its own copy of the generator purely as an offline fallback.
+
 Not a git repository.
 
 ## Toolchain
@@ -122,8 +126,11 @@ No unit-test framework is configured. Two scripts carry the load, both exit non-
 failure and so work in CI as-is:
 
 ```bash
+sh tools/verify_cross_runtime.sh      # BitOp and arithmetic paths agree
 luajit tools/verify_determinism.lua   # a seed reproduces exactly, across processes
+luajit tools/test_wire.lua            # client/server wire format round-trips
 luajit tools/test_gestures.lua        # pan / pinch / tap recognition
+luajit tools/lint_shared.lua          # no idioms gopher-lua miscompiles
 ```
 
 To check a *runtime* agrees with standalone LuaJIT, compare digests — the game
@@ -136,6 +143,15 @@ luajit -e 'package.path="./?.lua;"..package.path
 ```
 
 ## Architecture
+
+### Where things run
+
+| | |
+|---|---|
+| `galaxy/` | Pure Lua generation. Runs on **both** the Defold client (LuaJIT) and the Nakama server (gopher-lua). No engine dependencies. |
+| `main/` | Defold client: rendering, camera, HUD, backend client. |
+| `server/modules/` | Nakama entry points. `docker-compose.yml` mounts `./galaxy` into Nakama's module path, so there is one generator, not two. |
+| `tools/` | Offline harnesses and tests, run under `luajit`. |
 
 ### Generation pipeline (`galaxy/`, engine-free)
 
@@ -163,9 +179,72 @@ failure of the simpler thing:
    vocabulary, with global uniqueness; classes biased towards exotics near the
    galactic core.
 
+### Backend (Nakama)
+
+```bash
+docker compose up -d          # postgres + nakama
+docker compose logs -f nakama
+docker compose down
+```
+
+Console at http://127.0.0.1:7351 (`admin` / `password`), client API on 7350.
+
+The client authenticates with a random per-install device id (`main/device_id.lua`,
+persisted via `sys.save`) and calls the `galaxy.get` RPC, which returns the map
+in the wire format defined by `galaxy/wire.lua` — a contract shared by both
+sides, so there is no encoder/decoder pair to drift. Only what cannot be derived
+is transmitted (~40 KB); colours, labels, adjacency, borders and bounds are
+recomputed on arrival from the same tables the generator used.
+
+Set `galaxy.use_server = 0` in game.project to run fully offline, or
+`galaxy.nakama_debug = 1` to trace requests — note that prints the session
+token, so leave it off otherwise.
+
+**Testing against a physical device**: the phone's `127.0.0.1` is the phone, so
+forward the port over USB rather than changing the host:
+
+```bash
+adb reverse tcp:7350 tcp:7350
+```
+
+**Server-side generation is slow — 4-6 s for an uncached seed**, then instant
+(results are memoised per seed, per runtime VM). That is the cost of running a
+numeric workload on gopher-lua, an AST-walking interpreter: the same code takes
+~50 ms on LuaJIT. Most of it is Poisson sampling. If this needs to be fast, the
+options are precomputing seeds, moving generation to a fast sidecar the RPC
+calls, or Nakama's Go runtime — not micro-optimising the Lua further.
+
+### Four things that will bite you on the Nakama runtime
+
+Nakama's Lua is gopher-lua, not LuaJIT, and differs in ways that fail *silently*:
+
+1. **`a, b = b, a` is miscompiled.** The multiple-assignment swap is evaluated
+   sequentially, so both names end up with the second value. This turned every
+   reordered edge in `delaunay.edges` into a self-loop — a third of the lane
+   graph — while the client was perfectly fine. `tools/lint_shared.lua` fails
+   the build if the idiom reappears in `galaxy/`. Use an explicit temporary.
+2. **There is no `bit` library.** `galaxy/rng.lua` detects this and falls back to
+   an arithmetic implementation that produces bit-identical results. Without it
+   the generator cannot load at all.
+3. **`rpc_func`, not `rpc_func2`.** The latter sends the payload as a `?payload=`
+   query parameter, which Nakama 3.27 delivers to the RPC as an empty string.
+   The server then defaults the seed and serves the same galaxy every time.
+4. **Nakama images before 3.27 are amd64-only** and run under emulation on Apple
+   Silicon — ~5x slower again, and it was OOM-killed mid-generation. 3.27+ is
+   multi-arch.
+
+`collectgarbage("count")` also returns nil under Nakama's sandbox, so it is
+useless for diagnosing memory there.
+
 ### Determinism
 
-The hard requirement, and the reason for several non-obvious choices:
+Still required, though not for the reason it first appears. Since the server
+ships the whole map, the client does not need to *reproduce* it — but the server
+must agree with itself, so that a seed survives a restart, a second server
+instance, or a player rejoining. The client generator staying in step is what
+makes the offline fallback safe rather than a divergence.
+
+The non-obvious choices behind it:
 
 - **`rng.lua` implements SplitMix32**, not `math.random` (implementation-defined
   and globally stateful). It uses only BitOp calls and exact sub-2^53 double
@@ -181,6 +260,11 @@ The hard requirement, and the reason for several non-obvious choices:
 - **Seeds must stay below 2^24.** `go.property` numbers are 32-bit floats, so
   larger integers do not round-trip — 20260823 comes back as 20260824.
   `galaxy.script` floors and wraps the incoming property for this reason.
+- **The density field is quantised to a 16-bit ladder** after being built from
+  `exp`/`log`/`atan2`. Unlike `sqrt`, those are not required to be correctly
+  rounded, and glibc, macOS libm and Android's bionic can disagree in the last
+  bit — enough to flip one accept/reject in sampling and cascade into a
+  different galaxy. Snapping to a coarse ladder makes that unreachable.
 
 ### Rendering (`main/`)
 
@@ -208,8 +292,7 @@ from the UV instead (`main/shaders/`):
 Two consequences worth knowing when tuning: the procedural shapes fill the whole
 quad where the old textures faded out inside it, so size constants are *not*
 interchangeable with the pre-shader values; and `fwidth` needs derivatives,
-which is fine on GLSL 140 / ES 3.0 (verified on Vulkan and WebGL2) but would
-need an extension on WebGL1.
+which is core in GLSL 140 / ES 3.0 (verified on the device's Vulkan backend).
 
 ### Zoom and the backdrop
 
@@ -287,7 +370,6 @@ which is a different space again.
   resolution. Never assume window pixels equal design units.
 - **`bootstrap.render = /main/render/galaxy.render`** — a custom pipeline; the
   builtin one cannot express the per-layer blend modes this map needs.
-- **`html5.scale_mode = fit`** (default `downscale_fit`) — preserves aspect.
 - **`android.immersive_mode = 1`** — hides the Android status and navigation
   bars, which otherwise sit on top of the HUD.
 - **`android.package = com.dg.galaxy`** — Defold's default is the placeholder

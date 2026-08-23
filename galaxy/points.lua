@@ -36,10 +36,12 @@ function M.generate(seed, shape, target, tolerance)
 
 	local scale = 1.0
 	local best, best_err = nil, math.huge
+	local passes = 0
 
 	-- Bracket first: walk the scale until the count straddles the target.
 	local lo, hi = 0.25, 4.0
 	for _ = 1, 12 do
+		passes = passes + 1
 		local pts = sample_at(seed, shape, scale)
 		local n = #pts
 		local err = math.abs(n - target) / target
@@ -62,7 +64,7 @@ function M.generate(seed, shape, target, tolerance)
 		end
 	end
 
-	return best, scale
+	return best, scale, passes
 end
 
 return M

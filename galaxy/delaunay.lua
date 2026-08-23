@@ -120,16 +120,32 @@ function M.triangulate(pts)
 	return out
 end
 
+-- Note: written with an explicit temporary rather than `a, b = b, a`.
+-- Nakama's Lua runtime miscompiles the multiple-assignment swap, evaluating it
+-- sequentially so both names end up with the second value. That silently turned
+-- every reordered edge into a self-loop. tools/lint_shared.lua guards against
+-- the idiom coming back into code the server runs.
 --- Unique undirected edges of a triangulation, as {a, b} with a < b.
 -- Returned in a deterministic order (sorted), independent of triangle order.
 function M.edges(tris)
+	-- Deduplicated with a nested table keyed by vertex index, which avoids
+	-- packing two indices into one large synthetic key.
 	local seen = {}
 	local out = {}
 	local function add(a, b)
-		if a > b then a, b = b, a end
-		local key = a * 1048576 + b
-		if not seen[key] then
-			seen[key] = true
+		if a == b then return end -- a degenerate triangle would make a self-loop
+		if a > b then
+			local swap = a
+			a = b
+			b = swap
+		end
+		local row = seen[a]
+		if not row then
+			row = {}
+			seen[a] = row
+		end
+		if not row[b] then
+			row[b] = true
 			out[#out + 1] = { a, b }
 		end
 	end

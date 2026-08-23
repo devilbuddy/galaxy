@@ -30,8 +30,15 @@ immersive_mode = 1
 gravity_y = -1000.0
 scale = 0.01
 
-[html5]
-scale_mode = fit
+[galaxy]
+use_server = 1
+nakama_host = 127.0.0.1
+nakama_port = 7350
+nakama_key = defaultkey
+nakama_ssl = 0
+nakama_timeout = 20
+nakama_debug = 0
 
 [project]
 title = galaxy
+dependencies#0 = https://github.com/heroiclabs/nakama-defold/archive/refs/tags/v3.4.0.zip

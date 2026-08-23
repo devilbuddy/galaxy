@@ -7,6 +7,7 @@
 local generate = require("galaxy.generate")
 local meshbuild = require("main.meshbuild")
 local store = require("main.store")
+local backend = require("main.backend")
 local rng = require("galaxy.rng")
 local digest = require("galaxy.digest")
 
@@ -128,12 +129,10 @@ local function build_dust(seed, world)
 	b:apply("/backdrop#dust")
 end
 
-local function build(self, seed)
+--- Upload a galaxy to the mesh layers and hand it to the rest of the game.
+-- `source` is "server" or "local", purely so the HUD can say which.
+local function present(self, g, source, note)
 	local t0 = os.clock()
-	local g = generate.build(seed)
-	local generated = (os.clock() - t0) * 1000
-
-	t0 = os.clock()
 	local world = g.world_size
 	build_nebula(world)
 	build_dust(seed, world)
@@ -144,14 +143,16 @@ local function build(self, seed)
 	local meshed = (os.clock() - t0) * 1000
 
 	store.galaxy = g
+	store.source = source
+	store.status = nil
 	store.selected = nil
 	store.revision = store.revision + 1
 
 	print(string.format(
-		"galaxy seed=%d  %d stars  %d lanes  %d regions  degree %.2f  connected=%s  digest=%d",
+		"galaxy seed=%d  %d stars  %d lanes  %d regions  degree %.2f  source=%s%s",
 		g.seed, g.stats.star_count, g.stats.lane_count, g.stats.region_count,
-		g.stats.mean_degree, tostring(g.stats.connected), digest.of(g)))
-	print(string.format("  generated in %.0f ms, meshed in %.0f ms", generated, meshed))
+		g.stats.mean_degree, source, note and ("  " .. note) or ""))
+	print(string.format("  meshed in %.0f ms", meshed))
 
 	msg.post("/camera#camera_script", "map_ready", {
 		world = world,
@@ -160,6 +161,33 @@ local function build(self, seed)
 		content_width = g.content.width,
 		content_height = g.content.height,
 	})
+end
+
+--- Fetch a galaxy for `seed` and show it.
+--
+-- The server is authoritative when it is reachable. Local generation is a
+-- fallback so the prototype still runs with no backend up - the client has the
+-- same generator, and a seed produces the same map either way (verified by
+-- tools/verify_cross_runtime.sh), so falling back changes nothing but the
+-- source of truth.
+local function load_galaxy(self, seed)
+	self.seed = seed
+
+	if not backend.ready() then
+		present(self, generate.build(seed), "local")
+		return
+	end
+
+	store.status = "requesting galaxy " .. seed
+	backend.fetch_galaxy(seed, function(g, err, info)
+		if g then
+			present(self, g, "server",
+				info and string.format("digest=%s %d bytes", tostring(info.digest), info.bytes))
+		else
+			print("galaxy: server request failed (" .. tostring(err) .. "), generating locally")
+			present(self, generate.build(seed), "local")
+		end
+	end)
 end
 
 --- Clamp anything arriving from outside into a seed we can represent exactly.
@@ -173,7 +201,21 @@ function init(self)
 	self.backdrop = msg.url(nil, "/backdrop", nil)
 	self.backdrop_fade = nil
 	self.seed = sanitise_seed(self.seed, require("galaxy.config").default_seed)
-	build(self, self.seed)
+
+	if not backend.enabled() then
+		load_galaxy(self, self.seed)
+		return
+	end
+
+	store.status = "connecting to " .. backend.address()
+	backend.connect(function(ok, err)
+		if ok then
+			print("galaxy: authenticated with " .. backend.address())
+		else
+			print("galaxy: backend unavailable (" .. tostring(err) .. "), running offline")
+		end
+		load_galaxy(self, self.seed)
+	end)
 end
 
 -- The backdrop is a fixed-resolution texture spread over the whole world, so
@@ -214,7 +256,6 @@ function on_message(self, message_id, message)
 		-- always count back to one they liked.
 		local next_seed = message.seed and sanitise_seed(message.seed, self.seed)
 			or (self.seed % MAX_SEED) + 1
-		self.seed = next_seed
-		build(self, next_seed)
+		load_galaxy(self, next_seed)
 	end
 end

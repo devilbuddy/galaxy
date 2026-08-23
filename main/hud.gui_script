@@ -79,6 +79,14 @@ function init(self)
 	gui.set_pivot(self.seed_text, gui.PIVOT_W)
 	gui.set_color(self.seed_text, vmath.vector4(0.52, 0.58, 0.72, 1.0))
 
+	-- Centred status line, shown while connecting or waiting on the server.
+	self.status_text = gui.new_text_node(vmath.vector3(0, 0, 0), "")
+	gui.set_font(self.status_text, "map")
+	gui.set_scale(self.status_text, vmath.vector3(0.9, 0.9, 1))
+	gui.set_pivot(self.status_text, gui.PIVOT_CENTER)
+	gui.set_color(self.status_text, vmath.vector4(0.62, 0.70, 0.88, 1.0))
+	gui.set_enabled(self.status_text, false)
+
 	self.info_text = gui.new_text_node(vmath.vector3(0, 0, 0), "")
 	gui.set_font(self.info_text, "map")
 	gui.set_scale(self.info_text, vmath.vector3(0.85, 0.85, 1))
@@ -120,6 +128,7 @@ local function layout(self, w, h)
 	gui.set_position(self.seed_text, vmath.vector3(20, self.bar_height * 0.5, 0))
 	gui.set_scale(self.seed_text, vmath.vector3(0.85, 0.85, 1))
 
+	gui.set_position(self.status_text, vmath.vector3(w * 0.5, h * 0.5, 0))
 	gui.set_position(self.info_text, vmath.vector3(20, h - 20, 0))
 	gui.set_size(self.info_text, vmath.vector3((w - 40) / 0.95, 240, 0))
 	gui.set_scale(self.info_text, vmath.vector3(0.95, 0.95, 1))
@@ -254,6 +263,17 @@ local function update_info(self, g)
 end
 
 function update(self, dt)
+	-- The status line has to work before there is a galaxy: it is what the
+	-- player sees while the backend is being contacted.
+	if store.status then
+		local w, h = store.screen.width, store.screen.height
+		if w ~= self.layout_w or h ~= self.layout_h then layout(self, w, h) end
+		gui.set_enabled(self.status_text, true)
+		gui.set_text(self.status_text, store.status)
+	else
+		gui.set_enabled(self.status_text, false)
+	end
+
 	local g = store.galaxy
 	if not g then return end
 	local cam = store.camera
@@ -276,7 +296,8 @@ function update(self, dt)
 			return a < b
 		end)
 		self.label_order = order
-		gui.set_text(self.seed_text, "SEED " .. g.seed)
+		gui.set_text(self.seed_text, string.format("SEED %d  %s", g.seed,
+			(store.source or "?"):upper()))
 	end
 
 	update_labels(self, g, cam, w, h)

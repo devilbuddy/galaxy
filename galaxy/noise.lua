@@ -14,11 +14,12 @@ local M = {}
 local function lattice(seed, ix, iy)
 	-- Fold the coordinates into the seed with two odd multipliers before the
 	-- avalanche, so x and y stay independent.
+	-- Kept deliberately short. This runs once per lattice point per octave while
+	-- building the density grid, and on an interpreted runtime every multiply
+	-- and xor here is paid tens of thousands of times.
 	local h = rng.u32(seed + rng.mul32(ix % 4294967296, 374761393) + rng.mul32(iy % 4294967296, 668265263))
-	h = rng.mul32(rng.u32(h + 2654435769), 2246822519)
-	local bitlib = rawget(_G, "bit") or require("bit")
-	h = rng.mul32(rng.u32(bitlib.bxor(h, bitlib.rshift(h, 15))), 3266489917)
-	return rng.u32(bitlib.bxor(h, bitlib.rshift(h, 16))) / 4294967296
+	h = rng.mul32(rng.bxor(h, rng.rshift(h, 15)), 2246822519)
+	return rng.bxor(h, rng.rshift(h, 13)) / 4294967296
 end
 
 --- Quintic smoothstep: zero first *and* second derivative at the lattice, which

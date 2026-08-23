@@ -31,6 +31,12 @@ M.camera = { x = 0, y = 0, zoom = 1 }
 -- Currently selected star index, or nil.
 M.selected = nil
 
+-- "server" or "local": where the current galaxy came from.
+M.source = nil
+
+-- Transient status line for the HUD ("connecting...", "requesting galaxy...").
+M.status = nil
+
 -- Height of the HUD bar, in view units. The camera declines drags that start
 -- inside it so panning cannot fight the controls.
 M.hud_bar_height = 0

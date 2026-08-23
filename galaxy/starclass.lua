@@ -71,12 +71,20 @@ function M.roll_feature(r)
 	return M.FEATURES[r:weighted(M.FEATURE_WEIGHTS, M.FEATURE_TOTAL)]
 end
 
+-- Lookup tables, built once. The client rebuilds a galaxy received from the
+-- server by class id, so these are on the hot path of every map load.
+local CLASS_BY_ID, FEATURE_BY_ID = {}, {}
+for i = 1, #M.CLASSES do CLASS_BY_ID[M.CLASSES[i].id] = M.CLASSES[i] end
+for i = 1, #M.FEATURES do FEATURE_BY_ID[M.FEATURES[i].id] = M.FEATURES[i] end
+
 --- Look a class up by id.
 function M.by_id(id)
-	for i = 1, #M.CLASSES do
-		if M.CLASSES[i].id == id then return M.CLASSES[i] end
-	end
-	return nil
+	return CLASS_BY_ID[id]
+end
+
+--- Look a feature up by id.
+function M.feature_by_id(id)
+	return FEATURE_BY_ID[id]
 end
 
 return M
