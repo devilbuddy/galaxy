@@ -833,10 +833,43 @@ alone, the turn card in the overview goes accent and reads "new — tap to read"
 and **opening it is what marks it read**. Nothing is lost if the player never
 taps: the poll keeps returning the same window.
 
+**The empire screen has no tab bar.** It had two, a hundred units apart and
+styled identically - Forces/Research above, and the technology branches below -
+so knowing where you were meant holding two positions in mind. Research is a
+move now rather than a mode: a row on the empire page carrying the banked figure
+(which is the question that sends anyone there), and a back chevron in the
+research card. `show_tab` is forward-declared because the two bodies navigate to
+each other and a Lua local is not visible to a function defined before it.
+
 **EMPIRE lives at the top right of the overview bar, not the bottom one.** That
 card is what a player reads every turn anyway, and the bottom row belongs to
 SEND — the action with consequences — plus CANCEL, which only exists while
 something is being aimed, so SEND keeps the far right whether or not it is there.
+
+**The chrome gets out of the way of the thing it describes.** Three rules, each
+of which was learned by watching the interface fail at them:
+
+- **A selected system must not sit under its own card.** The sheet covers the
+  bottom half, so `focus_pending` in the HUD lifts the star into the visible
+  band after the sheet is built - deferred, because how much map is left depends
+  on how tall the sheet turned out. It intervenes *only* when the star would
+  otherwise be hidden; moving the map on every selection is its own kind of
+  clunky.
+- **Aiming hands the screen to the map.** `build_sheet` returns nothing while
+  `store.aiming` is set, and the order bar carries the origin and the count
+  instead. The sheet used to ask the player to "tap where to send" while
+  covering half the destinations.
+- **The camera clamps against the visible band, not the window.**
+  `store.hud_band` is what the map can actually be seen through. Without it the
+  galaxy fits the *window* at fit zoom, the camera is pinned by
+  `clamp_position`, and a system under the sheet can never be lifted out.
+
+**A count on the garrison, not a hidden default.** Launching used to send half
+the garrison, silently, with no way to ask for another number - so "take that
+waypoint with twenty" and "commit everything" were both impossible, though
+`launch` has carried an optional `ships` count all along. The sheet's button is
+`LAUNCH`, not `SEND`: `SEND` is the turn commit, and having both on screen in
+the same accent blue was the one genuine ambiguity in the interface.
 
 **The map has three interactive layers.** The *system sheet* is rebuilt whenever
 the selection changes, because its content varies enormously — a waypoint you

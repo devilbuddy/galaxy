@@ -686,8 +686,11 @@ function M.number(n)
 	n = math.floor(tonumber(n) or 0)
 	local sign = n < 0 and "-" or ""
 	n = math.abs(n)
-	if n < 1000 then return sign .. tostring(n) end
-	if n < 10000 then return sign .. string.format("%.1fk", n / 1000) end
+	-- Abbreviated only past ten thousand. At the old threshold two research
+	-- costs a hundred apart rendered as "960" and "1.0k", which is the same
+	-- quantity described two ways in one view - and the game's numbers cluster
+	-- exactly there.
+	if n < 10000 then return sign .. tostring(n) end
 	if n < 1000000 then return sign .. string.format("%dk", math.floor(n / 1000)) end
 	return sign .. string.format("%.1fM", n / 1000000)
 end

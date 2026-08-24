@@ -89,6 +89,12 @@ M.aiming = nil
 -- Transient status line for the HUD ("connecting...", "requesting galaxy...").
 M.status = nil
 
+-- The band of the screen the map is actually visible in: everything between the
+-- bottom chrome and the top chrome, in view units. The camera clamps against
+-- this rather than the window, because the window includes several hundred
+-- units of panel the player cannot see the galaxy through.
+M.hud_band = { floor = 0, ceiling = 0 }
+
 -- Height of the bottom HUD bar, in view units. Used only to frame the map in
 -- the space the player can actually see; see hud_zones for input.
 M.hud_bar_height = 0

@@ -29,7 +29,14 @@ end
 local function clamp_position(self)
 	local w, h = viewport(self)
 	local half_view_x = (w * 0.5) / self.zoom
-	local half_view_y = (h * 0.5) / self.zoom
+	-- Vertically the map is only visible between the chrome, so the slack it can
+	-- be moved through is reckoned against that band and not the window. Without
+	-- this the galaxy fits the *window* at fit zoom, the camera is pinned, and a
+	-- system under the sheet can never be lifted out from under it.
+	local band = store.hud_band
+	local visible_h = h
+	if band.ceiling > band.floor then visible_h = band.ceiling - band.floor end
+	local half_view_y = (visible_h * 0.5) / self.zoom
 
 	local margin_x = half_view_x * OVERSCROLL
 	local margin_y = half_view_y * OVERSCROLL

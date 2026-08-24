@@ -40,6 +40,8 @@ local FLEET_POOL = 40
 -- rather than for the theoretical maximum of every commander on a twelve-lane
 -- campaign; beyond it the tail of a route simply is not drawn.
 local ROUTE_POOL = 64
+-- How far apart two fleet markers must stay on screen before one is nudged.
+local MARKER_CLEARANCE = 46
 local ROUTE_WIDTH = 3
 local ROUTE_NODE = 9
 
@@ -73,6 +75,8 @@ local MANIFEST_LINE_H = 34
 -- see layout_bar for why every line lands in the same place regardless of how
 -- many there are.
 local MANIFEST_TOP = 60
+-- What the status line costs the bar when it has nothing to say.
+local STATUS_ROW_H = 30
 -- The sheet is as tall as its content, between these.
 local SHEET_MIN = 200
 local SHEET_MAX = 640
@@ -373,12 +377,16 @@ end
 -- can find without looking. The list grows upward *into* the new space, so the
 -- last line always sits the same distance above the row and only the top of the
 -- card and the status line above it actually travel.
+--- @param lines manifest rows, or -1 for "no status line either"
 local function layout_bar(self, lines)
 	local b = self.bar
 	if not b or b.lines == lines then return end
 	b.lines = lines
 
-	local extra = lines * MANIFEST_LINE_H
+	-- With nothing staged and nothing to say, the status line is a blank row
+	-- above a dead button. Giving it back to the map is worth more than keeping
+	-- the bar a constant height.
+	local extra = (lines < 0) and -STATUS_ROW_H or (lines * MANIFEST_LINE_H)
 	local top = b.base_top + extra
 	local height = BAR_H + extra
 
@@ -386,6 +394,7 @@ local function layout_bar(self, lines)
 		gui.set_position(node, vmath.vector3(b.x, top, 0))
 		gui.set_size(node, vmath.vector3(b.width, height, 0))
 	end
+	gui.set_enabled(self.status, lines >= 0)
 	gui.set_position(self.status,
 		vmath.vector3(b.x + b.inner, top - 26, 0))
 	for i = 1, #self.manifest do
@@ -463,6 +472,12 @@ local function build_sheet(self, w, pad)
 	local g = store.galaxy
 	if not id or not g or not g.stars[id] then return 0 end
 
+	-- Aiming hands the screen to the map. The sheet asked the player to "tap
+	-- where to send" while covering nearly half the destinations, which is the
+	-- one moment it must not be in the way; the order bar carries the origin
+	-- and the count instead (see refresh_bar).
+	if store.aiming then return 0 end
+
 	self.sheet_druid = druid.new(self)
 
 	local previous = ui.collect(self.sheet_nodes)
@@ -497,23 +512,27 @@ local function build_sheet(self, w, pad)
 		ui.body(inner, y, "Unexplored", ui.FAINT)
 		y = y - 24
 	else
+		-- Labelled. Three unlabelled glyphs meant three things to memorise, and
+		-- the first of them repeated the garrison figure shown again below.
 		local column = text_w / 3
 		y = y - 46
-		local function stat(i, icon, value, colour)
-			ui.icon(inner + column * (i - 1), y + 15, 28, icon, ui.DIM)
-			ui.text(inner + column * (i - 1) + 38, y, value, ui.BODY,
-				colour or ui.TEXT, { bold = true })
+		local function stat(i, icon, value, label, colour)
+			local x = inner + column * (i - 1)
+			ui.icon(x, y + 15, 26, icon, ui.FAINT)
+			ui.text(x + 34, y + 2, value, ui.BODY, colour or ui.TEXT, { bold = true })
+			ui.small(x + 34, y - 22, label, ui.FAINT)
 		end
-		stat(1, "icon_warship", tostring(info.garrison or 0))
 		if kind == "colony" then
-			stat(2, "icon_growth",
-				string.format("%d/%d", info.population or 0, info.capacity or 0))
+			stat(1, "icon_growth",
+				string.format("%d/%d", info.population or 0, info.capacity or 0),
+				"people")
 		else
-			stat(2, "icon_growth", "-", ui.FAINT)
+			stat(1, "icon_growth", "-", "no population", ui.FAINT)
 		end
-		stat(3, "icon_defence", tostring(info.defence or 0))
+		stat(2, "icon_defence", tostring(info.defence or 0), "defence")
+		stat(3, "icon_industry", ui.number(info.output or 0), "a turn")
 
-		y = y - 34
+		y = y - 50
 		if not info.live then
 			ui.small(inner, y, "Last seen turn " .. tostring(info.seen), ui.WARN)
 		elseif info.owner == 0 then
@@ -522,9 +541,6 @@ local function build_sheet(self, w, pad)
 			local name = (view.players[info.owner] and view.players[info.owner].name)
 				or ("Player " .. info.owner)
 			ui.small(inner, y, "Held by " .. name, ui.BAD)
-		else
-			ui.small(inner, y,
-				string.format("Producing %d a turn", info.output or 0), ui.GOOD)
 		end
 
 		-- Installations. Shown wherever you can see them, tappable only on yours.
@@ -532,6 +548,10 @@ local function build_sheet(self, w, pad)
 		if #allowed > 0 and info.buildings then
 			y = y - 42
 			ui.caps(inner, y, "installations")
+			-- The bare number was a price and the dots were levels, and nothing
+			-- said so.
+			ui.small(inner + text_w, y, "cost / level", ui.FAINT,
+				{ pivot = gui.PIVOT_E })
 			local staged = staged_build(id)
 			for k = 1, #allowed do
 				local entry = sim_buildings.by_id(allowed[k])
@@ -598,17 +618,45 @@ local function build_sheet(self, w, pad)
 			ui.caps(inner, y, "forces here")
 
 			if garrison > 0 then
+				-- How many to send. It used to be half, silently, with no way to
+				-- ask for any other number - so "take that waypoint with twenty"
+				-- and "commit everything" were both impossible, though the order
+				-- shape has carried a count all along.
+				local chosen = self.launch_ships
+				if not chosen or chosen > garrison then
+					chosen = math.max(1, math.floor(garrison * 0.5))
+				end
+				self.launch_ships = chosen
+				local step = math.max(1, math.floor(garrison / 10 + 0.5))
+
 				y = y - 58
 				ui.panel(inner, y + 48, text_w, 54, ui.CARD_ALT)
 				ui.icon(inner + 14, y + 37, 28, "icon_warship", ui.TEXT)
 				ui.body(inner + 54, y + 21, "Garrison", ui.TEXT)
-				ui.value(inner + text_w - 116, y + 21, tostring(garrison), ui.BODY, ui.TEXT)
-				local send = ui.button(self.sheet_druid, inner + text_w - 104, y + 48, 104, 54,
-					"SEND", function()
-						-- Half by default: emptying a world by accident is the
-						-- most expensive mistake available.
-						store.aiming = { kind = "launch", at = id,
-							ships = math.max(1, math.floor(garrison * 0.5)) }
+				ui.value(inner + text_w - 14, y + 21, tostring(garrison), ui.BODY, ui.TEXT)
+
+				y = y - 62
+				local function adjust(by)
+					local next_count = math.max(1, math.min(garrison,
+						self.launch_ships + by))
+					self.launch_ships = next_count
+					self.sheet_dirty = true
+				end
+				ui.button(self.sheet_druid, inner, y + 54, 72, 54, "-",
+					function() adjust(-step) end, {})
+				ui.button(self.sheet_druid, inner + 80, y + 54, 72, 54, "+",
+					function() adjust(step) end, {})
+				ui.button(self.sheet_druid, inner + 160, y + 54, 84, 54, "ALL",
+					function()
+						self.launch_ships = garrison
+						self.sheet_dirty = true
+					end, { size = ui.CAPS })
+				-- The count reads as the sentence the order will become.
+				ui.small(inner + 256, y + 27, ui.plural(chosen, "ship"), ui.TEXT)
+
+				ui.button(self.sheet_druid, inner + text_w - 168, y + 54, 168, 54,
+					"LAUNCH", function()
+						store.aiming = { kind = "launch", at = id, ships = chosen }
 						store.selected_fleet = nil
 						self.sheet_dirty = true
 					end, { style = "primary", size = ui.CAPS })
@@ -673,7 +721,10 @@ local function build_sheet(self, w, pad)
 	gui.set_size(card, vmath.vector3(width, height, 0))
 	gui.set_size(edge, vmath.vector3(width, height, 0))
 
-	local top = pad.bottom + BAR_H + bar_extra(self) + ui.GAP + height
+	-- Docked to the bar rather than floating above it. Two cards with a gap
+	-- between them read as clutter and cost the map a strip of screen for a
+	-- seam that carried no meaning.
+	local top = pad.bottom + BAR_H + bar_extra(self) + height
 	for i = 1, #self.sheet_nodes do
 		local node = self.sheet_nodes[i]
 		local p = gui.get_position(node)
@@ -847,8 +898,31 @@ local function update_fleets(self, g, cam, w, h)
 			if sx < -60 or sx > w + 60 or sy < self.floor_y or sy > self.ceiling_y then
 				return
 			end
+
+			-- Nudge apart anything that would land on top of something already
+			-- placed. At fit zoom - the only zoom reachable without a pinch -
+			-- neighbouring systems are a few units apart, and two markers there
+			-- become one unreadable knot of triangles and numbers.
+			for prior = 1, used do
+				local other = self.fleet_nodes[prior]
+				local dx = sx - other.at_x
+				local dy = sy - other.at_y
+				if dx * dx + dy * dy < MARKER_CLEARANCE * MARKER_CLEARANCE then
+					local away = math.sqrt(dx * dx + dy * dy)
+					if away < 0.001 then
+						-- Exactly co-located: fan around the first one instead
+						-- of dividing by nothing.
+						local turn = prior * 2.4
+						dx, dy, away = math.cos(turn), math.sin(turn), 1
+					end
+					sx = other.at_x + dx / away * MARKER_CLEARANCE
+					sy = other.at_y + dy / away * MARKER_CLEARANCE
+				end
+			end
+
 			used = used + 1
 			local marker = self.fleet_nodes[used]
+			marker.at_x, marker.at_y = sx, sy
 			gui.set_enabled(marker.box, true)
 			gui.set_enabled(marker.text, true)
 			gui.set_position(marker.box, vmath.vector3(sx, sy, 0))
@@ -1028,6 +1102,9 @@ local function resolve_aim(self)
 	if selected == self.last_selected then return end
 	self.last_selected = selected
 	self.sheet_dirty = true
+	-- A launch count belongs to the world it was chosen at.
+	self.launch_ships = nil
+	self.focus_pending = selected
 
 	local aim = store.aiming
 	if not aim or not selected then return end
@@ -1221,7 +1298,12 @@ local function refresh_bar(self, g)
 	local game = store.game
 	local in_game = (game and game.status == "active") and true or false
 
-	self.cancel.set_visible(in_game and store.aiming ~= nil)
+	local aiming = store.aiming ~= nil
+	self.cancel.set_visible(in_game and aiming)
+	-- While aiming there are exactly two things to do: pick a destination, or
+	-- give up. A dead SEND next to CANCEL is a third thing that looks like an
+	-- option and is not one.
+	self.send.set_visible(not (in_game and aiming))
 
 	if in_game then
 		local view = store.game_view
@@ -1243,10 +1325,13 @@ local function refresh_bar(self, g)
 		local unsent = (count > 0) and (store.sent_signature ~= signature) or false
 		local turn = store.orders_turn or ((view and view.turn or 0) + 1)
 
-		local key = signature .. (unsent and "|unsent" or "|in")
+		local quiet = (count == 0) and not store.aiming and not self.flash
+			and not self.sending and store.selected ~= nil
+		local key = signature .. (unsent and "|unsent" or "|in") .. (quiet and "|q" or "")
 		if key ~= self.manifest_key then
 			self.manifest_key = key
-			layout_bar(self, refresh_manifest(self, plan_lines(), not unsent))
+			local rows = refresh_manifest(self, plan_lines(), not unsent)
+			layout_bar(self, quiet and -1 or rows)
 		end
 
 		-- Four states, and each one has to be distinguishable at a glance from
@@ -1274,9 +1359,12 @@ local function refresh_bar(self, g)
 		if not text then
 			local aim = store.aiming
 			if aim and aim.kind == "launch" then
-				text, tone = "Tap where to send " .. ui.plural(aim.ships, "ship"), ui.ACCENT
+				text, tone = string.format("Tap a destination for %s from %s",
+					ui.plural(aim.ships, "ship"), star_name(aim.at)), ui.ACCENT
 			elseif aim then
-				text, tone = "Tap where the fleet should go", ui.ACCENT
+				local fleet = fleet_by_id(aim.fleet)
+				text, tone = string.format("Tap where %s should go",
+					(fleet and fleet.name) or "the fleet"), ui.ACCENT
 			elseif self.sending then
 				text, tone = "Sending...", ui.DIM
 			elseif count > 0 and not unsent then
@@ -1285,6 +1373,8 @@ local function refresh_bar(self, g)
 			elseif count > 0 then
 				text, tone = string.format("%s for turn %d, not sent yet",
 					ui.plural(count, "order"), turn), ui.WARN
+			elseif store.selected then
+				text, tone = "", ui.DIM
 			else
 				text, tone = "Tap one of your systems to move ships", ui.DIM
 			end
@@ -1444,9 +1534,37 @@ function update(self, dt)
 		build_captains(self, w, h, self.pad)
 	end
 
-	self.floor_y = self.pad.bottom + BAR_H + bar_extra(self)
-		+ (self.sheet_height > 0 and (ui.GAP + self.sheet_height) or 0)
+	self.floor_y = self.pad.bottom + BAR_H + bar_extra(self) + self.sheet_height
 	self.ceiling_y = h - self.pad.top - TOP_H - (self.captain_h or 0)
+	store.hud_band.floor = self.floor_y
+	store.hud_band.ceiling = self.ceiling_y
+
+	-- Bring a newly selected system into view, but only if the sheet that
+	-- describes it is now sitting on top of it.
+	--
+	-- Deferred to here rather than done at the tap, because how much of the map
+	-- is left depends on how tall the sheet turned out - a waypoint is three
+	-- lines and a developed colony is most of the screen.
+	--
+	-- Conditional on purpose: moving the map on every selection would be its own
+	-- kind of clunky. The camera only intervenes when the alternative is the
+	-- player looking at a card about a star they cannot see.
+	if self.focus_pending and g then
+		local star = g.stars[self.focus_pending]
+		self.focus_pending = nil
+		if star then
+			local cam = store.camera
+			local _, sy = project(cam, w, h, star.x, star.y)
+			local margin = 40
+			if sy < self.floor_y + margin or sy > self.ceiling_y - margin then
+				local band = (self.floor_y + self.ceiling_y) * 0.5
+				msg.post("camera#camera_script", "focus", {
+					x = star.x,
+					y = star.y - (band - h * 0.5) / cam.zoom,
+				})
+			end
+		end
+	end
 
 	update_labels(self, g, store.camera, w, h)
 	update_routes(self, g, store.camera, w, h)

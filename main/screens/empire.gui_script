@@ -21,6 +21,7 @@ local druid = require("druid.druid")
 local monarch = require("monarch.monarch")
 local store = require("main.store")
 local ui = require("main.ui")
+local sim_rules = require("galaxy.sim.rules")
 local tech = require("galaxy.sim.tech")
 local races = require("galaxy.sim.races")
 local sim_systems = require("galaxy.sim.systems")
@@ -299,6 +300,10 @@ local function clear_body(self)
 	self.tree_content, self.tree_scroll = nil, nil
 end
 
+-- Declared ahead of the bodies because they navigate between each other, and a
+-- Lua local is not visible to a function defined before it.
+local show_tab
+
 local function build_forces(self, view, x, top, width, height)
 	local previous = ui.collect(self.body_nodes)
 	local rates = view.rates or {}
@@ -314,7 +319,10 @@ local function build_forces(self, view, x, top, width, height)
 		end
 	end
 
-	local card_h = 172
+	-- Taller when there is a warning to carry.
+	local ships_now = (view.rates or {}).ships or 0
+	local cap_now = (view.rates or {}).ship_cap or 0
+	local card_h = (ships_now > cap_now) and 226 or 172
 	ui.card(x, top, width, card_h)
 	ui.section(x + PAD, top - 16, width - PAD * 2, "the empire")
 
@@ -326,16 +334,50 @@ local function build_forces(self, view, x, top, width, height)
 		ui.text(cx + 38, cy, value, ui.BODY, colour or ui.TEXT, { bold = true })
 		ui.small(cx + 38, cy - 28, label, ui.DIM)
 	end
-	stat(0, "icon_warship", ui.number(rates.ships or 0),
-		"of " .. ui.number(rates.ship_cap or 0),
-		(rates.ships or 0) > (rates.ship_cap or 0) and ui.BAD or ui.TEXT)
+	-- Over the cap, say what it is costing. A red number with no cause is
+	-- decoration: attrition has been scrapping ships every turn for hundreds of
+	-- turns and the only place that was ever stated is the digest. The loss is
+	-- computed from the same rule the resolver applies, so this is what the next
+	-- turn will take, not a report of the last one.
+	local ships = rates.ships or 0
+	local cap = rates.ship_cap or 0
+	local over = ships - cap
+	stat(0, "icon_warship", ui.number(ships), "of " .. ui.number(cap),
+		over > 0 and ui.BAD or ui.TEXT)
 	stat(1, "icon_growth", ui.number(rates.population or 0), "people")
 	stat(2, "icon_flag", tostring(held), colonies .. " colonies")
 
-	local list_top = top - card_h - ui.GAP
+	-- The consequence gets its own line, at full width. A third of a column is
+	-- not enough to say it, and it is the most expensive thing on the screen:
+	-- attrition has been scrapping ships every turn and the only place that was
+	-- ever stated is the turn digest. Computed from the rule the resolver
+	-- applies, so it is what the coming turn will take rather than a report of
+	-- the last one.
+	if over > 0 then
+		local losing = math.floor(over * sim_rules.over_cap_attrition)
+		ui.small(x + PAD, top - 150, string.format(
+			"%d over capacity - %s scrapped a turn until more people support them",
+			over, ui.plural(losing, "ship")), ui.BAD,
+			{ width = width - PAD * 2, anchor_top = true })
+	end
+
+	-- Research lives one move away rather than behind a second tab bar. The
+	-- banked figure rides on the row, because "can I afford anything" is the
+	-- question that sends a player there.
+	local research_y = top - card_h - ui.GAP
+	local research_row = ui.panel(x, research_y, width, 82, ui.CARD)
+	ui.panel_line(x, research_y, width, 82, ui.BORDER)
+	ui.icon(x + PAD, research_y - 26, 30, "icon_research", ui.RESOURCE_COLOUR.research)
+	ui.body(x + PAD + 44, research_y - 41, "Research", ui.TEXT)
+	ui.value(x + width - PAD - 34, research_y - 41,
+		ui.number(view.research or 0), ui.BODY, ui.TEXT)
+	ui.icon(x + width - PAD - 26, research_y - 28, 24, "icon_chevron_right", ui.FAINT)
+	self.body_druid:new_button(research_row, function() show_tab(self, "research") end)
+
+	local list_top = research_y - 82 - ui.GAP
 	local list_h = list_top - (top - height)
 	ui.card(x, list_top, width, list_h)
-	local ry = ui.section(x + PAD, list_top - 16, width - PAD * 2, "fleets",
+	local ry = ui.section(x + PAD, list_top - 16, width - PAD * 2, "commanders",
 		#view.fleets)
 
 	local inner_w = width - PAD * 2
@@ -421,7 +463,13 @@ local function build_research(self, view, x, top, width, height)
 	local tree_h = math.min(wanted, available)
 
 	ui.card(x, top, width, HEAD + tree_h + PAD)
-	ui.section(x + PAD, top - 16, width - PAD * 2, "research")
+	ui.section(x + PAD + 56, top - 16, width - PAD * 2 - 56, "research")
+	-- The way back. Research used to be a tab beside Forces, which meant two
+	-- identically styled tab strips a hundred units apart - this one and the
+	-- tier tabs below it. Going to research is a move now, not a mode, so only
+	-- one set of tabs is ever on screen.
+	ui.icon_button(self.body_druid, x + PAD - 8, top - 2, 52, "icon_chevron_left",
+		function() show_tab(self, "forces") end)
 	ui.icon(x + width - PAD - 150, top - 8, 28, "icon_research",
 		ui.RESOURCE_COLOUR.research)
 	ui.value(x + width - PAD, top - 22, ui.number(view.research or 0), ui.BODY, ui.TEXT)
@@ -460,7 +508,7 @@ local TABS = {
 	{ id = "research", label = "Research" },
 }
 
-local function show_tab(self, id)
+function show_tab(self, id)
 	self.tab = id
 	clear_body(self)
 	local view = store.game_view
@@ -495,21 +543,18 @@ local function build(self)
 		return
 	end
 
-	local strip_y = top - 150
-	self.page_tabs = ui.tabs(self.druid, pad.left, strip_y, card_w, TABS,
-		"forces", function(id)
-			self.page_tabs.set_active(id)
-			show_tab(self, id)
-		end)
-
+	-- No tab bar here any more. Research has tier tabs of its own, and two
+	-- identically styled tab strips a hundred units apart meant holding two
+	-- positions in mind to know where you were. The empire is the screen; going
+	-- to research is a move, not a mode.
 	self.body_x = pad.left
-	self.body_top = strip_y - 82
+	self.body_top = top - 150
 	self.body_w = card_w
 	-- The close glyph in the corner is the only way out, so the sheet runs down
 	-- to the bottom inset instead of reserving a control row for a second button
 	-- that said the same thing.
 	self.body_h = self.body_top - pad.bottom
-	show_tab(self, "forces")
+	show_tab(self, self.tab or "forces")
 end
 
 function init(self)
