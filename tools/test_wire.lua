@@ -63,5 +63,65 @@ for _, seed in ipairs({ 1, 424242, 1337 }) do
 		and math.abs(original.content.centre_y - rebuilt.content.centre_y) < 1e-9)
 end
 
+print("the projected view carries what the client reads")
+do
+	-- The client screens index this table directly (main/hud.gui_script,
+	-- main/screens/empire.gui_script). Nothing type-checks that across the
+	-- wire, so the shape is asserted here instead: a missing field shows up as
+	-- a blank HUD on a device, three steps removed from the change that caused
+	-- it.
+	local st = require("galaxy.sim.state")
+	local resolve = require("galaxy.sim.resolve")
+	local view = require("galaxy.sim.view")
+	local sim_path = require("galaxy.sim.path")
+
+	local galaxy = gen.build(424242)
+	local lengths = sim_path.lane_lengths(galaxy)
+	local state = st.new(galaxy, {
+		{ id = "a", name = "A", race = "kepler" },
+		{ id = "b", name = "B", race = "vorn" },
+	})
+	for _ = 1, 3 do resolve.turn(galaxy, state, {}, lengths) end
+
+	local v = view.project(galaxy, state, 1)
+	local required = {
+		"turn", "you", "players", "systems", "fleets", "routes",
+		"stock", "income", "tech", "available_tech", "warship_share",
+		"race", "rates",
+	}
+	local missing = {}
+	for i = 1, #required do
+		if v[required[i]] == nil then missing[#missing + 1] = required[i] end
+	end
+	check("the projection has every field the client reads", #missing == 0,
+		table.concat(missing, ", "))
+
+	for _, kind in ipairs({ "metal", "fuel", "research" }) do
+		check("stock." .. kind .. " is a number", type(v.stock[kind]) == "number")
+		check("income." .. kind .. " is a number", type(v.income[kind]) == "number")
+	end
+	for _, key in ipairs({ "upkeep", "speed", "hops", "vision", "tech_cost", "ship_cost" }) do
+		check("rates." .. key .. " is a number", type(v.rates[key]) == "number")
+	end
+
+	check("the roster reports each player's race",
+		v.players[1].race == "kepler" and v.players[2].race == "vorn")
+	check("researched technologies are an array, not a set",
+		type(v.tech) == "table" and (next(v.tech) == nil or type(next(v.tech)) == "number"))
+
+	local home = tostring(state.players[1].home)
+	local mine = v.systems[home]
+	check("your own systems report freighters", mine and mine.freighters ~= nil)
+	check("your own systems report a capacity", mine and type(mine.capacity) == "number")
+
+	-- Everything a player can see must be describable; nothing may arrive with
+	-- an owner the roster cannot name.
+	local bad = nil
+	for id, sys in pairs(v.systems) do
+		if sys.owner and sys.owner > 0 and not v.players[sys.owner] then bad = id end
+	end
+	check("no system names a player the roster does not have", bad == nil, bad)
+end
+
 print(failures == 0 and "\nALL WIRE TESTS PASSED" or ("\n" .. failures .. " FAILURE(S)"))
 os.exit(failures == 0 and 0 or 1)

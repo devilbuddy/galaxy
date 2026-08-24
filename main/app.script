@@ -8,12 +8,21 @@
 local monarch = require("monarch.monarch")
 local backend = require("main.backend")
 local store = require("main.store")
+local safearea = require("main.safearea")
 
 function init(self)
 	msg.post(".", "acquire_input_focus")
+	-- Polled here because this script outlives every screen, and the platform
+	-- reports the insets as not-ready for the first couple of hundred
+	-- milliseconds - a screen that only asked once would lay out against zeroes.
+	safearea.install()
 	-- Deferred by one message so every screen proxy has registered itself with
 	-- Monarch before anything tries to show a screen.
 	msg.post("#", "boot")
+end
+
+function update(self, dt)
+	safearea.update(dt)
 end
 
 function on_message(self, message_id, message, sender)

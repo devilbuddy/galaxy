@@ -12,6 +12,8 @@ local gen = require("galaxy.generate")
 local st = require("galaxy.sim.state")
 local res = require("galaxy.sim.resolve")
 local path = require("galaxy.sim.path")
+local races = require("galaxy.sim.races")
+local tech = require("galaxy.sim.tech")
 
 local seed = tonumber(arg[1]) or 424242
 local player_count = tonumber(arg[2]) or 6
@@ -22,8 +24,14 @@ local quiet = arg[5] == "quiet"
 local galaxy = gen.build(seed, star_count and { star_count = star_count } or nil)
 local lengths = path.lane_lengths(galaxy)
 
+-- One race each, cycled, so a run exercises every stat spread rather than six
+-- copies of the same empire.
+local race_ids = races.ids()
 local players = {}
-for i = 1, player_count do players[i] = { id = "ai" .. i, name = "AI " .. i } end
+for i = 1, player_count do
+	local race = race_ids[((i - 1) % #race_ids) + 1]
+	players[i] = { id = "ai" .. i, name = "AI " .. i, race = race }
+end
 local state = st.new(galaxy, players)
 
 --- Target-centric expansion.
@@ -49,6 +57,20 @@ local function ai_orders(player)
 		end
 	end
 	table.sort(order)
+
+	-- Research whatever is cheapest and available. Not clever - the point of
+	-- this harness is pacing, and a smart research order would make the numbers
+	-- reflect the AI rather than the rules.
+	local me = state.players[player]
+	if not me.researching then
+		local best, best_cost = nil, math.huge
+		for _, id in ipairs(tech.available(me.tech)) do
+			local cost = tech.cost_of(id, 0)
+			local total = cost.research + cost.metal * 2
+			if total < best_cost then best, best_cost = id, total end
+		end
+		if best then orders[#orders + 1] = { player = player, kind = "research", tech = best } end
+	end
 
 	local committed = {}
 	for _, to in ipairs(order) do
@@ -85,7 +107,11 @@ local function standings()
 				pop = pop + sys.population
 			end
 		end
+		local known = 0
+		for _ in pairs(state.players[i].tech) do known = known + 1 end
 		rows[i] = { i = i, systems = systems, ships = ships, pop = pop,
+			race = state.players[i].race, tech = known,
+			stock = state.players[i].stock,
 			alive = state.players[i].alive }
 	end
 	return rows
@@ -145,8 +171,9 @@ end
 print()
 local rows = standings()
 for i = 1, #rows do
-	print(string.format("  AI %-2d  systems %3d  ships %6d  population %6d  %s",
-		i, rows[i].systems, rows[i].ships, rows[i].pop,
+	print(string.format("  AI %-2d %-9s systems %3d  ships %6d  pop %6d  tech %2d  m/f/r %5d/%5d/%5d  %s",
+		i, rows[i].race, rows[i].systems, rows[i].ships, rows[i].pop, rows[i].tech,
+		rows[i].stock.metal, rows[i].stock.fuel, rows[i].stock.research,
 		rows[i].systems > 0 and "" or "eliminated"))
 end
 local claimed = 0

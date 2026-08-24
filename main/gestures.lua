@@ -27,19 +27,36 @@ function M.new(opts)
 	}, Recognizer)
 end
 
+--- Is a point inside any of the excluded rectangles?
+local function inside_any(zones, x, y)
+	if not zones then return false end
+	for i = 1, #zones do
+		local z = zones[i]
+		if x >= z[1] and x <= z[3] and y >= z[2] and y <= z[4] then return true end
+	end
+	return false
+end
+
 --- Feed one frame of active touch points.
 --
--- @param points   array of {x=, y=}, already in view space, lifted fingers removed
--- @param blocked_below  y below which a gesture is ignored (the HUD bar)
+-- @param points array of {x=, y=}, already in view space, lifted fingers removed
+-- @param zones  rectangles {x0, y0, x1, y1} a gesture may not start inside -
+--        the HUD's own cards. A list rather than a single "below this y",
+--        because the interface has chrome at the top, at the bottom and
+--        floating in the middle, and the camera must decline all of it rather
+--        than relying on winning the input-focus race with the GUI.
 -- @return a table describing what happened this frame:
 --   pan_dx, pan_dy   view-space translation of the gesture (may be 0)
 --   zoom             multiplicative scale factor (1 when unchanged)
 --   anchor_x/y       the point the zoom should be centred on
 --   tap_x/y          set only on the frame a tap completes
-function Recognizer:update(points, blocked_below)
-	blocked_below = blocked_below or 0
+--   blocked          the gesture began inside an excluded rectangle, so the
+--                    caller should not claim the input either - something else
+--                    on screen owns it
+function Recognizer:update(points, zones)
 	local n = #points
 	local out = { pan_dx = 0, pan_dy = 0, zoom = 1 }
+	if self.blocked then out.blocked = true end
 
 	if n >= 2 then
 		local a, b = points[1], points[2]
@@ -77,7 +94,8 @@ function Recognizer:update(points, blocked_below)
 		elseif not self.single then
 			self.single = { x = p.x, y = p.y }
 			self.travel = 0
-			self.blocked = p.y <= blocked_below
+			self.blocked = inside_any(zones, p.x, p.y)
+			out.blocked = self.blocked
 		else
 			local dx, dy = p.x - self.single.x, p.y - self.single.y
 			self.travel = self.travel + abs(dx) + abs(dy)

@@ -52,12 +52,40 @@ M.orders = {}
 -- The system a move is being planned from, if the player has picked one.
 M.order_source = nil
 
+-- Standing choices the player has changed but not yet submitted. Nil means
+-- "unchanged"; they are folded into the order batch on submit alongside the
+-- movement orders, so one SEND covers the whole plan.
+M.pending_research = nil
+M.pending_share = nil
+
+-- What the next planned move sends: warships, or freighters to open a trade
+-- route. The HUD toggles it; plan_orders reads it.
+M.order_mode = "move"
+
+-- The race chosen in the lobby, remembered between screens so creating and
+-- joining agree without threading it through Monarch.
+M.race = nil
+
 -- Transient status line for the HUD ("connecting...", "requesting galaxy...").
 M.status = nil
 
--- Height of the HUD bar, in view units. The camera declines drags that start
--- inside it so panning cannot fight the controls.
+-- Height of the bottom HUD bar, in view units. Used only to frame the map in
+-- the space the player can actually see; see hud_zones for input.
 M.hud_bar_height = 0
+
+-- Device safe-area insets, in view units (main/safearea.lua). The world draws
+-- edge to edge - there are no letterbox bars - so these exist purely to keep
+-- chrome out from under a notch or a gesture strip. Every screen adds them to
+-- its outer margin, and re-lays-out when `safe_revision` changes, because the
+-- platform does not know the real values for the first couple of frames.
+M.safe = { top = 0, bottom = 0, left = 0, right = 0 }
+M.safe_revision = 0
+
+-- Rectangles {x0, y0, x1, y1} in view space that the HUD occupies. The camera
+-- declines any gesture starting inside one, rather than relying on winning the
+-- input-focus race with the GUI - acquisition order between them is not
+-- guaranteed. The HUD republishes these whenever it lays out.
+M.hud_zones = {}
 
 -- Bumped whenever a new galaxy is generated, so the HUD can notice.
 M.revision = 0

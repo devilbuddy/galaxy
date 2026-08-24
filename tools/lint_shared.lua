@@ -36,16 +36,24 @@ local function check(path)
 	f:close()
 end
 
+-- `find`, not `ls dir/*.lua`: galaxy/sim/ runs on the server too, and a glob
+-- that stops at the top level silently exempted the entire simulation from
+-- this check.
+local checked = 0
 for _, dir in ipairs(DIRS) do
-	local pipe = io.popen("ls " .. dir .. "/*.lua 2>/dev/null")
+	local pipe = io.popen("find " .. dir .. " -name '*.lua' 2>/dev/null | sort")
 	if pipe then
-		for path in pipe:lines() do check(path) end
+		for path in pipe:lines() do
+			check(path)
+			checked = checked + 1
+		end
 		pipe:close()
 	end
 end
 
 if problems == 0 then
-	print("lint_shared: clean (no swap idioms in server-shared code)")
+	print(string.format("lint_shared: clean (%d files, no swap idioms in server-shared code)",
+		checked))
 	os.exit(0)
 end
 print(string.format("\nlint_shared: %d problem(s)", problems))

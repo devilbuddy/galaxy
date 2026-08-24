@@ -14,7 +14,7 @@ A local **Nakama** backend (docker compose) authenticates by device id and is
 authoritative for the map: it generates the galaxy and ships it to the client.
 The client keeps its own copy of the generator purely as an offline fallback.
 
-Not a git repository.
+Git: a single `main` branch pushed straight to `origin`; there is no review flow.
 
 ## Toolchain
 
@@ -85,9 +85,17 @@ luajit tools/preview_map.lua 1337 > /tmp/m.json && python3 tools/render_map.py /
 not the game renderer, but its layer order and colour choices are the spec the
 Defold one follows, so it is the right place to try a visual change first.
 
-`tools/make_textures.py` regenerates everything in `main/assets/` procedurally.
-Re-run it after changing any texture parameter; the PNGs are build artifacts of
-that script, not hand-authored art.
+There is no automated check of the interface itself; it is verified by building
+to the device and reading screenshots (`adb exec-out screencap -p > shot.png`).
+`tools/make_ui_textures.py` also writes a contact sheet of the glyphs if you want
+to eyeball them without a build.
+
+`tools/make_textures.py` regenerates the nebula backdrop in `main/assets/`, and
+`tools/make_ui_textures.py` regenerates the interface atlas in
+`main/assets/ui/` **and rewrites `main/ui.atlas`**. Re-run whichever applies
+after changing a parameter; every PNG in those directories is a build artifact
+of its script, not hand-authored art. Adding an interface glyph means adding a
+function to the `ICONS` table and re-running — nothing to wire up by hand.
 
 ### Android
 
@@ -136,7 +144,7 @@ luajit tools/lint_shared.lua          # no idioms gopher-lua miscompiles
 
 To check a *runtime* agrees with standalone LuaJIT, compare digests — the game
 logs one at startup, and it must equal what `luajit` prints for the same seed.
-Seed 424242 gives `4037449860` on macOS, arm64 Android and standalone LuaJIT:
+Seed 424242 gives `1975657186` on macOS, arm64 Android and standalone LuaJIT:
 
 ```bash
 luajit -e 'package.path="./?.lua;"..package.path
@@ -164,41 +172,95 @@ the star map is public while everything about *state* is fogged.
 events it produced. It is a pure function of its inputs plus a per-turn seeded
 RNG (`rng.stream(seed, "turn:" .. n)`), so a turn replays identically and a
 whole game is reconstructable from `(seed, order history)`. That is what lets a
-400-turn game be simulated in 220 ms under LuaJIT while the same code runs on
+400-turn game be simulated in 210 ms under LuaJIT while the same code runs on
 Nakama's much slower interpreter in production.
 
 | module | role |
 |---|---|
 | `rules.lua` | every balance constant, so tuning never means reading logic |
-| `state.lua` | opening state; home systems by farthest-point sampling |
+| `races.lua` | the six playable races, as pure modifier bundles |
+| `tech.lua` | the sixteen-technology research tree |
+| `resources.lua` | the three resources, and which systems produce them |
+| `modifiers.lua` | folds race + researched tech into the numbers the resolver reads |
+| `state.lua` | opening state, home systems, and JSON-round-trip repair |
 | `path.lua` | Dijkstra along lanes; fleets never move in straight lines |
-| `resolve.lua` | production, departures, movement, battles, aftermath |
+| `resolve.lua` | the ten phases of a turn |
 | `view.lua` | fog of war: visibility, remembered state, per-player projection |
 
-Turn order is production → departures → movement → battles → aftermath. Fleets
-stop at the first hostile system on their path, so lanes can be blockaded.
+Turn order is **directives → growth → income → upkeep → research → build →
+departures → movement → battles → freighter arrivals → aftermath**. Fleets stop
+at the first hostile system on their path, so lanes can be blockaded.
+
+**Three resources, and each system is good at a different one.** Metal builds
+hulls, fuel runs them, research buys technology. A system's *base* yield is a
+pure function of its star class and feature — both already public map data — so
+a player can judge somewhere they have never visited and plan a conquest around
+it; what stays private is the population multiplying it. A pulsar is a terrible
+place to live and an excellent place to refuel; precursor ruins are worth a war.
+
+**Metal and fuel are deliberately separate levers.** Metal decides how fast you
+can build a navy, fuel decides how big a one you can keep — warships cost metal
+to lay down and fuel every turn thereafter. Fuel upkeep, not the population cap,
+is what actually bounds fleet size in play; a ten-system empire earns roughly
+enough fuel for six hundred warships, well under what its population allows. Run
+out and the fleet attrits *and the yards stop*: without that second half, a
+starved empire spends its entire metal income replacing ships that die the same
+turn, which reads as a broken economy rather than as a fleet that is too big.
+
+**A race is a bundle of modifiers, and nothing branches on one.** Races and the
+tech tree contribute to the same effect table, `modifiers.of(player)` folds them
+into one set of numbers, and the resolver reads only that. Adding a race or a
+technology is a data change. `modifiers.of(nil)` is the *neutral* baseline, not
+the default race — the tests compare against it.
+
+**Research is one standing decision, not a per-turn allocation.** Research
+accumulates in the stockpile and the chosen technology is bought the moment it
+is affordable. That suits a game checked twice a day far better than a slider
+would. `rules.tech_cost_scale` is the single knob for how long the tree takes to
+walk: the list prices in `tech.lua` fix the *ratio* between technologies, that
+fixes the pace. At 1.0 the greedy AI in `tools/play.lua` finished the entire
+tree by turn 25 — a fortnight — which made the back half of it scenery. At the
+current 9.0 a first technology lands around turn 11-30, half the tree between
+turn 40 and 170, and only a runaway leader ever finishes it. The scale applies
+to the **research** half of a cost only: metal is also the only thing that buys
+ships, and multiplying it too made the full tree cost about as much metal as a
+whole game produces, so the tree stopped being a parallel investment and became
+an alternative to having a navy. All those figures come from that AI, so treat
+them as an order of magnitude, not a target.
+
+**Trade routes are the one thing that is not territory.** A `trade` order sends
+freighters between two systems you own; on arrival they open a route that pays
+every turn, scaled by its length and the population at both ends. Routes pay in
+research and fuel and never in metal, so hulls always have to come out of ground
+you hold and a commercial empire still needs one. Lose either endpoint and the
+route dissolves — the freighters fall back to whichever end is still yours, or
+are gone.
 
 **Fog of war** is geometry-public, state-private. Players always see stars,
-lanes and names; they see *ownership, population and ships* only for systems
-they own, systems one lane away, and systems where they have a fleet. What was
-once seen is remembered and returned stamped with the turn it was observed, so
-the map does not flicker as scouts move. `view.project` omits unseen systems
-entirely rather than sending zeroes, so the payload cannot leak strength by its
-shape. Enemy fleets in transit are never visible.
+lanes, names and yields; they see *ownership, population and ships* only within
+their vision radius of anything they hold, and wherever they have a fleet. The
+radius is one lane by default and two with Survey Network, which is the
+difference between seeing a build-up and seeing it arrive. What was once seen is
+remembered and returned stamped with the turn it was observed, so the map does
+not flicker as scouts move. `view.project` omits unseen systems entirely rather
+than sending zeroes, so the payload cannot leak strength by its shape. Enemy
+fleets in transit are never visible, and freighter counts are reported only for
+systems you own.
 
-**Fleet strength is capped by population** (`fleet_cap_per_pop`). This is not
-cosmetic: without a ceiling, garrisons grow without bound, defence compounds and
-the map freezes into a permanent stalemate by about turn 75 — `tools/play.lua`
-demonstrated exactly that. Tying the cap to territory makes losing ground
-genuinely weaken you.
+**Fleet strength is also capped by population** (`fleet_cap_per_pop`). This
+predates the fuel economy and is now a backstop rather than the live constraint.
+It stays because removing it reopens the failure it was added for: without any
+ceiling, garrisons grow without bound, defence compounds and the map freezes
+into a permanent stalemate by about turn 75, which is exactly what
+`tools/play.lua` showed.
 
-**Pacing is not yet tuned.** `tools/play.lua` plays a full game with a greedy AI
-and reports turns-to-decision. Current results range from 16 days to never
+**Pacing is still not tuned.** `tools/play.lua` plays a full game with a greedy
+AI and reports turns-to-decision. Results still range from a fortnight to never
 across seeds and galaxy sizes, and that spread is dominated by the AI (which
-never defends, retreats, or concentrates beyond one frontier) rather than by the
-rules. Tuning the constants against it would be fitting to noise. The reliable
-fix for an async game is probably a fixed end turn plus a score, which is also
-what the BBS-era games did.
+never defends, retreats, trades, or concentrates beyond one frontier) rather
+than by the rules. Tuning the constants against it would be fitting to noise.
+The reliable fix for an async game is probably a fixed end turn plus a score,
+which is also what the BBS-era games did.
 
 ### Generation pipeline (`galaxy/`, engine-free)
 
@@ -235,11 +297,27 @@ RPCs in `server/modules/game_rpc.lua`:
 
 | rpc | purpose |
 |---|---|
-| `game.create` | new lobby; rolls a seed, sets turn interval and size |
+| `game.create` | new lobby; rolls a seed, sets turn interval, size and the creator's race |
 | `game.list` | open lobbies, **and separately** the caller's own games |
-| `game.join` / `game.start` | lobby management |
+| `game.join` / `game.start` | lobby management; `join` carries the race pick |
 | `game.state` | the caller's fogged view plus events since a given turn |
 | `game.orders` | submit (and freely revise) orders for the coming turn |
+
+An order is one of four shapes, and `game.orders` replaces the whole batch:
+
+| order | effect |
+|---|---|
+| `{ kind = "move", from, to, ships }` | send warships |
+| `{ kind = "trade", from, to, ships }` | send freighters to open a route |
+| `{ kind = "research", tech }` | set the research target (`""` clears it) |
+| `{ kind = "policy", warship_share }` | split new production, 0..1 |
+
+The RPC checks *shape* only — at most one research and one policy directive per
+batch, the rest passed through. Whether an order is legal depends on state that
+will have moved on by the time it resolves, so the resolver decides that and
+emits an `order_rejected` event carrying a reason the client can show. Because
+the batch is replaced wholesale, the client sends movement and standing choices
+together; two calls would mean the second wiped the first.
 
 **Turns resolve lazily.** There is no scheduler: every RPC first asks whether
 turns are due and resolves however many were missed. For a game checked twice a
@@ -384,6 +462,23 @@ quad where the old textures faded out inside it, so size constants are *not*
 interchangeable with the pre-shader values; and `fwidth` needs derivatives,
 which is core in GLSL 140 / ES 3.0 (verified on the device's Vulkan backend).
 
+**A rebuild of the same galaxy must not disturb the view.** `present()` in
+`main/galaxy.script` builds every mesh, and it runs whenever a turn resolves
+because the fog and ownership the meshes encode have changed. It posts
+`map_ready` to the camera, and the camera used to treat *every* `map_ready` as a
+new galaxy: reset zoom to the whole-map fit, clear `user_zoomed`, recentre. With
+a background poll every ten seconds, the effect was the player's zoom silently
+resetting itself every ten seconds, and the selected system deselecting with it.
+
+Two guards now, because either alone would leave the trap set for the next
+caller:
+
+- the camera re-frames only when the content extent or centre differs from what
+  it has, or when it has never framed anything (`self.framed`);
+- `present()` clears the selection only for a genuinely different seed, and
+  `load_game` skips the rebuild entirely when neither the seed nor the turn has
+  changed — about 30 ms of work saved every poll, for no visible difference.
+
 ### Zoom and the backdrop
 
 `ZOOM_MAX` is 9.0, roughly 19x the fit zoom. At that range a fixed-resolution
@@ -418,6 +513,7 @@ found nothing.
 | `lobby` | `main/screens/lobby.collection` | list/create/join/start games |
 | `map` | `main/screens/map.collection` | the galaxy view (was the old bootstrap) |
 | `report` | `main/screens/report.collection` | turn digest; a **popup** over the map |
+| `empire` | `main/screens/empire.collection` | stockpile, research tree, build policy; also a popup |
 
 `app.script` authenticates once and then shows the lobby, so moving between
 screens never re-authenticates. Screens are handed their parameters through
@@ -425,9 +521,16 @@ Monarch (`monarch.data`), which is how the map learns which game to load.
 
 Screens are built in code rather than laid out in `.gui` files (`main/ui.lua`
 holds the shared look). Their content is dynamic — a list of games, a list of
-turn events — so most of it would be script-created anyway.
+turn events, a research tree — so most of it would be script-created anyway.
 
-**Druid needs two adaptations here, both in `main/ui.lua`:**
+Choices made on the empire screen are **staged in `store`, not sent**
+(`pending_research`, `pending_share`). They travel with the next SEND alongside
+the movement orders, which is what keeps the one-batch-replaces-everything rule
+above safe, and lets the player revise the whole turn freely until it resolves.
+The HUD counts them so the button does not say NO ORDERS while something is
+waiting.
+
+**Druid needs three adaptations here, all in `main/ui.lua`:**
 
 - `ui.gui_action(action)` — Defold reports input in the configured display size
   while this project lays GUI out in the aspect-derived view space. Druid
@@ -440,6 +543,110 @@ turn events — so most of it would be script-created anyway.
   buttons near the top silently did nothing, in every coordinate space. Since
   every node here is created in code with a known position, size and pivot, an
   axis-aligned test against those is exact. Call it before `druid.new`.
+- **Never return `druid:on_input`'s verdict verbatim from a scene that shares
+  input with the world.** Druid reports a touch as handled whenever one of its
+  hover components tracked it, which is *every* touch anywhere on screen. The
+  HUD instead claims a touch only when it also lands inside one of the
+  rectangles it published (see below); returning Druid's answer as-is would
+  swallow the map's pans.
+
+### The interface kit (`main/ui.lua`)
+
+One module owns the look, and every screen composes from it, so a change to the
+corner radius or the type scale happens once rather than in four scripts.
+
+- **Tokens, not literals.** A near-black ground (`BG`) with cards a few percent
+  lighter (`CARD`, `CARD_ALT`, `CARD_HI`) is what makes a dark interface read as
+  layered instead of as one flat sheet. Text has exactly three weights of
+  emphasis (`TEXT`, `DIM`, `FAINT`); a fourth is how dark UIs turn to mud. One
+  interactive colour (`ACCENT`), and one colour per resource so the mapping is
+  learned once.
+- **Panels are 9-slices of two generated shapes** — a rounded rectangle and a
+  capsule — tinted by the node colour. So `panel`, `pill`, `card`, `divider`,
+  `progress` and every badge come from the same two PNGs.
+- **9-slice margins are clamped to the node** (`ui.set_slice`). A margin wider
+  than half the node leaves no middle to stretch and Defold draws the corners
+  over each other: a 10x10 dot with a 31px margin rendered as a filled square.
+- **The capsule is sliced horizontally only.** Its texture is a circle, so every
+  pixel outside the caps is transparent; slicing it vertically as well stretched
+  those transparent corners across the middle and the node came out as a cross.
+  Anything as tall as it is wide is a dot (`ui.dot`) and a plain scale is already
+  right.
+- **Type sizes are design pixels.** Both faces are distance fields baked at one
+  size, so a size is just a scale factor and any size stays crisp.
+
+**Sizes are in design units, and a design unit is much smaller than it looks.**
+The design space is 720 units wide; a typical phone is 411 dp wide, so one unit
+is about **0.57 dp** and every number in the kit has to be roughly 1.75x what it
+would be in dp. The first pass used dp-sized numbers and shipped an interface
+whose body text was 10 dp and whose buttons were 32 dp — legible in a screenshot,
+unusable with a thumb. The floors now held: body text 15 dp (26 units), tap
+targets 48 dp (88 units).
+
+Fonts are **Space Grotesk** (SIL Open Font License 1.1,
+`main/fonts/SpaceGrotesk-LICENSE.txt`). `ui.font` / `ui_bold.font` have no
+outline; `map.font` keeps one, because star names sit over a nebula and need it.
+The engine ships only a monospace face, so this is vendored.
+
+google/fonts carries Space Grotesk **only as a variable font**, and Defold's font
+compiler bakes a variable font at its default instance — which would give one
+weight, not two. The two static files were instanced with fontTools:
+
+```bash
+python3 - <<'EOF'
+from fontTools import ttLib
+from fontTools.varLib.instancer import instantiateVariableFont
+for wght, out in [(400, "SpaceGrotesk-Regular.ttf"), (600, "SpaceGrotesk-SemiBold.ttf")]:
+    f = ttLib.TTFont("SpaceGrotesk[wght].ttf")
+    instantiateVariableFont(f, {"wght": wght}, inplace=True)
+    f.save("main/fonts/" + out)
+EOF
+```
+
+`updateFontNames` has to stay off: the STAT table has no named entry at 600 and
+fontTools refuses rather than inventing one.
+
+**Two traps in the kit worth knowing:**
+
+- **A wrapped text node is centred on its whole block**, so adding a second line
+  pushes the first one *upward*. Anywhere text sits beneath something else, pass
+  `anchor_top` — without it a two-line effect sentence climbed into the heading
+  above it on every research card.
+- **A screen that rebuilds itself must delete what it made.** `ui.collect(list)`
+  records every node the kit creates; the HUD relayouts on a window change and
+  on the safe-area insets arriving, and without this each rebuild leaked a whole
+  layout until the scene ran out of nodes.
+
+### Safe area
+
+The device's notch, punch-hole and gesture strip are respected by
+[extension-safearea](https://defold.com/extension-safearea/), in **custom mode**
+(`safearea.resize_game_view = 0`). That matters: the default "easy mode" shrinks
+the game view and fills the remainder with a solid colour, which is exactly the
+letterbox bars this project does not want. In custom mode the world, the nebula
+and the starfield still draw edge to edge *under* the cutout, and only the chrome
+is held clear of it.
+
+`main/safearea.lua` does the two things a bare `get_insets()` call does not:
+
+- converts the values, which arrive in **framebuffer pixels**, into the view
+  units every layout number here uses — and the horizontal and vertical ratios
+  differ, because the view is the design width by an aspect-derived height;
+- **polls until they settle.** `get_insets` reports `STATUS_NOT_READY_YET` for up
+  to a couple of hundred milliseconds. A layout built from the zeroes returned in
+  the meantime sits under the notch for the rest of the session, so it publishes
+  `store.safe` plus a `safe_revision` that screens watch: the HUD rebuilds on a
+  change, and the lobby defers its first build until the values are known (or a
+  0.4 s grace period expires, for platforms that will never answer).
+
+`ui.inset()` is the one place that adds the design gap to the device insets;
+every screen takes its outer margins from it. On the test device the reported
+inset is `top 66` view units and zero elsewhere — the punch-hole camera, with no
+bottom inset because `android.immersive_mode` hides the navigation bar.
+
+Map labels are held inside the horizontal insets too, and any name that will not
+fit on either side of its star is simply not drawn: a name sliced by the screen
+edge is worse than no name.
 
 ### Input and gestures
 
@@ -458,9 +665,42 @@ is the only way to verify pinch at all.
   **movement arrives with `action_id == nil`**. A handler keyed only on the
   bound id sees clicks but never drags, and panning silently does nothing.
 
-The camera declines gestures starting inside the HUD bar rather than relying on
-winning the input-focus race with the GUI, since acquisition order between them
-is not guaranteed.
+**Input ownership is decided by geometry, not by focus order.** The HUD
+publishes the rectangles it occupies into `store.hud_zones` — the overview bar,
+the order controls, and the selected-system card while it is up — and:
+
+- the recogniser ignores any gesture that *starts* inside one, and reports
+  `blocked` so the camera can decline the input as well rather than consuming a
+  touch it did not act on;
+- the HUD claims a touch only when Druid handled it *and* it landed inside one
+  of those rectangles.
+
+Either side can therefore acquire input focus first and the result is the same,
+which matters because acquisition order between a GUI scene and a script is not
+guaranteed. It is where a drag *begins* that decides, so a pan that wanders
+under the controls keeps working.
+
+**The multi-touch action must be named `touch_multi`.** Druid's drag component
+does this, in `druid/base/drag.lua`:
+
+```lua
+local act = helper.is_mobile() and const.ACTION_MULTITOUCH or const.ACTION_TOUCH
+if action_id ~= act then return end
+```
+
+`ACTION_MULTITOUCH` defaults to `hash("touch_multi")`. This project's binding
+called the `TOUCH_MULTI` trigger `"multitouch"`, so on a device Druid received
+*no* drag events at all — and the failure was invisible, because buttons take a
+different path (`pressed`/`released` on the synthesised `"touch"` action) and
+kept working. Every scroll region in the game was inert on hardware until the
+binding was renamed. `main/camera.script` is unaffected either way: it keys on
+`action.touch` being present rather than on the action id.
+
+**A full-screen popup claims input rather than blocking it.** `ui.modal_input`
+runs the popup's Druid instance and then returns `true` unconditionally, so the
+map and its camera get nothing while the popup is up. The obvious alternative —
+a Druid `blocker` covering the screen — also sits in front of the popup's own
+scroll regions and eats their drags.
 
 ### One coordinate space
 
@@ -504,6 +744,14 @@ which is a different space again.
   bars, which otherwise sit on top of the HUD.
 - **`android.package = com.dg.galaxy`** — Defold's default is the placeholder
   `com.example.todo`, which collides with every project that never changed it.
+- **`safearea.resize_game_view = 0`** — custom mode; see Safe area above. The
+  default shrinks the view and letterboxes the remainder.
+- **`graphics.max_font_batches = 512`** (default 128) — the interface interleaves
+  text and box nodes heavily, and every text node between two boxes is its own
+  batch. Past the limit the font renderer silently *stops drawing*: the
+  selected-system card came up completely blank with nothing in the log but a
+  `Fontrenderer: Render object count reached limit` warning. `max_draw_calls` is
+  raised alongside it for the same reason.
 - **`physics.scale = 0.01`, `physics.gravity_y = -1000`** — inherited from the
   template. Nothing uses physics yet; the world is in pixel units if it ever does.
 
@@ -519,6 +767,16 @@ Defold source files (`.collection`, `.go`, `.atlas`, `.gui`, `.sprite`, `.input_
   tested, and the touch stream is confirmed live on device (`action.touch`
   arrives populated), but Android blocks synthetic multi-touch so the actual
   gesture has only been verified by proxy.
-- The label font is the Defold builtin `vera_mo_bd.ttf`, which is monospace.
-  Swapping in a proportional TTF is a one-line change in `main/fonts/map.font`
-  and would look considerably closer to a real 4X map.
+- **There is no way to zoom on a device.** Zoom is pinch-only, and pinch cannot
+  be injected, so every device screenshot so far is at the fit zoom where
+  panning is clamped to nothing. That also means **panning has never been
+  observed working on a device** — the recogniser is unit tested, the tap path
+  and every scroll region are confirmed live, but the map pan path is not.
+  On-screen zoom controls would fix both at once.
+- The safearea extension logs `ERROR:ENGINE: Could not find '@render' socket` once
+  at startup on Android. It is benign — the extension reaches for the render
+  system before it exists, and in custom mode there is no letterbox for it to
+  colour — but it is noise in every log.
+- The turn digest is capped at 40 turns server-side and 140 rows client-side. A
+  game left to resolve unattended for weeks otherwise produced an event list
+  that exhausted the GUI node budget outright.

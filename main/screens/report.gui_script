@@ -13,8 +13,13 @@ local monarch = require("monarch.monarch")
 local store = require("main.store")
 local ui = require("main.ui")
 
-local MARGIN = 24
-local LINE = 30
+local PAD = 26
+
+-- However many events arrive, only this many get nodes. The server already caps
+-- the window it sends (MAX_DIGEST_TURNS), but a busy war can still produce
+-- hundreds of events inside it, and a GUI scene has a fixed node budget - the
+-- unbounded version exhausted it and the screen failed to build at all.
+local MAX_ROWS = 140
 
 local function system_name(id)
 	local g = store.galaxy
@@ -30,101 +35,239 @@ local function player_name(index)
 	return "Player " .. tostring(index)
 end
 
---- One event as a line of text plus a colour.
+--- One event as a row: an icon, a headline, a detail line and a tone.
+--
+-- Returning a table rather than a string is what lets the list look like a
+-- list - every row has the same shape, and the kind of thing that happened is
+-- readable from the glyph before any of the text is.
 local function describe(event, me)
 	local kind = event.kind
+
 	if kind == "turn_summary" then
-		return string.format("Turn %d  -  %d systems, %d ships, %d built%s",
-			event.turn, event.systems or 0, event.ships or 0, event.built or 0,
-			(event.scrapped or 0) > 0 and (", " .. event.scrapped .. " scrapped") or ""),
-			ui.DIM, true
+		local bits = {
+			ui.plural(event.systems, "system"),
+			ui.plural(event.ships, "ship"),
+		}
+		if (event.built or 0) > 0 then bits[#bits + 1] = "+" .. event.built .. " built" end
+		if (event.freighters_built or 0) > 0 then
+			bits[#bits + 1] = "+" .. ui.plural(event.freighters_built, "freighter")
+		end
+		if (event.scrapped or 0) > 0 then bits[#bits + 1] = event.scrapped .. " scrapped" end
+		if (event.trade or 0) > 0 then bits[#bits + 1] = event.trade .. " from trade" end
+		return {
+			heading = true,
+			icon = "icon_clock",
+			title = "Turn " .. tostring(event.turn),
+			subtitle = table.concat(bits, "   "),
+			colour = ui.DIM,
+		}
 	elseif kind == "claimed" then
-		return string.format("Claimed %s with %d ships", system_name(event.at), event.ships or 0),
-			ui.GOOD
+		return {
+			icon = "icon_flag", tone = ui.GOOD,
+			title = "Claimed " .. system_name(event.at),
+			subtitle = ui.plural(event.ships or 0, "ship") .. " now hold it",
+		}
 	elseif kind == "reinforced" then
-		return string.format("Reinforced %s with %d ships", system_name(event.at), event.ships or 0),
-			ui.TEXT
+		return {
+			icon = "icon_warship",
+			title = "Reinforced " .. system_name(event.at),
+			subtitle = "+" .. ui.plural(event.ships or 0, "ship"),
+		}
 	elseif kind == "battle" then
 		local mine = event.attacker == me
-		local theirs = event.defender == me
-		local who = mine and "You attacked" or (theirs and "You were attacked at" or "Battle at")
-		local outcome
-		if event.winner == me then
-			outcome = event.captured and "captured it" or "held"
+		local won = event.winner == me
+		local title
+		if mine then
+			title = (event.captured and "Took " or "Repulsed at ") .. system_name(event.at)
+		elseif event.defender == me then
+			title = (event.captured and "Lost " or "Held ") .. system_name(event.at)
 		else
-			outcome = event.captured and "LOST it" or "repelled"
+			title = "Battle at " .. system_name(event.at)
 		end
-		return string.format("%s %s  -  %d vs %d, %s (%d left)",
-			who, system_name(event.at), event.attacker_ships or 0,
-			event.defender_ships or 0, outcome, event.survivors or 0),
-			event.winner == me and ui.GOOD or ui.BAD
+		local detail = string.format("%d vs %d   %d survived",
+			event.attacker_ships or 0, event.defender_ships or 0, event.survivors or 0)
+		if (event.freighters_taken or 0) > 0 then
+			detail = detail .. "   " .. ui.plural(event.freighters_taken, "freighter") .. " seized"
+		end
+		return {
+			icon = "icon_attack", tone = won and ui.GOOD or ui.BAD,
+			title = title, subtitle = detail,
+		}
+	elseif kind == "research_complete" then
+		local entry = require("galaxy.sim.tech").by_id(event.tech)
+		return {
+			icon = "icon_research", tone = ui.RESOURCE_COLOUR.research,
+			title = "Researched " .. (entry and entry.label or event.tech),
+			subtitle = entry and entry.blurb or "",
+		}
+	elseif kind == "route_established" then
+		return {
+			icon = "icon_trade", tone = ui.RESOURCE_COLOUR.fuel,
+			title = "Trade route opened",
+			subtitle = string.format("%s to %s   %s",
+				system_name(event.a), system_name(event.b),
+				ui.plural(event.ships or 0, "freighter")),
+		}
+	elseif kind == "route_lost" then
+		return {
+			icon = "icon_trade", tone = ui.BAD,
+			title = "Trade route cut",
+			subtitle = string.format("%s to %s   %s",
+				system_name(event.a), system_name(event.b),
+				event.recovered and "freighters recovered" or "freighters lost"),
+		}
+	elseif kind == "trade_lost" then
+		return {
+			icon = "icon_freighter", tone = ui.BAD,
+			title = "Freighters intercepted at " .. system_name(event.at),
+			subtitle = ui.plural(event.ships or 0, "freighter") .. " lost",
+		}
+	elseif kind == "attrition" then
+		return {
+			icon = "icon_fuel", tone = ui.WARN,
+			title = "Fleet out of fuel",
+			subtitle = ui.plural(event.ships or 0, "ship")
+				.. " scrapped - income does not cover upkeep",
+		}
 	elseif kind == "order_rejected" then
-		return string.format("Order %s -> %s rejected: %s",
-			system_name(event.from), system_name(event.to), tostring(event.reason)), ui.BAD
+		local what = event.tech
+			and ("Research " .. tostring(event.tech))
+			or (system_name(event.from) .. " to " .. system_name(event.to))
+		return {
+			icon = "icon_close", tone = ui.BAD,
+			title = "Order rejected",
+			subtitle = what .. "   " .. tostring(event.reason),
+		}
 	elseif kind == "eliminated" then
-		return string.format("%s has been eliminated", player_name(event.player)), ui.BAD
+		return {
+			icon = "icon_close", tone = ui.BAD,
+			title = player_name(event.player) .. " has been eliminated",
+		}
 	end
-	return kind .. " at " .. tostring(event.at), ui.DIM
+
+	return { icon = "icon_star", title = kind, subtitle = tostring(event.at or "") }
 end
 
 local function build(self, data)
 	local w, h = store.screen.width, store.screen.height
-	local events = (data and data.events) or {}
+	local all_events = (data and data.events) or {}
 	local me = (data and data.you) or 1
+	local pad = ui.inset()
+	local card_w = w - pad.left - pad.right
 
-	-- Dim the map behind, and swallow taps so they do not reach it.
-	local shade = ui.panel(0, h, w, h, vmath.vector4(0.02, 0.02, 0.05, 0.82))
-	self.druid:new_blocker(shade)
+	-- Newest last is how the log arrives and how it reads, so a trim has to
+	-- drop the *oldest*.
+	local events, dropped = all_events, 0
+	if #all_events > MAX_ROWS then
+		events = {}
+		dropped = #all_events - MAX_ROWS
+		for i = dropped + 1, #all_events do events[#events + 1] = all_events[i] end
+	end
 
-	ui.label(MARGIN, h - 56, "SINCE YOU WERE AWAY", 1.0, ui.TEXT)
+	-- The resolver appends each turn's summary *after* that turn's events (it is
+	-- written in the aftermath phase), so read top-down the log said "fleet out
+	-- of fuel" and only then "TURN 544" - the heading closed a turn instead of
+	-- opening it. Regroup so a turn's heading comes first.
+	local order, groups = {}, {}
+	for i = 1, #events do
+		local turn = events[i].turn or 0
+		if not groups[turn] then
+			groups[turn] = { summary = nil, rest = {} }
+			order[#order + 1] = turn
+		end
+		if events[i].kind == "turn_summary" then
+			groups[turn].summary = events[i]
+		else
+			local rest = groups[turn].rest
+			rest[#rest + 1] = events[i]
+		end
+	end
+	table.sort(order)
+	local ordered = {}
+	for i = 1, #order do
+		local g = groups[order[i]]
+		if g.summary then ordered[#ordered + 1] = g.summary end
+		for k = 1, #g.rest do ordered[#ordered + 1] = g.rest[k] end
+	end
+	events = ordered
+
+	ui.shade()
+
+	local top = h - pad.top
+	ui.h1(pad.left + 6, top - 32, "Since you were away", nil)
+
 	local turns = {}
-	for i = 1, #events do
-		if events[i].turn then turns[events[i].turn] = true end
-	end
 	local count = 0
-	for _ in pairs(turns) do count = count + 1 end
-	ui.label(MARGIN, h - 92,
-		count == 0 and "nothing has happened yet"
-		or string.format("%d event%s across %d turn%s",
-			#events, #events == 1 and "" or "s", count, count == 1 and "" or "s"),
-		0.65, ui.DIM)
-
-	-- Scrollable list. Druid needs a stencil "view" node and a larger "content"
-	-- node that moves inside it.
-	local top = h - 130
-	local bottom = 130
-	local view_h = top - bottom
-	local view_node = ui.panel(MARGIN, top, w - MARGIN * 2, view_h, vmath.vector4(0, 0, 0, 0.0))
-	gui.set_clipping_mode(view_node, gui.CLIPPING_MODE_STENCIL)
-
-	local content_h = math.max(view_h, #events * LINE + 40)
-	local content = ui.panel(0, 0, w - MARGIN * 2, content_h, vmath.vector4(0, 0, 0, 0))
-	gui.set_parent(content, view_node)
-	gui.set_position(content, vmath.vector3(0, 0, 0))
-	gui.set_pivot(content, gui.PIVOT_NW)
-
-	local y = -12
 	for i = 1, #events do
-		local text, colour, heading = describe(events[i], me)
-		if heading then y = y - 10 end
-		local node = ui.label(12, y, text, heading and 0.68 or 0.62, colour)
-		gui.set_parent(node, content)
-		y = y - LINE
+		if events[i].turn and not turns[events[i].turn] then
+			turns[events[i].turn] = true
+			count = count + 1
+		end
 	end
-	if #events == 0 then
-		local node = ui.label(12, -20, "Your orders are in. Check back after the next turn.",
-			0.65, ui.DIM)
-		gui.set_parent(node, content)
+	local summary
+	if count == 0 then
+		summary = "Nothing has happened yet"
+	else
+		summary = ui.plural(#events, "event") .. " across " .. ui.plural(count, "turn")
+		local from = data and data.from_turn
+		local since = data and data.since_turn
+		if dropped > 0 then
+			summary = summary .. "   " .. dropped .. " older omitted"
+		elseif from and since and from > since + 1 then
+			summary = summary .. "   earlier turns omitted"
+		end
+	end
+	ui.small(pad.left + 6, top - 76, summary, ui.DIM)
+
+	local footer_top = pad.bottom + ui.CONTROL
+	ui.button(self.druid, pad.left, footer_top, card_w, ui.CONTROL, "TO THE MAP",
+		function() monarch.hide(hash("report")) end,
+		{ style = "primary", size = ui.CAPS })
+
+	local list_top = top - 106
+	local list_h = list_top - (footer_top + ui.GAP)
+	ui.card(pad.left, list_top, card_w, list_h)
+
+	local inner_w = card_w - PAD * 2
+	local _, content, scroll = ui.scroll(self.druid, pad.left + PAD, list_top - PAD,
+		inner_w, list_h - PAD * 2)
+
+	local nodes = {}
+	local y = 0
+	for i = 1, #events do
+		local row = describe(events[i], me)
+		if row.heading then
+			-- A turn boundary is a divider with a label, not another row: it is
+			-- the thing that makes a long digest scannable.
+			if i > 1 then y = y - 16 end
+			nodes[#nodes + 1] = ui.divider(0, y, inner_w)
+			nodes[#nodes + 1] = ui.caps(0, y - 26, row.title)
+			nodes[#nodes + 1] = ui.small(0, y - 46, row.subtitle, ui.FAINT,
+				{ width = inner_w, anchor_top = true })
+			y = y - 86
+		else
+			local h_row = 88
+			nodes[#nodes + 1] = ui.icon(2, y - 22, 30, row.icon, row.tone or ui.DIM)
+			nodes[#nodes + 1] = ui.body(46, y - 26, row.title, ui.TEXT)
+			if row.subtitle and row.subtitle ~= "" then
+				nodes[#nodes + 1] = ui.small(46, y - 48, row.subtitle, ui.DIM,
+					{ width = inner_w - 52, anchor_top = true })
+			else
+				h_row = 54
+			end
+			y = y - h_row
+		end
 	end
 
-	self.druid:new_scroll(view_node, content)
+	if #all_events == 0 then
+		nodes[#nodes + 1] = ui.body(0, -32,
+			"Your orders are in. Check back after the next turn.", ui.DIM,
+			{ width = inner_w, anchor_top = true })
+		y = -80
+	end
 
-	-- Dismiss.
-	local bw = w - MARGIN * 2
-	local box, text = ui.button(MARGIN, 96, bw, 60, "TO THE MAP")
-	self.druid:new_button(box, function()
-		monarch.hide(hash("report"))
-	end)
+	for i = 1, #nodes do gui.set_parent(nodes[i], content) end
+	ui.fit_scroll(scroll, content, inner_w, -y + 12, list_h - PAD * 2)
 end
 
 function init(self)
@@ -136,6 +279,11 @@ end
 
 function final(self) self.druid:final() end
 function update(self, dt) self.druid:update(dt) end
--- Druid hit-tests with the action it is given; it must be in GUI space.
-function on_input(self, action_id, action) return self.druid:on_input(action_id, ui.gui_action(action)) end
-function on_message(self, message_id, message, sender) self.druid:on_message(message_id, message, sender) end
+function on_input(self, action_id, action)
+	-- A full-screen popup claims every action, so the map behind it neither
+	-- pans nor changes selection while this is up.
+	return ui.modal_input(self.druid, action_id, action)
+end
+function on_message(self, message_id, message, sender)
+	self.druid:on_message(message_id, message, sender)
+end

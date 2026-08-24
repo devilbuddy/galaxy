@@ -194,7 +194,13 @@ end
 
 --- Upload a galaxy to the mesh layers and hand it to the rest of the game.
 -- `source` is "server" or "local", purely so the HUD can say which.
+--- Build every mesh for a galaxy and hand the camera its extent.
+--
+-- Called for a new galaxy *and* whenever a turn resolves, because the fog and
+-- ownership the meshes encode have changed. Only the first case is allowed to
+-- disturb what the player is looking at.
 local function present(self, g, source, note)
+	local new_galaxy = self.presented_seed ~= g.seed
 	local t0 = os.clock()
 	local world = g.world_size
 	build_nebula(world)
@@ -209,8 +215,12 @@ local function present(self, g, source, note)
 	store.galaxy = g
 	store.source = source
 	store.status = nil
-	store.selected = nil
+	-- Only a different galaxy invalidates the selection. Clearing it on every
+	-- rebuild deselected the player's system, and closed the card describing
+	-- it, each time a turn resolved.
+	if new_galaxy then store.selected = nil end
 	store.revision = store.revision + 1
+	self.presented_seed = g.seed
 
 	print(string.format(
 		"galaxy seed=%d  %d stars  %d lanes  %d regions  degree %.2f  source=%s%s",
@@ -254,12 +264,26 @@ local function load_game(self, game_id, silent)
 		local turn = res.view and res.view.turn or 0
 
 		local function show(galaxy, source)
-			present(self, galaxy, source)
+			-- The meshes encode fog and ownership, which only change when a
+			-- turn resolves. A poll that finds nothing new does not need to
+			-- rebuild them - roughly 30 ms of work, ten seconds apart, for no
+			-- visible difference.
+			if self.presented_seed ~= galaxy.seed or self.presented_turn ~= turn then
+				self.presented_turn = turn
+				present(self, galaxy, source)
+			end
 			-- Only on arrival. Polling in the background must not throw a popup
 			-- over a player who is in the middle of reading the map; the turn
 			-- simply appears, and the digest waits until they next come back.
 			if not silent and #events > 0 and turn > store.seen_turn then
-				monarch.show(hash("report"), nil, { events = events, you = res.you })
+				monarch.show(hash("report"), nil, {
+					events = events, you = res.you,
+					-- The server caps how far back a digest reaches; passing the
+					-- first turn it covers lets the report say so instead of
+					-- implying this is everything that happened.
+					from_turn = res.events_from,
+					since_turn = store.seen_turn,
+				})
 			end
 			store.seen_turn = turn
 		end

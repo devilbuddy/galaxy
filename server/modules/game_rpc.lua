@@ -22,6 +22,8 @@ local galaxy_cache = require("galaxy_cache")
 local sim_state = require("galaxy.sim.state")
 local resolve = require("galaxy.sim.resolve")
 local view = require("galaxy.sim.view")
+local races = require("galaxy.sim.races")
+local tech = require("galaxy.sim.tech")
 local rng = require("galaxy.rng")
 
 local M = {}
@@ -39,6 +41,11 @@ local MIN_PLAYERS = 2
 -- A game left alone for a month should not try to resolve sixty turns inside
 -- one request; it catches up over several instead.
 local MAX_CATCHUP_PER_CALL = 12
+-- ...and however many turns were missed, only the most recent few are worth
+-- reading. A player coming back to a game that ran for weeks does not want two
+-- hundred turns of digest, the payload would be large, and the client cannot
+-- render it: an unbounded event list exhausted the GUI node budget outright.
+local MAX_DIGEST_TURNS = 40
 
 -- Storage helpers -----------------------------------------------------------
 
@@ -80,21 +87,23 @@ local function normalise_state(state)
 	if not state then return nil end
 	if type(state.knowledge) ~= "table" then
 		state.knowledge = {}
-		return state
-	end
-	local repaired = {}
-	for player, memory in pairs(state.knowledge) do
-		local by_id = {}
-		if type(memory) == "table" then
-			for id, seen in pairs(memory) do
-				by_id[tonumber(id) or id] = seen
+	else
+		local repaired = {}
+		for player, memory in pairs(state.knowledge) do
+			local by_id = {}
+			if type(memory) == "table" then
+				for id, seen in pairs(memory) do
+					by_id[tonumber(id) or id] = seen
+				end
 			end
+			repaired[tonumber(player) or player] = by_id
 		end
-		repaired[tonumber(player) or player] = by_id
+		state.knowledge = repaired
 	end
-	state.knowledge = repaired
-	state.fleets = state.fleets or {}
-	return state
+	-- Everything else the JSON round trip damages - stockpiles, the researched
+	-- set, per-system freighter counts - is repaired by the sim itself, so the
+	-- rules and the repair for them cannot drift apart.
+	return sim_state.migrate(state)
 end
 
 local function fail(message)
@@ -131,7 +140,9 @@ local function public_game(game)
 		players = (function()
 			local out = {}
 			for i = 1, #game.players do
-				out[i] = { name = game.players[i].name }
+				-- Race is public from the lobby onwards: knowing what you are
+				-- about to be up against is part of choosing your own.
+				out[i] = { name = game.players[i].name, race = game.players[i].race }
 			end
 			return out
 		end)(),
@@ -165,9 +176,12 @@ local function catch_up(game, game_version)
 					local o = submitted.orders[k]
 					orders[#orders + 1] = {
 						player = i,
+						kind = o.kind,
 						from = tonumber(o.from),
 						to = tonumber(o.to),
 						ships = tonumber(o.ships),
+						tech = o.tech,
+						warship_share = tonumber(o.warship_share),
 					}
 				end
 			end
@@ -238,7 +252,11 @@ local function rpc_create(context, payload)
 		turn_interval = interval,
 		next_turn_at = 0,
 		max_players = max_players,
-		players = { { id = user_id, name = tostring(input.player_name or "Commander") } },
+		players = { {
+			id = user_id,
+			name = tostring(input.player_name or "Commander"),
+			race = races.exists(input.race) and input.race or races.DEFAULT,
+		} },
 		created_at = os.time(),
 	}
 
@@ -294,6 +312,7 @@ local function rpc_join(context, payload)
 	game.players[#game.players + 1] = {
 		id = user_id,
 		name = tostring(input.player_name or ("Commander " .. (#game.players + 1))),
+		race = races.exists(input.race) and input.race or races.DEFAULT,
 	}
 	local ok = write_one(GAMES, game.id, nil, game, version)
 	if not ok then fail("someone else joined at the same moment, try again") end
@@ -354,6 +373,12 @@ local function rpc_state(context, payload)
 			-- what this player is allowed to know.
 			local since = math.floor(tonumber(input.since_turn) or 0)
 			local first = math.max(1, since + 1)
+			if state.turn - first + 1 > MAX_DIGEST_TURNS then
+				first = state.turn - MAX_DIGEST_TURNS + 1
+			end
+			-- Told to the client so it can say what it is not showing, rather
+			-- than silently presenting a partial history as the whole thing.
+			response.events_from = first
 			local keys = {}
 			for t = first, state.turn do
 				keys[#keys + 1] = { collection = EVENTS, key = game.id .. ":" .. t }
@@ -362,7 +387,22 @@ local function rpc_state(context, payload)
 			if #keys > 0 then
 				local ok, objects = pcall(nk.storage_read, keys)
 				if ok and objects then
-					table.sort(objects, function(a, b) return a.key < b.key end)
+					-- By turn *number*, not by key. The keys are
+					-- "<game>:<turn>", so a string sort orders turn 10 before
+					-- turn 2 and the digest a player reads is shuffled from
+					-- turn ten onwards - which looks like the simulation
+					-- misbehaving rather than like a sort.
+					local turn_of = {}
+					for i = 1, #objects do
+						turn_of[objects[i].key] =
+							tonumber(string.match(objects[i].key, ":(%d+)$")) or 0
+					end
+					table.sort(objects, function(a, b)
+						if turn_of[a.key] ~= turn_of[b.key] then
+							return turn_of[a.key] < turn_of[b.key]
+						end
+						return a.key < b.key
+					end)
 					for i = 1, #objects do
 						local bundle = objects[i].value
 						if bundle and bundle.events then
@@ -393,10 +433,19 @@ local function rpc_state(context, payload)
 	return nk.json_encode(response)
 end
 
---- game.orders { game_id, orders: [ { from, to, ships } ] }
+--- game.orders { game_id, orders: [ order ] }
+--
+-- An order is one of:
+--   { kind = "move",     from, to, ships }   send warships
+--   { kind = "trade",    from, to, ships }   send freighters to open a route
+--   { kind = "research", tech }              set the research target
+--   { kind = "policy",   warship_share }     split new production
 --
 -- Orders replace whatever was previously submitted for the coming turn, so a
--- player can revise their plan any number of times before it resolves.
+-- player can revise their plan any number of times before it resolves. The
+-- checks here are shape-only: whether an order is *legal* depends on state
+-- that will have moved on by the time it resolves, so the resolver decides
+-- that and reports a reason the client can show.
 local function rpc_orders(context, payload)
 	local input = decode_payload(payload)
 	local user_id = context.user_id or fail("must be authenticated")
@@ -414,11 +463,45 @@ local function rpc_orders(context, payload)
 	if type(incoming) ~= "table" then fail("orders must be an array") end
 
 	local clean = {}
+	local seen_research, seen_policy = false, false
 	for i = 1, #incoming do
 		local o = incoming[i]
-		local from, to, ships = tonumber(o.from), tonumber(o.to), tonumber(o.ships)
-		if from and to and ships and ships > 0 then
-			clean[#clean + 1] = { from = math.floor(from), to = math.floor(to), ships = math.floor(ships) }
+		local kind = o.kind
+		if kind == nil or kind == "move" or kind == "trade" then
+			local from, to, ships = tonumber(o.from), tonumber(o.to), tonumber(o.ships)
+			if from and to and ships and ships > 0 then
+				clean[#clean + 1] = {
+					kind = (kind == "trade") and "trade" or "move",
+					from = math.floor(from), to = math.floor(to), ships = math.floor(ships),
+				}
+			end
+		elseif kind == "research" then
+			-- Only the last one counts, and only one is stored: two research
+			-- directives in a batch would silently make the order of the array
+			-- meaningful, which no client should have to know about.
+			local id = o.tech
+			if id == nil or id == "" or tech.by_id(id) then
+				if seen_research then
+					for k = #clean, 1, -1 do
+						if clean[k].kind == "research" then table.remove(clean, k) break end
+					end
+				end
+				seen_research = true
+				clean[#clean + 1] = { kind = "research", tech = id }
+			end
+		elseif kind == "policy" then
+			local share = tonumber(o.warship_share)
+			if share then
+				if share < 0 then share = 0 end
+				if share > 1 then share = 1 end
+				if seen_policy then
+					for k = #clean, 1, -1 do
+						if clean[k].kind == "policy" then table.remove(clean, k) break end
+					end
+				end
+				seen_policy = true
+				clean[#clean + 1] = { kind = "policy", warship_share = share }
+			end
 		end
 	end
 

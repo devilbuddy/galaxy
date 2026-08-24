@@ -12,7 +12,7 @@ mouse_trigger {
 }
 touch_trigger {
   input: TOUCH_MULTI
-  action: "multitouch"
+  action: "touch_multi"
 }
 key_trigger {
   input: KEY_SPACE

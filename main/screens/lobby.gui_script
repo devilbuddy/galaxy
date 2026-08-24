@@ -1,24 +1,145 @@
---- Lobby: pick a game to play, or start a new one.
+--- Lobby: choose a people, then a game to play or one to start.
 --
--- Everything is drawn in code (see main/ui.lua for why) and Druid supplies the
--- button behaviour. The list is rebuilt wholesale whenever the server answers,
--- which at a handful of games costs nothing and avoids diffing logic.
+-- Built in code from main/ui.lua, with Druid supplying the interaction. The
+-- game list is rebuilt wholesale whenever the server answers, which at a
+-- handful of games costs nothing and avoids diffing logic.
+--
+-- The race choice lives here rather than inside a per-game flow because it
+-- applies to whichever game is created or joined next, and because it is the
+-- one decision a player wants to make while reading what is on offer.
 
 local druid = require("druid.druid")
 local monarch = require("monarch.monarch")
 local backend = require("main.backend")
 local store = require("main.store")
 local ui = require("main.ui")
+local safearea = require("main.safearea")
+local races = require("galaxy.sim.races")
 
-local MARGIN = 24
-local ROW_HEIGHT = 92
+local PAD = 26
 local REFRESH_SECONDS = 5
+
+-- Two columns rather than three: a race name needs the width to stay on one
+-- line at a readable size, and a 3-across tile was 200 units wide.
+local RACE_COLUMNS = 2
+local RACE_TILE_H = 84
+local RACE_GAP = 14
+
+-- Effect key -> a short human phrase. The trade-offs are the whole point of
+-- choosing a people, so they are spelled out here rather than discovered three
+-- days into a game.
+local EFFECT_LABEL = {
+	attack = "attack", defence = "defence", capture = "capture",
+	speed = "speed", upkeep = "upkeep", hops = "range",
+	industry = "industry", ship_cost = "hull cost", cap = "fleet cap",
+	growth = "growth", capacity = "capacity", trade = "trade",
+	yield_metal = "metal", yield_fuel = "fuel", yield_research = "research",
+	vision = "vision", tech_cost = "tech cost",
+}
+
+-- Stable order, so a race always reads the same way.
+local EFFECT_ORDER = {
+	"attack", "defence", "capture", "speed", "upkeep", "hops",
+	"industry", "ship_cost", "cap", "growth", "capacity", "trade",
+	"yield_metal", "yield_fuel", "yield_research", "vision", "tech_cost",
+}
 
 local function screen()
 	return store.screen.width, store.screen.height
 end
 
---- Rebuild the scrollable middle section from the last server response.
+--- A race's modifiers, split into what it is good and bad at.
+local function race_effects(race)
+	local ups, downs = {}, {}
+	for i = 1, #EFFECT_ORDER do
+		local key = EFFECT_ORDER[i]
+		local value = race.mods[key]
+		if value then
+			local text = string.format("%+d%% %s", math.floor(value * 100 + 0.5),
+				EFFECT_LABEL[key] or key)
+			-- Cheaper upkeep and cheaper hulls are *good* despite being
+			-- negative, so the sign alone cannot decide which column it lands in.
+			local beneficial = value > 0
+			if key == "upkeep" or key == "ship_cost" or key == "tech_cost" then
+				beneficial = value < 0
+			end
+			if beneficial then ups[#ups + 1] = text else downs[#downs + 1] = text end
+		end
+	end
+	return ups, downs
+end
+
+-- Race picker ------------------------------------------------------------------
+
+local function refresh_races(self)
+	for i = 1, #races.RACES do
+		local race = races.RACES[i]
+		local chosen = race.id == store.race
+		local tile = self.race_tiles[i]
+		gui.set_color(tile.fill, chosen and ui.CARD_HI or ui.CARD_ALT)
+		gui.set_color(tile.border, chosen and ui.race_colour(race.id) or ui.BORDER)
+		gui.set_color(tile.label, chosen and ui.TEXT or ui.DIM)
+		gui.set_color(tile.dot, ui.race_colour(race.id, chosen and 1.0 or 0.5))
+	end
+
+	local race = races.by_id(store.race)
+	gui.set_text(self.race_blurb, race.blurb)
+	local ups, downs = race_effects(race)
+	gui.set_text(self.race_good, table.concat(ups, "   "))
+	gui.set_text(self.race_bad, table.concat(downs, "   "))
+end
+
+local function build_races(self, w, y, pad)
+	local card_w = w - pad.left - pad.right
+	local rows = math.ceil(#races.RACES / RACE_COLUMNS)
+	local height = 44 + rows * (RACE_TILE_H + RACE_GAP) + 76 + PAD
+	ui.card(pad.left, y, card_w, height)
+	ui.section(pad.left + PAD, y - 16, card_w - PAD * 2, "your people")
+
+	local column = (card_w - PAD * 2 - RACE_GAP * (RACE_COLUMNS - 1)) / RACE_COLUMNS
+	self.race_tiles = {}
+	for i = 1, #races.RACES do
+		local race = races.RACES[i]
+		local col = (i - 1) % RACE_COLUMNS
+		local row = math.floor((i - 1) / RACE_COLUMNS)
+		local x = pad.left + PAD + (column + RACE_GAP) * col
+		local ty = y - 62 - (RACE_TILE_H + RACE_GAP) * row
+
+		local fill = ui.panel(x, ty, column, RACE_TILE_H, ui.CARD_ALT)
+		local border = ui.panel_line(x, ty, column, RACE_TILE_H, ui.BORDER)
+		local dot = ui.dot(x + 20, ty - RACE_TILE_H * 0.5 + 7, 14,
+			ui.race_colour(race.id))
+		local label = ui.text(x + 46, ty - RACE_TILE_H * 0.5, race.label, ui.BODY,
+			ui.DIM, { bold = true, width = column - 62, height = RACE_TILE_H })
+
+		self.race_tiles[i] = { fill = fill, border = border, dot = dot, label = label }
+		self.druid:new_button(fill, function()
+			store.race = race.id
+			refresh_races(self)
+		end)
+	end
+
+	local below = y - 62 - rows * (RACE_TILE_H + RACE_GAP)
+	self.race_blurb = ui.body(pad.left + PAD, below - 6, "", ui.TEXT)
+	self.race_good = ui.small(pad.left + PAD, below - 36, "", ui.GOOD)
+	self.race_bad = ui.small(pad.left + PAD, below - 62, "", ui.BAD)
+	refresh_races(self)
+
+	return y - height - ui.GAP
+end
+
+-- Game list --------------------------------------------------------------------
+
+local function roster_line(game)
+	local who = {}
+	for i = 1, #game.players do
+		who[#who + 1] = ui.race_label(game.players[i].race)
+	end
+	return string.format("%d/%d   %s", #game.players, game.max_players,
+		table.concat(who, ", "))
+end
+
+--- Rebuild the list from the last server response.
 local function render_games(self)
 	ui.clear(self.rows)
 	-- Druid components attached to deleted nodes must go too, or they keep
@@ -26,111 +147,130 @@ local function render_games(self)
 	for i = 1, #self.row_buttons do self.druid:remove(self.row_buttons[i]) end
 	self.row_buttons = {}
 
-	local w = select(1, screen())
-	local y = self.list_top
+	local out = self.rows
+	local function keep(node) out[#out + 1] = node; return node end
+	local w = self.list_width
+	local y = -4
 	local games = self.games or {}
 
 	if self.mine then
 		local g = self.mine
-		local panel = ui.panel(MARGIN, y, w - MARGIN * 2, ROW_HEIGHT + 40, ui.PANEL_ALT)
-		self.rows[#self.rows + 1] = panel
-		self.rows[#self.rows + 1] = ui.label(MARGIN + 16, y - 26, g.name, 0.85, ui.TEXT)
-		local who = {}
-		for i = 1, #g.players do who[#who + 1] = g.players[i].name end
-		self.rows[#self.rows + 1] = ui.label(MARGIN + 16, y - 56,
-			string.format("%d/%d  %s", #g.players, g.max_players, table.concat(who, ", ")),
-			0.6, ui.DIM)
-		self.rows[#self.rows + 1] = ui.label(MARGIN + 16, y - 84,
-			g.status == "lobby" and "waiting to start" or ("turn " .. g.turn), 0.6, ui.DIM)
+		local h = 186
+		keep(ui.panel(0, y, w, h, ui.CARD))
+		keep(ui.panel_line(0, y, w, h, ui.ACCENT_SOFT))
+
+		keep(ui.caps(PAD, y - 18, "your game"))
+		keep(ui.title(PAD, y - 62, g.name))
+		keep(ui.small(PAD, y - 98, roster_line(g), ui.DIM))
+		keep(ui.small(PAD, y - 128, g.status == "lobby"
+			and "Waiting to start" or ("Turn " .. tostring(g.turn)), ui.DIM))
 
 		local can_start = g.status == "lobby" and #g.players >= 2
-		local bw, bh = 190, 56
-		local box, text = ui.button(w - MARGIN - bw, y - 24, bw, bh,
-			g.status == "lobby" and "START" or "RESUME")
-		ui.set_button_enabled(box, text, can_start or g.status ~= "lobby")
-		self.rows[#self.rows + 1] = box
-		self.rows[#self.rows + 1] = text
-
-		if g.status ~= "lobby" then
-			self.row_buttons[#self.row_buttons + 1] = self.druid:new_button(box, function()
-				monarch.show(hash("map"), nil, { game_id = g.id })
-			end)
-		elseif can_start then
-			self.row_buttons[#self.row_buttons + 1] = self.druid:new_button(box, function()
-				self:set_status("starting...")
+		local running = g.status ~= "lobby"
+		local bw = 210
+		local handle = ui.button(self.druid, w - PAD - bw, y - 56, bw, ui.CONTROL,
+			running and "RESUME" or "START",
+			function()
+				if running then
+					monarch.show(hash("map"), nil, { game_id = g.id })
+					return
+				end
+				self:set_status("Starting...")
 				backend.game_start(g.id, function(res, err)
-					if err then self:set_status("could not start: " .. err) return end
+					if err then self:set_status("Could not start: " .. err) return end
 					monarch.show(hash("map"), nil, { game_id = g.id })
 				end)
-			end)
-		end
-		y = y - (ROW_HEIGHT + 40) - 14
+			end,
+			{ style = "primary", size = ui.CAPS })
+		keep(handle.fill); keep(handle.border); keep(handle.label)
+		if handle.component then self.row_buttons[#self.row_buttons + 1] = handle.component end
+		if not running and not can_start then handle.set_enabled(false) end
+
+		y = y - h - ui.GAP
 	end
 
-	if #games == 0 and not self.mine then
-		self.rows[#self.rows + 1] = ui.label(MARGIN + 4, y - 30,
-			"No open games. Start one.", 0.7, ui.DIM)
-		return
+	if #games == 0 then
+		if not self.mine then
+			keep(ui.body(PAD, y - 40, "No open games. Start one.", ui.DIM))
+		end
+	else
+		keep(ui.caps(PAD, y - 18, "open games"))
+		y = y - 46
 	end
 
 	for i = 1, #games do
 		local g = games[i]
-		local panel = ui.panel(MARGIN, y, w - MARGIN * 2, ROW_HEIGHT)
-		self.rows[#self.rows + 1] = panel
-		self.rows[#self.rows + 1] = ui.label(MARGIN + 16, y - 28, g.name, 0.8, ui.TEXT)
-		self.rows[#self.rows + 1] = ui.label(MARGIN + 16, y - 60,
-			string.format("%d/%d players   seed %d", #g.players, g.max_players, g.seed),
-			0.6, ui.DIM)
+		local h = 132
+		keep(ui.panel(0, y, w, h, ui.CARD))
+		keep(ui.panel_line(0, y, w, h, ui.BORDER))
 
-		local bw, bh = 150, 52
-		local box, text = ui.button(w - MARGIN - bw - 12, y - 20, bw, bh, "JOIN", 0.75)
-		self.rows[#self.rows + 1] = box
-		self.rows[#self.rows + 1] = text
-		self.row_buttons[#self.row_buttons + 1] = self.druid:new_button(box, function()
-			self:set_status("joining " .. g.name .. "...")
-			backend.game_join(g.id, nil, function(res, err)
-				if err then self:set_status("could not join: " .. err) return end
-				self:refresh()
-			end)
-		end)
+		keep(ui.body(PAD, y - 44, g.name))
+		keep(ui.small(PAD, y - 80, roster_line(g), ui.DIM))
 
-		y = y - ROW_HEIGHT - 12
-		if y < 180 then break end -- keep the action bar clear
+		local bw = 170
+		local handle = ui.button(self.druid, w - PAD - bw, y - 22, bw, ui.CONTROL, "JOIN",
+			function()
+				self:set_status("Joining " .. g.name .. "...")
+				backend.game_join(g.id, { race = store.race }, function(res, err)
+					if err then self:set_status("Could not join: " .. err) return end
+					self:refresh()
+				end)
+			end,
+			{ style = "secondary", size = ui.CAPS })
+		keep(handle.fill); keep(handle.border); keep(handle.label)
+		if handle.component then self.row_buttons[#self.row_buttons + 1] = handle.component end
+
+		y = y - h - ui.GAP
 	end
+
+	for i = 1, #out do gui.set_parent(out[i], self.list_content) end
+	ui.fit_scroll(self.list_scroll, self.list_content, w, -y + 8, self.list_height)
 end
+
+-- Screen ------------------------------------------------------------------------
 
 local function build(self)
 	local w, h = screen()
+	local pad = ui.inset()
+	self.pad = pad
+	ui.sprite(0, h, w, h, "solid", ui.BG)
 
-	ui.panel(0, h, w, h, ui.BACKGROUND)
-	ui.label(MARGIN, h - 48, "GALAXY", 1.6, ui.TEXT)
-	self.subtitle = ui.label(MARGIN, h - 88, "asynchronous conquest", 0.65, ui.DIM)
+	local top = h - pad.top
+	ui.h1(pad.left + 6, top - 32, "Galaxy")
+	ui.small(pad.left + 6, top - 74, "Asynchronous conquest", ui.DIM)
+	self.status_label = ui.small(pad.left + 6, top - 104, "", ui.FAINT)
 
-	self.status_label = ui.label(MARGIN, h - 128, "", 0.65, ui.DIM)
-	self.list_top = h - 160
+	local footer_top = pad.bottom + ui.CONTROL
+	local card_w = w - pad.left - pad.right
+	local half = (card_w - ui.GAP) * 0.5
+	ui.button(self.druid, pad.left, footer_top, half, ui.CONTROL, "NEW GAME",
+		function()
+			self:set_status("Creating game...")
+			backend.game_create({
+				name = "Game " .. tostring(math.random(1000, 9999)),
+				max_players = 4,
+				race = store.race,
+				-- Short turns by default so the prototype can actually be played
+				-- through; a real game would use the 12 hour default.
+				turn_interval = 60,
+				star_count = 120,
+			}, function(res, err)
+				if err then self:set_status("Could not create: " .. err) return end
+				self:refresh()
+			end)
+		end,
+		{ style = "primary", size = ui.CAPS })
+	ui.button(self.druid, pad.left + half + ui.GAP, footer_top, half, ui.CONTROL,
+		"REFRESH", function() self:refresh() end, { size = ui.CAPS })
 
-	-- Action bar along the bottom.
-	local bar_h = 96
-	ui.panel(0, bar_h, w, bar_h, ui.PANEL)
-	local bw = (w - MARGIN * 3) / 2
-	local new_box, new_text = ui.button(MARGIN, bar_h - 20, bw, 56, "NEW GAME")
-	local refresh_box, refresh_text = ui.button(MARGIN * 2 + bw, bar_h - 20, bw, 56, "REFRESH")
+	local y = build_races(self, w, top - 132, pad)
 
-	self.druid:new_button(new_box, function()
-		self:set_status("creating game...")
-		backend.game_create({
-			name = "Game " .. tostring(math.random(1000, 9999)),
-			max_players = 4,
-			-- Short turns by default so the prototype can actually be played
-			-- through; a real game would use the 12 hour default.
-			turn_interval = 60,
-			star_count = 120,
-		}, function(res, err)
-			if err then self:set_status("could not create: " .. err) return end
-			self:refresh()
-		end)
-	end)
-	self.druid:new_button(refresh_box, function() self:refresh() end)
+	self.list_width = card_w
+	self.list_height = y - (footer_top + ui.GAP)
+	local _, content, scroll = ui.scroll(self.druid, pad.left, y,
+		self.list_width, self.list_height)
+	self.list_content = content
+	self.list_scroll = scroll
 end
 
 function init(self)
@@ -142,6 +282,7 @@ function init(self)
 	self.games = {}
 	self.mine = nil
 	self.since_refresh = 0
+	store.race = store.race or races.DEFAULT
 
 	self.set_status = function(_, text)
 		if self.status_label then gui.set_text(self.status_label, text or "") end
@@ -149,12 +290,12 @@ function init(self)
 
 	self.refresh = function()
 		if not backend.ready() then
-			self:set_status("offline - no backend at " .. backend.address())
+			self:set_status("Offline - no backend at " .. backend.address())
 			return
 		end
-		self:set_status("loading games...")
+		self:set_status("Loading games...")
 		backend.game_list(function(res, err)
-			if err then self:set_status("server error: " .. err) return end
+			if err then self:set_status("Server error: " .. err) return end
 			self.games = res.games or {}
 			-- Only one game at a time is supported in the UI for now; the most
 			-- recently created is the one offered.
@@ -165,8 +306,12 @@ function init(self)
 		end)
 	end
 
-	build(self)
-	self:refresh()
+	-- Built on the first update rather than here. The platform reports its
+	-- safe-area insets as not-ready for a couple of hundred milliseconds, and a
+	-- layout made from the zeroes it returns in the meantime would sit under
+	-- the notch for the rest of the session.
+	self.built = false
+	self.waited = 0
 end
 
 function final(self)
@@ -174,6 +319,17 @@ function final(self)
 end
 
 function update(self, dt)
+	if not self.built then
+		self.waited = self.waited + dt
+		-- ...or after a grace period, for platforms that will never answer.
+		if safearea.ready() or self.waited > 0.4 then
+			self.built = true
+			build(self)
+			self:refresh()
+		end
+		return
+	end
+
 	self.druid:update(dt)
 	-- A lobby is inherently multiplayer: poll so a second player appearing shows
 	-- up without the first having to prod it.
@@ -193,6 +349,7 @@ function update(self, dt)
 end
 
 function on_input(self, action_id, action)
+	if not self.built then return false end
 	-- Druid hit-tests with the action it is given; it must be in GUI space.
 	return self.druid:on_input(action_id, ui.gui_action(action))
 end

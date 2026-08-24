@@ -1,8 +1,20 @@
 script: "/main/screens/report.gui_script"
 fonts {
+  name: "ui"
+  font: "/main/fonts/ui.font"
+}
+fonts {
+  name: "ui_bold"
+  font: "/main/fonts/ui_bold.font"
+}
+fonts {
   name: "map"
   font: "/main/fonts/map.font"
 }
+textures {
+  name: "ui"
+  texture: "/main/ui.atlas"
+}
 material: "/builtins/materials/gui.material"
 adjust_reference: ADJUST_REFERENCE_DISABLED
-max_nodes: 512
+max_nodes: 1024

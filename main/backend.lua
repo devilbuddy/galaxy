@@ -142,8 +142,15 @@ function M.game_create(options, done)
 	M.rpc("game.create", options or {}, done)
 end
 
-function M.game_join(game_id, player_name, done)
-	M.rpc("game.join", { game_id = game_id, player_name = player_name }, done)
+--- Join an open lobby. `options` carries the display name and race pick; both
+--- are optional and the server substitutes defaults for whatever is missing.
+function M.game_join(game_id, options, done)
+	options = options or {}
+	M.rpc("game.join", {
+		game_id = game_id,
+		player_name = options.player_name,
+		race = options.race,
+	}, done)
 end
 
 function M.game_start(game_id, done)

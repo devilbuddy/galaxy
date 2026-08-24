@@ -110,6 +110,9 @@ function init(self)
 	self.mouse_down = false
 	-- Once the player zooms, stop re-fitting the view on window changes.
 	self.user_zoomed = false
+	-- Set the first time a galaxy is framed, so a rebuild of the same one does
+	-- not throw the view away.
+	self.framed = false
 	self.last_w, self.last_h = -1, -1
 	refresh_zoom_bounds(self)
 	apply(self)
@@ -193,9 +196,13 @@ function on_input(self, action_id, action)
 	-- table latches `touch_driven` and the mouse path below stops running.
 	if action.touch then
 		self.touch_driven = true
-		apply_gesture(self, self.recognizer:update(
-			active_touches(action), store.hud_bar_height or 0))
-		return true
+		local g = self.recognizer:update(active_touches(action), store.hud_zones)
+		apply_gesture(self, g)
+		-- Claim the touch only when the camera actually acted on it. A gesture
+		-- that began on the HUD belongs to the HUD, and consuming it here left
+		-- the controls dead whenever the camera won the input-focus race -
+		-- which is not something either side can rely on.
+		return not g.blocked
 	end
 
 	-- Mouse fallback, for developing on desktop.
@@ -219,8 +226,9 @@ function on_input(self, action_id, action)
 			return false
 		end
 		-- Feed the same recogniser as the device, so both share one code path.
-		apply_gesture(self, self.recognizer:update(points, store.hud_bar_height or 0))
-		return is_button
+		local g = self.recognizer:update(points, store.hud_zones)
+		apply_gesture(self, g)
+		return is_button and not g.blocked
 	elseif action_id == hash("zoom_in") and action.pressed then
 		zoom_to(self, self.zoom * WHEEL_STEP, ax, ay)
 	elseif action_id == hash("zoom_out") and action.pressed then
@@ -230,18 +238,33 @@ end
 
 function on_message(self, message_id, message)
 	if message_id == hash("map_ready") then
+		local w = math.max(1, message.content_width)
+		local h = math.max(1, message.content_height)
+		-- Re-frame only for a galaxy we have not framed before. The map is
+		-- rebuilt whenever a turn resolves, and treating every rebuild as a new
+		-- galaxy snapped the player's zoom back to the whole-map fit - which,
+		-- with a poll every ten seconds, looked like the zoom resetting itself.
+		local fresh = not self.framed
+			or w ~= self.content_w or h ~= self.content_h
+			or message.centre_x ~= self.centre_x
+			or message.centre_y ~= self.centre_y
+
 		self.world = message.world
-		self.content_w = math.max(1, message.content_width)
-		self.content_h = math.max(1, message.content_height)
+		self.content_w = w
+		self.content_h = h
 		self.centre_x = message.centre_x
 		self.centre_y = message.centre_y
 		refresh_zoom_bounds(self)
-		-- Start framed on the whole galaxy, then let the player zoom in.
-		self.user_zoomed = false
-		self.zoom = self.zoom_min
-		refresh_zoom_bounds(self)
-		self.x = self.centre_x
-		self.y = self.centre_y + self.frame_offset_y
+
+		if fresh then
+			-- Start framed on the whole galaxy, then let the player zoom in.
+			self.framed = true
+			self.user_zoomed = false
+			self.zoom = self.zoom_min
+			refresh_zoom_bounds(self)
+			self.x = self.centre_x
+			self.y = self.centre_y + self.frame_offset_y
+		end
 		apply(self)
 	elseif message_id == hash("window_resized") then
 		refresh_zoom_bounds(self)
