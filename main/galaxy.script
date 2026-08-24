@@ -7,6 +7,7 @@
 local generate = require("galaxy.generate")
 local meshbuild = require("main.meshbuild")
 local store = require("main.store")
+local seen = require("main.seen")
 local backend = require("main.backend")
 local monarch = require("monarch.monarch")
 local sim_systems = require("galaxy.sim.systems")
@@ -255,6 +256,13 @@ end
 local function load_game(self, game_id, silent)
 	if not silent then store.status = "loading game..." end
 
+	-- How far this device has read *this* game's digest. Held per game and
+	-- across restarts (main/seen.lua), so opening a game does not replay
+	-- everything the server is still willing to send.
+	if store.game_id ~= game_id then
+		store.seen_turn = seen.get(game_id)
+	end
+
 	backend.game_state(game_id, store.seen_turn, function(res, err)
 		if err then
 			store.status = nil
@@ -309,9 +317,11 @@ local function load_game(self, game_id, silent)
 				else
 					monarch.show(hash("report"), nil, digest)
 					store.seen_turn = turn
+					seen.set(game_id, turn)
 				end
 			else
 				store.seen_turn = turn
+				seen.set(game_id, turn)
 			end
 		end
 

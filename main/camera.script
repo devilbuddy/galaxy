@@ -158,7 +158,38 @@ end
 
 --- The framebuffer size is not known until the render script has run once,
 --- so re-fit the view when it changes.
+--- Ease toward a world position, for "show me this commander".
+--
+-- Eased rather than snapped because the map is the one thing the player holds a
+-- mental picture of: a cut leaves them re-reading the whole screen to work out
+-- what moved, where a glide carries the eye across and the surrounding systems
+-- stay recognisable.
+local FOCUS_RATE = 7.5
+-- Below this the glide is over. In world units, so it scales with zoom the way
+-- the eye does.
+local FOCUS_SETTLED = 1.5
+
+local function focus_on(self, x, y)
+	self.focus_x, self.focus_y = x, y
+end
+
+local function cancel_focus(self)
+	self.focus_x, self.focus_y = nil, nil
+end
+
 function update(self, dt)
+	if self.focus_x then
+		local t = math.min(1, dt * FOCUS_RATE)
+		self.x = self.x + (self.focus_x - self.x) * t
+		self.y = self.y + (self.focus_y - self.y) * t
+		if math.abs(self.focus_x - self.x) < FOCUS_SETTLED
+			and math.abs(self.focus_y - self.y) < FOCUS_SETTLED then
+			self.x, self.y = self.focus_x, self.focus_y
+			cancel_focus(self)
+		end
+		apply(self)
+	end
+
 	local w, h = viewport(self)
 	if w ~= self.last_w or h ~= self.last_h then
 		self.last_w, self.last_h = w, h
@@ -175,6 +206,8 @@ end
 
 --- Apply one frame of recognised gesture to the camera.
 local function apply_gesture(self, g)
+	-- The moment the player touches the map it is theirs again.
+	if g.pan_dx ~= 0 or g.pan_dy ~= 0 or g.zoom ~= 1 then cancel_focus(self) end
 	if g.zoom ~= 1 and g.anchor_x then
 		zoom_to(self, self.zoom * g.zoom, g.anchor_x, g.anchor_y)
 	end
@@ -237,6 +270,12 @@ function on_input(self, action_id, action)
 end
 
 function on_message(self, message_id, message)
+	if message_id == hash("focus") then
+		-- Clamped by apply() as the glide runs, so asking for somewhere off the
+		-- edge of the content simply stops at the edge.
+		focus_on(self, message.x, message.y)
+		return
+	end
 	if message_id == hash("map_ready") then
 		local w = math.max(1, message.content_width)
 		local h = math.max(1, message.content_height)

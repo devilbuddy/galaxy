@@ -20,6 +20,7 @@
 -- `store.hud_zones`, and the camera declines any gesture starting inside one.
 
 local store = require("main.store")
+local seen = require("main.seen")
 local backend = require("main.backend")
 local ui = require("main.ui")
 local monarch = require("monarch.monarch")
@@ -33,6 +34,13 @@ local sim_path = require("galaxy.sim.path")
 local STAR_LABEL_POOL = 70
 local REGION_LABEL_POOL = 12
 local FLEET_POOL = 40
+-- Segments of drawn route. Pools cost their nodes whether or not they are used,
+-- and the usual case is one or two legs, so this is sized for a busy turn
+-- rather than for the theoretical maximum of every commander on a twelve-lane
+-- campaign; beyond it the tail of a route simply is not drawn.
+local ROUTE_POOL = 64
+local ROUTE_WIDTH = 3
+local ROUTE_NODE = 9
 
 local STAR_LABEL_MIN_ZOOM = 0.30
 local STAR_LABELS_AT_MIN_ZOOM = 12
@@ -44,6 +52,13 @@ local STAR_FONT_SCALE = 0.62
 local REGION_FONT_SCALE = 1.00
 
 local TOP_H = 96
+-- The commander strip under the overview: one face per force in the field. It
+-- is the roster *and* the way around the map - with a cap of four there are
+-- never enough of them to need a list, and a player thinks in terms of "where
+-- is Kess", not "which system was that".
+local CAPTAIN_SIZE = 62
+local CAPTAIN_GAP = 10
+local CAPTAIN_H = CAPTAIN_SIZE + 14
 -- Shorter now that EMPIRE lives in the top bar: a status line and one row of
 -- controls. Every point saved here is map.
 local BAR_H = 156
@@ -101,6 +116,7 @@ local function publish_zones(self)
 	local zones = {}
 	if self.top_zone then zones[#zones + 1] = self.top_zone end
 	if self.bar_zone then zones[#zones + 1] = self.bar_zone end
+	if self.captain_zone then zones[#zones + 1] = self.captain_zone end
 	if self.sheet_zone then zones[#zones + 1] = self.sheet_zone end
 	store.hud_zones = zones
 end
@@ -151,6 +167,7 @@ local function build_overview(self, w, h, pad, on_empire)
 		-- Opening it is what marks it read; until then the poll keeps asking
 		-- for the same window so nothing is lost if the player never taps.
 		store.seen_turn = digest.turn or store.seen_turn
+		seen.set(store.game_id, store.seen_turn)
 		monarch.show(hash("report"), nil, digest)
 	end)
 	self.report_button:set_enabled(false)
@@ -230,6 +247,71 @@ local function plan_lines()
 			kind = "research", tech = store.pending_research })
 	end
 	return lines
+end
+
+--- A row of commander faces under the overview bar.
+--
+-- Rebuilt only when the roster actually changes - it has its own Druid instance
+-- because it is a region that gets rebuilt, and per-component bookkeeping is
+-- exactly what leaves stale components pointing at deleted nodes (see the note
+-- in main/ui.lua).
+local function build_captains(self, w, h, pad)
+	ui.region(self.captain_druid, self.captain_nodes)
+	self.captain_druid = nil
+	self.captain_nodes = {}
+
+	local view = store.game_view
+	local fleets = (view and view.fleets) or {}
+	self.captain_zone = nil
+	self.captain_w, self.captain_h = w, h
+	if #fleets == 0 then
+		self.captain_h = 0
+		return
+	end
+
+	local previous = ui.collect(self.captain_nodes)
+	self.captain_druid = druid.new(self)
+
+	local top = h - pad.top - TOP_H - ui.GAP
+	local x = pad.left + 14
+	for i = 1, #fleets do
+		local f = fleets[i]
+		local moving = (f.eta or 0) > 0
+		local chosen = store.selected_fleet == f.id
+		local node = ui.portrait(x, top, CAPTAIN_SIZE, f.portrait, {
+			ring_colour = chosen and ui.ACCENT or (moving and ui.GOOD or ui.BORDER),
+		})
+		-- The strength under the face, because "which of my four is strong
+		-- enough" is the question a player is usually asking of this row.
+		ui.text(x + CAPTAIN_SIZE * 0.5, top - CAPTAIN_SIZE - 8, ui.number(f.ships),
+			ui.SMALL, chosen and ui.ACCENT or ui.DIM,
+			{ bold = true, pivot = gui.PIVOT_CENTER })
+		self.captain_druid:new_button(node, function()
+			store.selected_fleet = f.id
+			store.selected = f.at
+			self.sheet_dirty = true
+			-- Where the force actually is, part way along its lane if it is
+			-- under way, so the camera lands on the marker and not behind it.
+			local g = store.galaxy
+			local a = g and g.stars[f.at]
+			if not a then return end
+			local wx, wy = a.x, a.y
+			local b = f.next_hop and g.stars[f.next_hop]
+			if b and self.lane_lengths then
+				local leg = sim_path.lane_length(self.lane_lengths, f.at, f.next_hop) or 0
+				local t = leg > 0 and math.min(1, (f.progress or 0) / leg) or 0
+				wx = a.x + (b.x - a.x) * t
+				wy = a.y + (b.y - a.y) * t
+			end
+			msg.post("camera#camera_script", "focus", { x = wx, y = wy })
+		end)
+		x = x + CAPTAIN_SIZE + CAPTAIN_GAP
+	end
+	ui.collect(previous)
+
+	self.captain_h = CAPTAIN_H
+	self.captain_zone = { pad.left, top - CAPTAIN_H, x, top }
+	publish_zones(self)
 end
 
 --- The order bar: what is about to be sent, cancel an aim, or send it.
@@ -537,10 +619,10 @@ local function build_sheet(self, w, pad)
 				y = y - 58
 				local row = ui.panel(inner, y + 48, text_w, 54,
 					chosen and ui.ACCENT_SOFT or ui.CARD_ALT)
-				ui.icon(inner + 14, y + 37, 28, "icon_warship",
-					chosen and ui.ACCENT or ui.TEXT)
-				ui.body(inner + 54, y + 27, fleet.name, ui.TEXT)
-				ui.small(inner + 54, y + 6, fleet.rank or "", ui.FAINT)
+				ui.portrait(inner + 8, y + 43, 38, fleet.portrait,
+					{ ring_colour = chosen and ui.ACCENT or ui.BORDER })
+				ui.body(inner + 56, y + 27, fleet.name, ui.TEXT)
+				ui.small(inner + 56, y + 6, fleet.rank or "", ui.FAINT)
 				ui.value(inner + text_w - 14, y + 21,
 					fleet.command and (fleet.ships .. "/" .. fleet.command)
 						or tostring(fleet.ships),
@@ -608,6 +690,133 @@ local function project(cam, w, h, wx, wy)
 	return (wx - cam.x) * cam.zoom + w * 0.5, (wy - cam.y) * cam.zoom + h * 0.5
 end
 
+--- Draw the path a force will actually take.
+--
+-- The map used to show where a fleet *was* and the sheet said where it was
+-- bound, but nothing showed the route between - so a multi-lane order was an
+-- act of faith. Two kinds are drawn, and they have to look different:
+--
+--   * a **committed** route, in the player's own colour, is what the server is
+--     already moving the fleet along;
+--   * a **staged** route, in the interactive colour, is an order sitting in the
+--     bar that has not been sent yet.
+--
+-- A staged order only carries its destination - the server expands it lane by
+-- lane - so the same pathfinder is run here to preview it. It is the identical
+-- function on identical data, so what is drawn is what will happen.
+local function update_routes(self, g, cam, w, h)
+	local view = store.game_view
+	local used = 0
+	if not (view and self.lane_lengths) then
+		for i = 1, ROUTE_POOL do
+			gui.set_enabled(self.route_nodes[i].bar, false)
+			gui.set_enabled(self.route_nodes[i].dot, false)
+		end
+		return
+	end
+
+	-- A committed route flows; a staged one does not. The difference is not
+	-- decoration: one is a force already under way, the other is a plan sitting
+	-- in the bar. Half a leg a second, which reads as motion without pulling the
+	-- eye off the map.
+	local flow = (self.clock or 0) * 0.5 % 1
+
+	--- One leg, as a rotated bar with a node on it.
+	local function segment(ax, ay, bx, by, colour, last, moving)
+		if used >= ROUTE_POOL then return end
+		local sx0, sy0 = project(cam, w, h, ax, ay)
+		local sx1, sy1 = project(cam, w, h, bx, by)
+		-- Cull only when the whole leg is off-screen; a line crossing the view
+		-- from two off-screen ends still has to be drawn.
+		local lo_x, hi_x = math.min(sx0, sx1), math.max(sx0, sx1)
+		local lo_y, hi_y = math.min(sy0, sy1), math.max(sy0, sy1)
+		if hi_x < -40 or lo_x > w + 40 or hi_y < self.floor_y - 40
+			or lo_y > self.ceiling_y + 40 then
+			return
+		end
+
+		local dx, dy = sx1 - sx0, sy1 - sy0
+		local length = math.sqrt(dx * dx + dy * dy)
+		if length < 1 then return end
+
+		used = used + 1
+		local node = self.route_nodes[used]
+		gui.set_enabled(node.bar, true)
+		gui.set_position(node.bar, vmath.vector3((sx0 + sx1) * 0.5, (sy0 + sy1) * 0.5, 0))
+		gui.set_size(node.bar, vmath.vector3(length, ROUTE_WIDTH, 0))
+		gui.set_rotation(node.bar, vmath.vector3(0, 0, math.deg(math.atan2(dy, dx))))
+		gui.set_color(node.bar, colour)
+
+		-- The destination is pinned and larger - it is a place, not a moment.
+		-- Every other node slides along its own leg while the force is under
+		-- way, which is what makes a route read as travel rather than as a line
+		-- someone drew.
+		gui.set_enabled(node.dot, true)
+		local dx2, dy2 = sx1, sy1
+		if not last and moving then
+			dx2 = sx0 + (sx1 - sx0) * flow
+			dy2 = sy0 + (sy1 - sy0) * flow
+		end
+		gui.set_position(node.dot, vmath.vector3(dx2, dy2, 0))
+		local size = last and (ROUTE_NODE * 1.9) or ROUTE_NODE
+		gui.set_size(node.dot, vmath.vector3(size, size, 0))
+		gui.set_color(node.dot, colour)
+	end
+
+	--- Walk a list of system ids from a starting world position.
+	local function draw(from_x, from_y, hops, colour, moving)
+		local ax, ay = from_x, from_y
+		for i = 1, #hops do
+			local star = g.stars[hops[i]]
+			if not star then return end
+			segment(ax, ay, star.x, star.y, colour, i == #hops, moving)
+			ax, ay = star.x, star.y
+		end
+	end
+
+	-- Committed routes, in the player's colour and held back so the staged one
+	-- reads as the louder of the two.
+	local mine = player_colour(view.you)
+	local committed = vmath.vector4(mine.x, mine.y, mine.z, 0.5)
+	for i = 1, #view.fleets do
+		local f = view.fleets[i]
+		if f.route and #f.route > 0 then
+			local a = g.stars[f.at]
+			if a then
+				local wx, wy = a.x, a.y
+				-- Start from where the fleet actually is, part way along its
+				-- current leg, so the line begins at the marker and not behind it.
+				local b = f.next_hop and g.stars[f.next_hop]
+				if b then
+					local leg = sim_path.lane_length(self.lane_lengths, f.at, f.next_hop) or 0
+					local t = leg > 0 and math.min(1, (f.progress or 0) / leg) or 0
+					wx = a.x + (b.x - a.x) * t
+					wy = a.y + (b.y - a.y) * t
+				end
+				draw(wx, wy, f.route, committed, true)
+			end
+		end
+	end
+
+	-- Staged orders. `path` is the server's own expansion, fetched when the
+	-- order was issued (see request_path); nothing is drawn until it arrives,
+	-- because a straight line between two systems is not a route and guessing
+	-- one here is how a preview starts lying about what the turn will do.
+	local staged = ui.ACCENT
+	for i = 1, #store.orders do
+		local order = store.orders[i]
+		if order.path and #order.path > 0 and order.path_from then
+			local a = g.stars[order.path_from]
+			if a then draw(a.x, a.y, order.path, staged, false) end
+		end
+	end
+
+	for i = used + 1, ROUTE_POOL do
+		gui.set_enabled(self.route_nodes[i].bar, false)
+		gui.set_enabled(self.route_nodes[i].dot, false)
+	end
+end
+
 --- Draw every fleet the player can see, positioned along its lane.
 --
 -- GUI nodes rather than world geometry: a marker wants to stay a constant size
@@ -650,6 +859,15 @@ local function update_fleets(self, g, cam, w, h)
 			gui.set_rotation(marker.box, vmath.vector3(0, 0,
 				angle and (math.deg(angle) - 90) or 0))
 			local scale = mine and 1.0 or 0.82
+			-- A force under way breathes; a parked one is still. Position only
+			-- changes when a turn resolves, so without this a fleet crossing a
+			-- lane is indistinguishable from one sitting on a world - and
+			-- animating the *position* would be a lie, because where it can be
+			-- intercepted is decided at the turn boundary, not between them.
+			if angle then
+				local phase = (self.clock or 0) * 3.4 + (at % 7)
+				scale = scale * (1 + 0.09 * math.sin(phase))
+			end
 			gui.set_scale(marker.box, vmath.vector3(scale, scale, 1))
 		end
 
@@ -766,6 +984,44 @@ end
 -- Orders ----------------------------------------------------------------------------
 
 --- Turn a tap on the map into an order, if one was being aimed.
+--- Ask the server what path a freshly staged order would take, for drawing.
+--
+-- Purely presentational: the order that gets *sent* still carries only its
+-- waypoints, and the server re-expands them when the turn resolves - by then
+-- the map may have moved, and the resolver's answer is the one that counts.
+-- What this avoids is a second pathfinder on the client disagreeing with the
+-- first, which is the only way a preview can mislead.
+local function request_path(self, order, from, fixed)
+	local game = store.game
+	if not game or not backend.ready() then return end
+	order.path_from = from
+	backend.game_route(game.id, from, order.route, fixed, function(res, err)
+		if err then
+			-- The order stands; only the line is missing. A dropped request is
+			-- not a reason to throw away what the player asked for.
+			return
+		end
+		if res and res.route and #res.route > 0 then
+			order.path = res.route
+			return
+		end
+
+		-- The server could not route it, so the order is not a real order:
+		-- it would sit in the bar looking fine and be refused when the turn
+		-- resolved, hours later. Drop it now and say why.
+		for i = #store.orders, 1, -1 do
+			if store.orders[i] == order then table.remove(store.orders, i) end
+		end
+		local view = store.game_view
+		local hops = view and view.rates and view.rates.hops
+		self.flash = hops
+			and ("No route - further than " .. ui.plural(hops, "lane") .. " away")
+			or ("No route - " .. tostring(res and res.reason or "unreachable"))
+		self.flash_timer = 0
+		self.sheet_dirty = true
+	end)
+end
+
 local function resolve_aim(self)
 	local selected = store.selected
 	if selected == self.last_selected then return end
@@ -777,13 +1033,26 @@ local function resolve_aim(self)
 
 	if aim.kind == "launch" then
 		if selected == aim.at then return end
-		store.orders[#store.orders + 1] = {
+		local order = {
 			kind = "launch", at = aim.at, ships = aim.ships, route = { selected },
 		}
+		store.orders[#store.orders + 1] = order
+		request_path(self, order, aim.at, nil)
 	elseif aim.kind == "move" then
-		store.orders[#store.orders + 1] = {
-			kind = "move", fleet = aim.fleet, route = { selected },
-		}
+		local order = { kind = "move", fleet = aim.fleet, route = { selected } }
+		store.orders[#store.orders + 1] = order
+		-- A fleet already in a lane must finish it before it can turn, so the
+		-- path is plotted from the far end - the same rule the resolver applies.
+		local view = store.game_view
+		local from, fixed = nil, nil
+		for k = 1, #(view and view.fleets or {}) do
+			local f = view.fleets[k]
+			if f.id == aim.fleet then
+				from = f.at
+				fixed = f.next_hop
+			end
+		end
+		if from then request_path(self, order, fixed or from, fixed) end
 	end
 	store.aiming = nil
 	store.selected_fleet = nil
@@ -807,7 +1076,16 @@ local function submit_orders(self)
 	if self.sending or store.plan_count() == 0 then return end
 
 	local payload = {}
-	for i = 1, #store.orders do payload[#payload + 1] = store.orders[i] end
+	for i = 1, #store.orders do
+		local o = store.orders[i]
+		-- `path`/`path_from` exist only to draw the line; the server expands the
+		-- waypoints itself, so they are stripped rather than sent.
+		local out = {}
+		for k, v in pairs(o) do
+			if k ~= "path" and k ~= "path_from" then out[k] = v end
+		end
+		payload[#payload + 1] = out
+	end
 	if store.pending_research ~= nil then
 		payload[#payload + 1] = { kind = "research", tech = store.pending_research }
 	end
@@ -856,6 +1134,8 @@ local function build_chrome(self, w, h)
 		function() monarch.show(hash("empire")) end)
 	build_bar(self, w, pad, submit_orders)
 	ui.collect(previous)
+	build_captains(self, w, h, pad)
+	self.captain_key = nil
 
 	self.sheet_height = 0
 	self.sheet_dirty = true
@@ -1037,6 +1317,20 @@ function init(self)
 	self.fleet_nodes = {}
 	for _ = 1, FLEET_POOL do make_marker(self.fleet_nodes) end
 
+	-- Route segments, pooled like everything else on the map. Created before the
+	-- fleet markers would draw over them, which is what we want: the marker is
+	-- the force, the line is only where it is going.
+	self.route_nodes = {}
+	for _ = 1, ROUTE_POOL do
+		local bar = ui.sprite(0, 0, 10, ROUTE_WIDTH, "solid", ui.ACCENT)
+		gui.set_pivot(bar, gui.PIVOT_CENTER)
+		gui.set_enabled(bar, false)
+		local dot = ui.sprite(0, 0, ROUTE_NODE, ROUTE_NODE, "pill", ui.ACCENT)
+		gui.set_pivot(dot, gui.PIVOT_CENTER)
+		gui.set_enabled(dot, false)
+		self.route_nodes[#self.route_nodes + 1] = { bar = bar, dot = dot }
+	end
+
 	self.status_text = ui.text(0, 0, "", ui.TITLE, ui.DIM, { pivot = gui.PIVOT_CENTER })
 	gui.set_enabled(self.status_text, false)
 
@@ -1045,6 +1339,9 @@ function init(self)
 	self.layout_safe = -1
 	self.pad = ui.inset()
 	self.sheet_nodes = {}
+	self.captain_nodes = {}
+	self.captain_h = 0
+	self.captain_key = nil
 	self.sheet_height = 0
 	self.sheet_dirty = true
 	self.flash, self.flash_timer = nil, 0
@@ -1055,6 +1352,7 @@ end
 
 function final(self)
 	if self.sheet_druid then self.sheet_druid:final() end
+	if self.captain_druid then self.captain_druid:final() end
 	if self.chrome_druid then self.chrome_druid:final() end
 	store.hud_zones = {}
 end
@@ -1070,6 +1368,7 @@ function update(self, dt)
 	end
 
 	self.chrome_druid:update(dt)
+	if self.captain_druid then self.captain_druid:update(dt) end
 	if self.sheet_druid then self.sheet_druid:update(dt) end
 
 	if self.flash then
@@ -1089,6 +1388,8 @@ function update(self, dt)
 	else
 		gui.set_enabled(self.status_text, false)
 	end
+
+	self.clock = (self.clock or 0) + dt
 
 	local g = store.galaxy
 	refresh_overview(self)
@@ -1125,11 +1426,28 @@ function update(self, dt)
 		publish_zones(self)
 	end
 
+	-- The strip is a list of faces, so it only has to be rebuilt when the faces
+	-- change: who is in the field, where they are, and which is selected.
+	local view = store.game_view
+	local key = {}
+	for i = 1, #((view and view.fleets) or {}) do
+		local f = view.fleets[i]
+		key[#key + 1] = table.concat({ f.id, f.portrait or "", f.ships or 0,
+			f.at or 0, (f.eta or 0) > 0 and "m" or "p" }, ":")
+	end
+	key[#key + 1] = tostring(store.selected_fleet)
+	local joined = table.concat(key, "|")
+	if joined ~= self.captain_key then
+		self.captain_key = joined
+		build_captains(self, w, h, self.pad)
+	end
+
 	self.floor_y = self.pad.bottom + BAR_H + bar_extra(self)
 		+ (self.sheet_height > 0 and (ui.GAP + self.sheet_height) or 0)
-	self.ceiling_y = h - self.pad.top - TOP_H
+	self.ceiling_y = h - self.pad.top - TOP_H - (self.captain_h or 0)
 
 	update_labels(self, g, store.camera, w, h)
+	update_routes(self, g, store.camera, w, h)
 	update_fleets(self, g, store.camera, w, h)
 end
 
@@ -1146,6 +1464,9 @@ function on_input(self, action_id, action)
 	if not self.chrome_druid then return false end
 	local converted = ui.gui_action(action)
 	local handled = self.chrome_druid:on_input(action_id, converted)
+	if self.captain_druid and self.captain_druid:on_input(action_id, converted) then
+		handled = true
+	end
 	if self.sheet_druid and self.sheet_druid:on_input(action_id, converted) then
 		handled = true
 	end

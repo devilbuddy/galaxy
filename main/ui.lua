@@ -78,6 +78,10 @@ M.RESOURCE_LABEL = { metal = "Metal", fuel = "Fuel", research = "Research" }
 -- Type and metrics ------------------------------------------------------------
 
 M.ATLAS = "ui"
+-- Its own atlas, not a page of the interface one: forty 128px portraits would
+-- dominate a sheet that is otherwise glyphs and two panel shapes, and they are
+-- third-party art with a different provenance (main/assets/portraits/CREDITS.txt).
+M.PORTRAIT_ATLAS = "portraits"
 M.FONT = "ui"
 M.FONT_BOLD = "ui_bold"
 -- The size the distance-field fonts are baked at; every text size divides by it.
@@ -192,6 +196,34 @@ function M.pill_line(x, y, w, h, colour)
 end
 
 --- A small filled circle, for status marks and legend swatches.
+--- A commander's portrait. `id` is what the simulation reports (portrait_07).
+--
+-- Square, and drawn at whatever size the caller asks for; the source is 128px so
+-- anything up to that is a downscale. Falls back to nothing rather than erroring
+-- if the id is missing, because a face is decoration and a missing one must not
+-- take a screen down with it.
+function M.portrait(x, y, size, id, opts)
+	opts = opts or {}
+	local node = born(gui.new_box_node(vmath.vector3(x, y, 0),
+		vmath.vector3(size, size, 0)))
+	gui.set_pivot(node, gui.PIVOT_NW)
+	gui.set_texture(node, M.PORTRAIT_ATLAS)
+	local ok = pcall(gui.play_flipbook, node, id or "portrait_01")
+	if not ok then pcall(gui.play_flipbook, node, "portrait_01") end
+	-- The ring goes on top, so it covers the mask's soft edge rather than
+	-- sitting behind it and leaving a pale halo.
+	if opts.ring ~= false then
+		M.ring(x, y, size, opts.ring_colour or M.BORDER)
+	end
+	return node
+end
+
+--- A circle outline. The capsule texture is a circle when it is square, and it
+--- must not be 9-sliced at that size - see the note on M.pill.
+function M.ring(x, y, size, colour)
+	return M.sprite(x, y, size, size, "pill_line", colour or M.BORDER)
+end
+
 function M.dot(x, y, size, colour)
 	return M.sprite(x, y, size, size, "pill", colour)
 end

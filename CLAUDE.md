@@ -448,6 +448,7 @@ RPCs in `server/modules/game_rpc.lua`:
 | `game.list` | open lobbies, **and separately** the caller's own games |
 | `game.join` / `game.start` | lobby management; `join` carries the race pick |
 | `game.state` | the caller's fogged view plus events since a given turn |
+| `game.route` | what path an order would take, for the client to draw |
 | `game.orders` | submit (and freely revise) orders for the coming turn |
 
 An order is one of five shapes, and `game.orders` replaces the whole batch:
@@ -741,6 +742,71 @@ still animates a press is indistinguishable from a broken one:
 `set_enabled` picks a style of its own, so the exact one has to be applied
 *after* it.
 
+### Showing a route, without a second pathfinder
+
+**The map draws the path a force will take, and the server computes it.** A
+committed route is already in the wire (`view.fleets[].route`, expanded by the
+resolver). A *staged* order is not: the client only picks a destination, and the
+resolver expands it lane by lane when the turn runs.
+
+The obvious shortcut is to run `path.find` client-side for the preview - the
+generator is right there and the map is public. Don't. It is a second
+implementation of an authoritative decision, running against a fogged view, and
+the day the two disagree the player is looking at a line that lies. `game.route`
+asks the server instead, and it calls `resolve.expand_route` - the *same*
+function the turn will use.
+
+Two things fell out of that which are worth keeping:
+
+- **An unroutable order is refused when it is issued**, not hours later. The
+  route request is what discovers that a destination is beyond
+  `max_route_hops`; before it, such an order sat in the bar looking fine and was
+  rejected at resolution.
+- The preview fields (`path`, `path_from`) are stripped from the batch before it
+  is sent. They exist to draw a line; the server expands the waypoints itself,
+  against the map as it will be then.
+
+Route segments are pooled GUI nodes, like the fleet markers and the labels, for
+the same reasons: constant thickness at every zoom, and no vertex buffer to
+rebuild when a plan changes.
+
+### The commander strip
+
+A row of faces under the overview bar, one per force in the field, each showing
+its strength. Tapping one selects that commander **and glides the camera to
+them** - to where they actually are, part way along a lane if they are under
+way, so the view lands on the marker rather than behind it.
+
+It is the roster and the way around the map at once. With a cap of four there
+are never enough commanders to need a list, and a player thinks in terms of
+"where is Kess", not "which system was that". It is also the only way to move
+the camera deliberately, since zoom is pinch-only and pinch cannot be injected.
+
+The camera **eases** rather than cuts (`focus` in `main/camera.script`): the map
+is the one thing the player holds a mental picture of, and a cut leaves them
+re-reading the screen to work out what moved. Any touch on the map cancels the
+glide - it is theirs again the moment they reach for it.
+
+The strip is rebuilt only when the roster changes, keyed on who is in the field,
+where, how strong and which is selected. It has its own Druid instance, because
+it is a region that gets rebuilt.
+
+### What moves, and what must not
+
+Two things on the map animate, and the line between them is deliberate.
+
+- **A force under way pulses**; a parked one is still. Position only changes when
+  a turn resolves, so without this a fleet crossing a lane looks exactly like one
+  sitting on a world.
+- **A committed route flows** - the nodes slide along their legs toward the
+  destination, which is pinned and larger. A staged route does not: it is a plan
+  in the bar, not a force in motion.
+
+**Animating the actual position would be a lie.** A fleet's progress advances one
+turn's worth at a time, and where it can be intercepted is decided at the turn
+boundary. A marker gliding smoothly between two turns would be showing the player
+somewhere the simulation says it never was.
+
 ### Keeping up with the turn
 
 **The map polls every ten seconds** (`POLL_SECONDS` in `main/galaxy.script`)
@@ -748,6 +814,14 @@ while a game is open. Turns resolve on a schedule measured in hours, so this onl
 has to be brisk enough that a player watching the screen sees the turn land — and
 the request is also what drives the server's lazy resolution, so a polling client
 is what makes a game advance at all.
+
+**How far the digest has been read is persisted per game** (`main/seen.lua`).
+The client always told the server the last turn it saw - `game.state` takes a
+`since_turn` - but `store.seen_turn` was a plain module value, so every launch
+asked from turn 0 and got back the whole window the server is willing to send
+(`MAX_DIGEST_TURNS`, forty turns). Opening a game you had been reading five
+minutes earlier replayed a fortnight. It is saved per game, because a player
+with three on the go has read each to a different point.
 
 **A turn that lands while the map is open is held, not shown.** A popup must not
 drop on top of somebody mid-read, but the digest must not be lost either — and
@@ -893,6 +967,32 @@ fontTools refuses rather than inventing one.
   records every node the kit creates; the HUD relayouts on a window change and
   on the safe-area insets arriving, and without this each rebuild leaked a whole
   layout until the scene ran out of nodes.
+
+### Commander portraits
+
+Forty faces in `main/assets/portraits/`, their own atlas
+(`main/portraits.atlas`), drawn by `ui.portrait`. **Third-party art, not a build
+artifact** - unlike everything in `main/assets/ui/`, these are not regenerable
+from a script, and `main/assets/portraits/CREDITS.txt` records the artist and
+that the licence has not been established.
+
+Portraits are masked to a disc at import and drawn with a ring
+(`ui.portrait`, `ui.ring`), so the ring covers the mask's soft edge instead of
+leaving a pale halo behind it.
+
+`tools/import_portraits.py` records the provenance: which forty of the source
+set were taken, at what size, and in what order. **The order is load-bearing.**
+A portrait is chosen by the same index as the surname
+(`commanders.portrait`), so the nth officer a player raises always has both the
+same name and the same face; reordering the set silently reassigns every
+existing commander's portrait. There is a fallback from surname to index for
+records raised before officers carried a number, without which every one of
+them shared a single face.
+
+The importer also makes the baked-in black background transparent, by flooding
+inward from the border. Keying out *every* black pixel is not an option - this
+is pixel art and its outlines are black, so that punches holes through the
+character.
 
 ### Safe area
 
@@ -1077,10 +1177,6 @@ Defold source files (`.collection`, `.go`, `.atlas`, `.gui`, `.sprite`, `.input_
 - **Armies are still one number.** The commander layer is in; unit composition -
   the thing that would make "you brought the wrong army" a real decision - is
   not. Combat remains a Lanchester exchange on a single strength value.
-- **A commander's rank and command capacity are drawn but unverified on a
-  device.** The rows are in the HUD sheet and the empire screen and both compile,
-  but the only game on the test device resolves a turn every few seconds, so a
-  staged launch is consumed before it can be sent, and a fresh game cannot be
-  started solo (the server requires two players).
-- Nothing renders a fleet's *route* on the map. You can see where a fleet is and
-  the sheet says where it is bound, but not the path it will take.
+- **A route longer than `ROUTE_POOL` segments draws only its first 64 legs.**
+  The pool is sized for a busy turn rather than for every commander on a
+  twelve-lane campaign, since pooled nodes cost whether or not they are used.

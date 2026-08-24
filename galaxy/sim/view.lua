@@ -181,6 +181,7 @@ function M.project(galaxy, state, player)
 				-- The commander, flattened: the client should never have to
 				-- know the level curve to draw a rank or a capacity bar.
 				level = profile.level, rank = profile.rank,
+				portrait = profile.portrait,
 				xp = profile.xp, next_xp = profile.next_xp,
 				command = profile.command, speed = profile.speed,
 				tactics = profile.tactics,

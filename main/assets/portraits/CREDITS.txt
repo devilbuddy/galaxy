@@ -1,0 +1,13 @@
+Commander portraits
+===================
+
+Art by **Batareya**, from a set distributed as "PORTRAITS (by Batareya)".
+
+Forty of the five hundred images in that set were imported, resized to 128x128;
+see tools/import_portraits.py for exactly which and why the order matters.
+
+LICENCE: NOT ESTABLISHED. The source archive carried no licence file. These are
+in the repository so the game builds and can be looked at, but the terms for
+using them in a released build have not been checked. Confirm the licence with
+the artist before shipping, or replace the set - swapping the forty files keeps
+every commander's portrait mapping intact.

@@ -57,6 +57,30 @@ local SURNAMES = {
 	"Eriksen", "Zamora",
 }
 
+--- The portrait that goes with an officer's number.
+--
+-- Indexed by the same counter as the surname, so Kess always has Kess's face -
+-- and, because the counter is per player and never re-used, two officers in one
+-- empire never look alike until it wraps. The client resolves this to an image
+-- in main/portraits.atlas; the simulation only ever deals in the id.
+--
+-- The atlas holds exactly as many portraits as there are surnames. If that ever
+-- stops being true this still returns something valid, but the pairing drifts.
+function M.portrait(number, name)
+	local n = tonumber(number)
+	if not n and name then
+		-- A commander raised before officers carried a number - or any record
+		-- that has been through a JSON round trip that dropped it - is still
+		-- identifiable by surname, which is what the number chose in the first
+		-- place. Without this fallback every such officer shares one face.
+		for i = 1, #SURNAMES do
+			if SURNAMES[i] == name then n = i break end
+		end
+	end
+	n = math.max(1, math.floor(n or 1))
+	return string.format("portrait_%02d", ((n - 1) % #SURNAMES) + 1)
+end
+
 --- A commander's name, drawn deterministically from the player's own counter.
 --
 -- Indexed rather than rolled so it cannot depend on how many battles have been
@@ -154,6 +178,7 @@ function M.profile(commander, mods)
 	return {
 		level = level,
 		rank = M.rank(level),
+		portrait = M.portrait(commander.number, commander.name),
 		xp = commander.xp or 0,
 		next_xp = (level < rules.commander_max_level)
 			and M.xp_for_level(level + 1) or nil,

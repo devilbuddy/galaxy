@@ -375,12 +375,17 @@ local function build_forces(self, view, x, top, width, height)
 				subtitle = "Holding at " .. (at and at.name or "?")
 			end
 			local row = ui.panel(0, y, inner_w, 96, ui.CARD_ALT)
-			ui.icon(16, y - 34, 30, "icon_warship", moving and ui.ACCENT or ui.TEXT)
+			-- The officer's face, which is the whole reason the roster is worth
+			-- looking at rather than reading. Same index as the surname, so it
+			-- never changes under a given commander.
+			ui.portrait(14, y - 12, 64, f.portrait,
+				{ ring_colour = moving and ui.ACCENT or ui.BORDER })
+			ui.icon(88, y - 34, 26, "icon_warship", moving and ui.ACCENT or ui.TEXT)
 			-- Rank before the name, the way it would be said out loud. It is
 			-- the level made legible: a player should be able to tell a veteran
 			-- from a green officer without reading a number.
-			ui.body(60, y - 30, (f.rank and (f.rank .. " ") or "") .. f.name)
-			ui.small(60, y - 58, subtitle, ui.DIM, { width = inner_w - 200 })
+			ui.body(122, y - 30, (f.rank and (f.rank .. " ") or "") .. f.name)
+			ui.small(122, y - 58, subtitle, ui.DIM, { width = inner_w - 268 })
 			-- Strength against what this commander can actually lead: a force
 			-- at capacity is why the rest of your ships are sitting at home.
 			ui.value(inner_w - 16, y - 34, tostring(f.ships), ui.H2,

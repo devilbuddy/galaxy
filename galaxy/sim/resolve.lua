@@ -364,7 +364,13 @@ end
 -- The player names *where* to go; the pathfinder works out how, so fleets never
 -- move in straight lines and a route can be plotted around a defended world.
 -- Returns nil plus a reason if any leg is unreachable.
-local function expand_route(galaxy, lengths, from, fixed, waypoints, hops_allowed)
+--- Expand a list of waypoints into the lane-by-lane route a fleet will fly.
+--
+-- Exported because the client needs to *draw* the route the moment an order is
+-- issued, and a preview computed by a different implementation is a preview that
+-- can lie. There is one function, and the server runs it for both purposes -
+-- see `game.route` in server/modules/game_rpc.lua.
+function M.expand_route(galaxy, lengths, from, fixed, waypoints, hops_allowed)
 	local route, hops = {}, 0
 	-- A fleet already in a lane must finish it before it can turn, so its
 	-- current leg is fixed and everything is plotted from the far end.
@@ -385,6 +391,8 @@ local function expand_route(galaxy, lengths, from, fixed, waypoints, hops_allowe
 	end
 	return route
 end
+
+local expand_route = M.expand_route
 
 --- Launch, redirect and stand down. Invalid orders are dropped with a reason
 --- rather than silently ignored, so a client can show why.

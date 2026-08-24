@@ -165,6 +165,19 @@ function M.game_orders(game_id, orders, done)
 	M.rpc("game.orders", { game_id = game_id, orders = orders or {} }, done)
 end
 
+--- Ask what path an order would actually take.
+--
+-- The route is expanded server-side by the same function the resolver uses, so
+-- what the map draws is what the turn will fly. `fixed` is the lane a moving
+-- fleet has to finish before it can turn, or nil.
+-- @param done function(result, err) with result.route as a list of system ids
+function M.game_route(game_id, from, waypoints, fixed, done)
+	M.rpc("game.route", {
+		game_id = game_id, from = from,
+		waypoints = waypoints or {}, fixed = fixed,
+	}, done)
+end
+
 --- Ask the server for the galaxy with this seed.
 -- @param done function(galaxy, err, info)
 function M.fetch_galaxy(seed, done)

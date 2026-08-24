@@ -21,6 +21,7 @@ local nk = require("nakama")
 local galaxy_cache = require("galaxy_cache")
 local sim_state = require("galaxy.sim.state")
 local resolve = require("galaxy.sim.resolve")
+local modifiers = require("galaxy.sim.modifiers")
 local view = require("galaxy.sim.view")
 local races = require("galaxy.sim.races")
 local tech = require("galaxy.sim.tech")
@@ -454,6 +455,50 @@ local function rpc_state(context, payload)
 	return nk.json_encode(response)
 end
 
+--- game.route { game_id, from, waypoints } - what path would this order take?
+--
+-- The client draws a route the moment an order is issued, and it must be the
+-- route the turn will actually fly. Rather than reimplement the pathfinder
+-- client-side - where it would run on a fogged view and quietly disagree - the
+-- expansion is asked for here and runs the identical function the resolver
+-- uses (`resolve.expand_route`).
+--
+-- Read-only: it inspects nothing but the public map and the caller's own
+-- modifiers, and changes no state.
+local function rpc_route(context, payload)
+	local input = decode_payload(payload)
+	local user_id = context.user_id or fail("must be authenticated")
+	local game = read_one(GAMES, tostring(input.game_id or ""), nil)
+	if not game then fail("no such game") end
+
+	local me = player_index(game, user_id)
+	if not me then fail("you are not in that game") end
+
+	local from = tonumber(input.from)
+	if not from then fail("no starting system") end
+
+	local waypoints = {}
+	if type(input.waypoints) == "table" then
+		for i = 1, #input.waypoints do
+			local id = tonumber(input.waypoints[i])
+			if id then waypoints[#waypoints + 1] = math.floor(id) end
+		end
+	end
+	if #waypoints == 0 then fail("nowhere to go") end
+
+	local entry = galaxy_cache.get(game.seed)
+	local state = read_one(STATE, game.id, nil)
+	local player = state and state.players and state.players[me]
+	local mods = modifiers.of(player)
+
+	local route, why = resolve.expand_route(entry.galaxy, entry.lengths,
+		math.floor(from), tonumber(input.fixed), waypoints, mods.hops)
+	if not route then
+		return nk.json_encode({ route = {}, reason = why or "no route" })
+	end
+	return nk.json_encode({ route = route })
+end
+
 --- game.orders { game_id, orders: [ order ] }
 --
 -- An order is one of:
@@ -586,5 +631,6 @@ nk.register_rpc(rpc_join, "game.join")
 nk.register_rpc(rpc_start, "game.start")
 nk.register_rpc(rpc_state, "game.state")
 nk.register_rpc(rpc_orders, "game.orders")
+nk.register_rpc(rpc_route, "game.route")
 
 nk.logger_info("game module loaded")
