@@ -1132,8 +1132,52 @@ which is a different space again.
 - **`druid.no_auto_input = 1`** — stops Druid managing input focus. Its
   `final()` posts `release_input_focus` for the whole script, which deafens a
   scene that runs more than one Druid instance. See Druid above.
-- **`physics.scale = 0.01`, `physics.gravity_y = -1000`** — inherited from the
-  template. Nothing uses physics yet; the world is in pixel units if it ever does.
+- **`native_extension.app_manifest = /galaxy.appmanifest`** — excludes physics
+  from the built engine. Nothing has ever used it, and dropping Box2D, Bullet and
+  the `[physics]` settings took the stripped release `libgalaxy.so` from 4.1 MB
+  to 3.6 MB (APK 6.3 → 5.8 MB). The stub `physics_null` has to be linked in its
+  place; removing it too is a link error, not a smaller binary. Excluding
+  anything means the engine is relinked, so bundles go through the extension
+  build server - already true because of the automation bridge.
+- **`automation_bridge.application_api = 1`** — lets the game publish state to
+  the bridge. Debug builds only. See "Driving a running build" above.
+
+## Driving a running build
+
+`tools/drive.py` talks to a debug build through
+[extension-automation-bridge](https://github.com/defold/extension-automation-bridge),
+which serves an HTTP API on Defold's engine service port. **Release builds expose
+neither the endpoint nor the `automation_bridge` Lua module**, so none of it
+ships - it cost nothing in the 5.8 MB release APK.
+
+```bash
+adb forward tcp:8001 tcp:8001          # device; desktop uses the editor's port
+python3 tools/drive.py state           # transform, selection, staged orders
+python3 tools/drive.py find EMPIRE     # visible text and where it is
+python3 tools/drive.py click RESUME    # click by meaning, not by pixel
+python3 tools/drive.py star "Rigel VI" # where a star is, in device pixels
+python3 tools/drive.py tapstar "Rigel VI"
+```
+
+**Select by meaning, never by coordinates.** Hardcoded taps rot: RESUME moved the
+moment the lobby held seven games, and a stale constant silently clicks nothing.
+
+**`main/automation.lua` exists because the bridge's own GUI bounds are the wrong
+space here.** It reports node positions against Defold's *configured* display,
+and this project renders through a GUI projection the render script builds
+itself - the identical reason `ui.install_druid_picking` had to replace
+`gui.pick_node`. So the game publishes the transform (view size, framebuffer
+size, camera, zoom) as bridge state, and the client converts world to device
+exactly as the map does. Star positions are regenerated from the seed under
+luajit rather than transmitted, since the galaxy is a pure function of it.
+
+Working this out by hand first is what makes the point: two reference taps gave a
+camera of `(-191.75, 243.29)` at zoom `0.37181` against the true
+`(-184.38, 256.88)` at `0.37131`, and every star tap missed.
+
+**Known limitation:** the element query returns the star labels and the top bar,
+but not the system sheet's own buttons. `state` and `tapstar` are unaffected -
+they do not depend on it - and `click` works for anything it can see.
 
 ## File formats
 

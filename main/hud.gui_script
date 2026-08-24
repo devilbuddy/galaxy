@@ -21,6 +21,7 @@
 
 local store = require("main.store")
 local seen = require("main.seen")
+local automation = require("main.automation")
 local backend = require("main.backend")
 local ui = require("main.ui")
 local monarch = require("monarch.monarch")
@@ -1390,6 +1391,7 @@ function update(self, dt)
 	end
 
 	self.clock = (self.clock or 0) + dt
+	automation.update(dt)
 
 	local g = store.galaxy
 	refresh_overview(self)
