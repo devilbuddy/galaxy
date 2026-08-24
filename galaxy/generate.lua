@@ -126,6 +126,43 @@ function M.build(seed, cfg)
 		end
 	end
 
+	-- 6b. Guarantee enough habitable worlds to be worth fighting over.
+	--
+	-- Habitability is a per-star roll, and on a small map its variance decides
+	-- the game: the same 120-star setting produced 13 colonies on one seed and
+	-- 26 on another, and 13 is not a playable four-player map. So the count is
+	-- topped up deterministically - the classes most likely to be habitable go
+	-- first, ties broken by index, which keeps the same seed reproducible while
+	-- leaving *which* worlds are habitable driven by the roll.
+	local target = math.floor(#stars * (cfg.colony_fraction or 0) + 0.5)
+	local habitable_count = 0
+	for i = 1, #stars do
+		if stars[i].habitable then habitable_count = habitable_count + 1 end
+	end
+	if habitable_count < target then
+		local candidates = {}
+		for i = 1, #stars do
+			if not stars[i].habitable then
+				local entry = starclass.by_id(stars[i].class)
+				candidates[#candidates + 1] = {
+					id = i,
+					-- Never zero, so a map of pulsars can still be settled.
+					weight = (entry and entry.habitable or 0) + 0.001,
+				}
+			end
+		end
+		table.sort(candidates, function(p, q)
+			if p.weight ~= q.weight then return p.weight > q.weight end
+			return p.id < q.id
+		end)
+		local promote = target - habitable_count
+		for i = 1, #candidates do
+			if promote <= 0 then break end
+			stars[candidates[i].id].habitable = true
+			promote = promote - 1
+		end
+	end
+
 	-- 7. Lanes in world units, tagged with whether they cross a border.
 	local out_lanes = {}
 	for i = 1, #lanes do

@@ -1,22 +1,27 @@
 --- The research tree.
 --
--- Sixteen technologies in four branches. A player researches one at a time:
--- their research income accumulates into the chosen tech until it completes,
--- which suits a game checked twice a day far better than a per-turn
--- allocation slider would - it is one decision that stays made.
+-- Twelve technologies in three branches, all of them about waging war: moving
+-- fleets, winning fights, and seeing and fortifying ground. There is nothing
+-- here about trade or terraforming, because conquest is how an empire grows.
+--
+-- A player researches one at a time: research accumulates in the pool and the
+-- chosen technology is bought the moment it is affordable, which suits a game
+-- checked twice a day far better than a per-turn allocation would - it is one
+-- decision that stays made.
 --
 -- Every tech does its work by contributing to the same effect table races use
--- (galaxy/sim/races.lua). Nothing in the resolver branches on a tech id, so
--- the tree is data and the rules stay readable.
+-- (galaxy/sim/races.lua). Nothing in the resolver branches on a tech id, so the
+-- tree is data and the rules stay readable.
 --
 -- Effect keys, all additive fractions on top of 1.0 unless noted:
 --
 --   growth capacity            population
---   industry ship_cost cap     shipbuilding
+--   industry ship_cost cap     output and how big a fleet it can support
 --   attack defence capture     combat ("capture" = population kept on capture)
---   speed upkeep hops(int)     movement and its fuel bill
---   yield_metal yield_fuel yield_research trade   income
---   vision(int)                extra lanes of visibility
+--   speed hops(int)            movement and how far a route may be plotted
+--   research building_cost     the two things output and research buy
+--   fortress                   how much a fortress is worth
+--   vision(int)                lanes of sight, on top of radar
 --   tech_cost                  price of everything still unresearched
 
 local rules = require("galaxy.sim.rules")
@@ -24,121 +29,91 @@ local rules = require("galaxy.sim.rules")
 local M = {}
 
 M.BRANCHES = {
-	{ id = "propulsion", label = "Propulsion" },
-	{ id = "munitions",  label = "Munitions" },
-	{ id = "industry",   label = "Industry" },
-	{ id = "sciences",   label = "Sciences" },
+	{ id = "propulsion",  label = "Propulsion" },
+	{ id = "munitions",   label = "Munitions" },
+	{ id = "engineering", label = "Engineering" },
 }
 
--- Tier is only used for layout and sort order; prerequisites are what the
--- rules actually enforce.
+-- Tier is only used for layout and sort order; prerequisites are what the rules
+-- actually enforce. Every branch is shaped 1 - 2 - 1, which is what lets the
+-- client draw it as a tree that forks and merges.
 M.TECHS = {
-	-- Propulsion ------------------------------------------------------------
+	-- Propulsion --------------------------------------------------------------
 	{
 		id = "ion_drive", label = "Ion Drive", branch = "propulsion", tier = 1,
 		blurb = "Fleets cross more of a lane each turn.",
-		cost = { research = 80 }, requires = {},
+		cost = 80, requires = {},
 		effects = { speed = 0.15 },
 	},
 	{
 		id = "jump_calibration", label = "Jump Calibration", branch = "propulsion", tier = 2,
-		blurb = "Longer routes can be plotted in a single order.",
-		cost = { research = 300, metal = 60 }, requires = { "ion_drive" },
+		blurb = "Plot a longer campaign in a single order.",
+		cost = 300, requires = { "ion_drive" },
 		effects = { hops = 4, speed = 0.10 },
 	},
 	{
-		id = "fuel_scoops", label = "Ramscoops", branch = "propulsion", tier = 2,
-		blurb = "Warships largely refuel themselves.",
-		cost = { research = 300, metal = 40 }, requires = { "ion_drive" },
-		effects = { upkeep = -0.30, yield_fuel = 0.10 },
+		id = "fleet_logistics", label = "Fleet Logistics", branch = "propulsion", tier = 2,
+		blurb = "A bigger navy, and cheaper hulls to fill it.",
+		cost = 320, requires = { "ion_drive" },
+		effects = { cap = 0.25, ship_cost = -0.15 },
 	},
 	{
 		id = "warp_lattice", label = "Warp Lattice", branch = "propulsion", tier = 3,
 		blurb = "Strike anywhere on your frontier in one turn.",
-		cost = { research = 760, metal = 220 },
-		requires = { "jump_calibration", "fuel_scoops" },
+		cost = 760, requires = { "jump_calibration", "fleet_logistics" },
 		effects = { speed = 0.35 },
 	},
 
-	-- Munitions -------------------------------------------------------------
+	-- Munitions ---------------------------------------------------------------
 	{
 		id = "mass_drivers", label = "Mass Drivers", branch = "munitions", tier = 1,
 		blurb = "Heavier throw weight on the attack.",
-		cost = { research = 80, metal = 30 }, requires = {},
+		cost = 80, requires = {},
 		effects = { attack = 0.12 },
-	},
-	{
-		id = "ablative_plating", label = "Ablative Plating", branch = "munitions", tier = 2,
-		blurb = "Garrisons survive what would have broken them.",
-		cost = { research = 300, metal = 120 }, requires = { "mass_drivers" },
-		effects = { defence = 0.18 },
 	},
 	{
 		id = "targeting_ai", label = "Targeting Intellects", branch = "munitions", tier = 2,
 		blurb = "Fewer shots wasted, in every engagement.",
-		cost = { research = 320, metal = 60 }, requires = { "mass_drivers" },
+		cost = 320, requires = { "mass_drivers" },
 		effects = { attack = 0.20 },
+	},
+	{
+		id = "ablative_plating", label = "Ablative Plating", branch = "munitions", tier = 2,
+		blurb = "Defenders survive what would have broken them.",
+		cost = 300, requires = { "mass_drivers" },
+		effects = { defence = 0.18 },
 	},
 	{
 		id = "siege_doctrine", label = "Siege Doctrine", branch = "munitions", tier = 3,
 		blurb = "Take worlds intact instead of taking ruins.",
-		cost = { research = 760, metal = 180 },
-		requires = { "ablative_plating", "targeting_ai" },
-		effects = { attack = 0.15, capture = 0.20 },
+		cost = 760, requires = { "targeting_ai", "ablative_plating" },
+		effects = { attack = 0.15, capture = 0.25 },
 	},
 
-	-- Industry --------------------------------------------------------------
+	-- Engineering -------------------------------------------------------------
 	{
-		id = "orbital_yards", label = "Orbital Yards", branch = "industry", tier = 1,
-		blurb = "Every world builds faster.",
-		cost = { research = 85, metal = 40 }, requires = {},
-		effects = { industry = 0.22 },
-	},
-	{
-		id = "deep_core_mining", label = "Deep Core Mining", branch = "industry", tier = 2,
-		blurb = "Far more metal out of the same rock.",
-		cost = { research = 300, metal = 140 }, requires = { "orbital_yards" },
-		effects = { yield_metal = 0.35 },
-	},
-	{
-		id = "logistics_net", label = "Logistics Net", branch = "industry", tier = 2,
-		blurb = "Cheaper hulls, a bigger navy, richer trade.",
-		cost = { research = 320, metal = 80 }, requires = { "orbital_yards" },
-		effects = { cap = 0.25, ship_cost = -0.15, trade = 0.25 },
-	},
-	{
-		id = "von_neumann_forges", label = "Von Neumann Forges", branch = "industry", tier = 3,
-		blurb = "The yards build the yards.",
-		cost = { research = 820, metal = 300 },
-		requires = { "deep_core_mining", "logistics_net" },
-		effects = { industry = 0.30, yield_metal = 0.20 },
-	},
-
-	-- Sciences --------------------------------------------------------------
-	{
-		id = "survey_network", label = "Survey Network", branch = "sciences", tier = 1,
+		id = "survey_network", label = "Survey Network", branch = "engineering", tier = 1,
 		blurb = "See a further lane out from everything you hold.",
-		cost = { research = 70 }, requires = {},
-		effects = { vision = 1, yield_research = 0.15 },
+		cost = 70, requires = {},
+		effects = { vision = 1, research = 0.15 },
 	},
 	{
-		id = "terraforming", label = "Terraforming", branch = "sciences", tier = 2,
-		blurb = "Worlds hold more people, and fill up faster.",
-		cost = { research = 320, metal = 100 }, requires = { "survey_network" },
-		effects = { capacity = 0.25, growth = 0.18 },
+		id = "orbital_yards", label = "Orbital Yards", branch = "engineering", tier = 2,
+		blurb = "More out of every world, and cheaper to develop one.",
+		cost = 320, requires = { "survey_network" },
+		effects = { industry = 0.25, building_cost = -0.20 },
 	},
 	{
-		id = "xeno_archives", label = "Xeno Archives", branch = "sciences", tier = 2,
-		blurb = "Read the things the precursors left behind.",
-		cost = { research = 300, metal = 40 }, requires = { "survey_network" },
-		effects = { yield_research = 0.35 },
+		id = "xeno_archives", label = "Xeno Archives", branch = "engineering", tier = 2,
+		blurb = "Read what the precursors left behind.",
+		cost = 300, requires = { "survey_network" },
+		effects = { research = 0.35 },
 	},
 	{
-		id = "singularity_labs", label = "Singularity Labs", branch = "sciences", tier = 3,
-		blurb = "Knowledge compounds, and pays for itself.",
-		cost = { research = 800, metal = 160 },
-		requires = { "xeno_archives", "terraforming" },
-		effects = { yield_research = 0.40, yield_fuel = 0.25, tech_cost = -0.10 },
+		id = "bastion_protocols", label = "Bastion Protocols", branch = "engineering", tier = 3,
+		blurb = "Fortifications that hold a chokepoint on their own.",
+		cost = 800, requires = { "orbital_yards", "xeno_archives" },
+		effects = { fortress = 0.50, vision = 1 },
 	},
 }
 
@@ -182,31 +157,20 @@ function M.available(known)
 	return out
 end
 
---- What a tech costs this player, after their tech_cost modifier.
+--- What a tech costs this player, in research points.
 --
 -- The numbers above are list prices, and what they encode is the *ratio*
--- between techs - which is design. How long the tree takes to walk is tuning,
--- and lives in one place: rules.tech_cost_scale.
+-- between technologies - which is design. How long the tree takes to walk is
+-- tuning, and lives in one place: rules.tech_cost_scale.
 --
--- That scale applies to the research half only. Metal is also the only thing
--- that buys ships, so multiplying it too made the full tree cost about as much
--- metal as a whole game produces - the tree stopped being a parallel
--- investment and became an alternative to having a navy. The metal figures
--- above are meant as a side-constraint that keeps a pure-research empire
--- honest, and they are already the right size for that.
---
--- Rounded up, and the discount never takes either below a quarter of list
--- price, so stacking it can not make the endgame free.
+-- Rounded up, and the discount never takes it below a quarter of list price, so
+-- stacking discounts cannot make the endgame free.
 function M.cost_of(id, discount)
 	local tech = BY_ID[id]
 	if not tech then return nil end
-	local scale = (1 + (discount or 0))
+	local scale = 1 + (discount or 0)
 	if scale < 0.25 then scale = 0.25 end
-	return {
-		research = math.ceil((tech.cost.research or 0) * scale * rules.tech_cost_scale),
-		metal = math.ceil((tech.cost.metal or 0) * scale),
-		fuel = 0,
-	}
+	return math.ceil(tech.cost * scale * rules.tech_cost_scale)
 end
 
 --- Fold every researched tech into one effect table.

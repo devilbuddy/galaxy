@@ -75,19 +75,25 @@ do
 	local view = require("galaxy.sim.view")
 	local sim_path = require("galaxy.sim.path")
 
-	local galaxy = gen.build(424242)
+	local galaxy = gen.build(424242, { star_count = 160 })
 	local lengths = sim_path.lane_lengths(galaxy)
 	local state = st.new(galaxy, {
 		{ id = "a", name = "A", race = "kepler" },
 		{ id = "b", name = "B", race = "vorn" },
 	})
+	local home = state.players[1].home
+	state.systems[home].ships = 40
+	resolve.turn(galaxy, state, {
+		{ player = 1, kind = "launch", at = home, ships = 15,
+			route = { galaxy.adjacency[home][1] } },
+		{ player = 1, kind = "build", at = home, building = "radar" },
+	}, lengths)
 	for _ = 1, 3 do resolve.turn(galaxy, state, {}, lengths) end
 
 	local v = view.project(galaxy, state, 1)
 	local required = {
-		"turn", "you", "players", "systems", "fleets", "routes",
-		"stock", "income", "tech", "available_tech", "warship_share",
-		"race", "rates",
+		"turn", "you", "players", "systems", "fleets", "contacts",
+		"research", "tech", "available_tech", "race", "rates",
 	}
 	local missing = {}
 	for i = 1, #required do
@@ -96,11 +102,8 @@ do
 	check("the projection has every field the client reads", #missing == 0,
 		table.concat(missing, ", "))
 
-	for _, kind in ipairs({ "metal", "fuel", "research" }) do
-		check("stock." .. kind .. " is a number", type(v.stock[kind]) == "number")
-		check("income." .. kind .. " is a number", type(v.income[kind]) == "number")
-	end
-	for _, key in ipairs({ "upkeep", "speed", "hops", "vision", "tech_cost", "ship_cost" }) do
+	for _, key in ipairs({ "ships", "garrisoned", "ship_cap", "population",
+		"speed", "hops", "vision", "tech_cost", "ship_cost", "building_cost" }) do
 		check("rates." .. key .. " is a number", type(v.rates[key]) == "number")
 	end
 
@@ -109,10 +112,17 @@ do
 	check("researched technologies are an array, not a set",
 		type(v.tech) == "table" and (next(v.tech) == nil or type(next(v.tech)) == "number"))
 
-	local home = tostring(state.players[1].home)
-	local mine = v.systems[home]
-	check("your own systems report freighters", mine and mine.freighters ~= nil)
-	check("your own systems report a capacity", mine and type(mine.capacity) == "number")
+	local mine = v.systems[tostring(home)]
+	check("your own systems report their garrison", mine and mine.garrison ~= nil)
+	check("...their building levels", mine and mine.buildings
+		and mine.buildings.radar ~= nil and mine.buildings.fortress ~= nil)
+	check("...what they defend themselves with", mine and type(mine.defence) == "number")
+	check("...and what they produce", mine and type(mine.output) == "number")
+	check("a world under construction reports its progress",
+		mine and mine.building and mine.building.cost and mine.building.paid)
+
+	check("your fleets are named and routed",
+		#v.fleets > 0 and v.fleets[1].name and v.fleets[1].route ~= nil)
 
 	-- Everything a player can see must be describable; nothing may arrive with
 	-- an owner the roster cannot name.
@@ -121,6 +131,13 @@ do
 		if sys.owner and sys.owner > 0 and not v.players[sys.owner] then bad = id end
 	end
 	check("no system names a player the roster does not have", bad == nil, bad)
+
+	-- Every system kind the client renders must be derivable from public data.
+	local systems_mod = require("galaxy.sim.systems")
+	local kinds = {}
+	for id = 1, #galaxy.stars do kinds[systems_mod.kind(galaxy, id)] = true end
+	check("system kinds are derivable client-side from the wire galaxy",
+		kinds.colony and kinds.outpost and kinds.waypoint)
 end
 
 print(failures == 0 and "\nALL WIRE TESTS PASSED" or ("\n" .. failures .. " FAILURE(S)"))

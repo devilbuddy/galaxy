@@ -131,6 +131,7 @@ local function public_game(game)
 		id = game.id,
 		name = game.name,
 		status = game.status,
+		winner = game.winner,
 		seed = game.seed,
 		turn = game.turn,
 		max_players = game.max_players,
@@ -174,14 +175,23 @@ local function catch_up(game, game_version)
 			if submitted and submitted.orders then
 				for k = 1, #submitted.orders do
 					local o = submitted.orders[k]
+					local route = nil
+					if type(o.route) == "table" then
+						route = {}
+						for w = 1, #o.route do
+							local id = tonumber(o.route[w])
+							if id then route[#route + 1] = math.floor(id) end
+						end
+					end
 					orders[#orders + 1] = {
 						player = i,
 						kind = o.kind,
-						from = tonumber(o.from),
-						to = tonumber(o.to),
+						at = tonumber(o.at),
+						fleet = tonumber(o.fleet),
 						ships = tonumber(o.ships),
+						route = route,
+						building = o.building,
 						tech = o.tech,
-						warship_share = tonumber(o.warship_share),
 					}
 				end
 			end
@@ -194,12 +204,23 @@ local function catch_up(game, game_version)
 		game.next_turn_at = game.next_turn_at + game.turn_interval
 		resolved = resolved + 1
 
+		-- Holding enough regions wins outright (galaxy/sim/regions.lua). The
+		-- resolver decides it; this only has to notice and stop the clock.
+		if state.winner then
+			game.status = "finished"
+			game.winner = state.winner
+			break
+		end
+
 		local remaining = 0
 		for i = 1, #state.players do
 			if state.players[i].alive then remaining = remaining + 1 end
 		end
 		if remaining <= 1 then
 			game.status = "finished"
+			for i = 1, #state.players do
+				if state.players[i].alive then game.winner = i end
+			end
 			break
 		end
 	end
@@ -436,16 +457,17 @@ end
 --- game.orders { game_id, orders: [ order ] }
 --
 -- An order is one of:
---   { kind = "move",     from, to, ships }   send warships
---   { kind = "trade",    from, to, ships }   send freighters to open a route
---   { kind = "research", tech }              set the research target
---   { kind = "policy",   warship_share }     split new production
+--   { kind = "launch",   at, ships?, route }    form a fleet from a garrison
+--   { kind = "move",     fleet, ships?, route } redirect one, or detach part
+--   { kind = "garrison", fleet }                stand a fleet down where it is
+--   { kind = "build",    at, building }         raise a level ("" cancels)
+--   { kind = "research", tech }                 set the research target
 --
 -- Orders replace whatever was previously submitted for the coming turn, so a
 -- player can revise their plan any number of times before it resolves. The
--- checks here are shape-only: whether an order is *legal* depends on state
--- that will have moved on by the time it resolves, so the resolver decides
--- that and reports a reason the client can show.
+-- checks here are shape-only: whether an order is *legal* depends on state that
+-- will have moved on by the time it resolves, so the resolver decides that and
+-- emits an `order_rejected` event carrying a reason the client can show.
 local function rpc_orders(context, payload)
 	local input = decode_payload(payload)
 	local user_id = context.user_id or fail("must be authenticated")
@@ -462,45 +484,88 @@ local function rpc_orders(context, payload)
 	local incoming = input.orders
 	if type(incoming) ~= "table" then fail("orders must be an array") end
 
+	--- A route as a list of system ids, or nil when the shape is wrong - which
+	--- the caller reads as "no route given" rather than as an error.
+	local function clean_route(value)
+		if type(value) ~= "table" then return nil end
+		local out = {}
+		for i = 1, #value do
+			local id = tonumber(value[i])
+			if id then out[#out + 1] = math.floor(id) end
+		end
+		return out
+	end
+
 	local clean = {}
-	local seen_research, seen_policy = false, false
+
+	--- Drop earlier orders that this one supersedes. Two research directives in
+	--- one batch would otherwise make the array order meaningful, which no
+	--- client should have to know about, and two build orders for one world
+	--- would fight.
+	local function replace(match)
+		for k = #clean, 1, -1 do
+			if match(clean[k]) then table.remove(clean, k) end
+		end
+	end
+
 	for i = 1, #incoming do
 		local o = incoming[i]
 		local kind = o.kind
-		if kind == nil or kind == "move" or kind == "trade" then
-			local from, to, ships = tonumber(o.from), tonumber(o.to), tonumber(o.ships)
-			if from and to and ships and ships > 0 then
+
+		if kind == "launch" then
+			local at = tonumber(o.at)
+			local route = clean_route(o.route)
+			if at and route and #route > 0 then
 				clean[#clean + 1] = {
-					kind = (kind == "trade") and "trade" or "move",
-					from = math.floor(from), to = math.floor(to), ships = math.floor(ships),
+					kind = "launch", at = math.floor(at),
+					ships = o.ships and math.floor(tonumber(o.ships) or 0) or nil,
+					route = route,
 				}
 			end
+
+		elseif kind == "move" then
+			local fleet = tonumber(o.fleet)
+			if fleet then
+				local entry = {
+					kind = "move", fleet = math.floor(fleet),
+					ships = o.ships and math.floor(tonumber(o.ships) or 0) or nil,
+					route = clean_route(o.route) or {},
+				}
+				-- A fleet takes one order a turn; the last one wins.
+				replace(function(c)
+					return (c.kind == "move" or c.kind == "garrison")
+						and c.fleet == entry.fleet
+				end)
+				clean[#clean + 1] = entry
+			end
+
+		elseif kind == "garrison" then
+			local fleet = tonumber(o.fleet)
+			if fleet then
+				local entry = { kind = "garrison", fleet = math.floor(fleet) }
+				replace(function(c)
+					return (c.kind == "move" or c.kind == "garrison")
+						and c.fleet == entry.fleet
+				end)
+				clean[#clean + 1] = entry
+			end
+
+		elseif kind == "build" then
+			local at = tonumber(o.at)
+			if at then
+				local entry = {
+					kind = "build", at = math.floor(at),
+					building = (o.building == nil) and "" or tostring(o.building),
+				}
+				replace(function(c) return c.kind == "build" and c.at == entry.at end)
+				clean[#clean + 1] = entry
+			end
+
 		elseif kind == "research" then
-			-- Only the last one counts, and only one is stored: two research
-			-- directives in a batch would silently make the order of the array
-			-- meaningful, which no client should have to know about.
 			local id = o.tech
 			if id == nil or id == "" or tech.by_id(id) then
-				if seen_research then
-					for k = #clean, 1, -1 do
-						if clean[k].kind == "research" then table.remove(clean, k) break end
-					end
-				end
-				seen_research = true
+				replace(function(c) return c.kind == "research" end)
 				clean[#clean + 1] = { kind = "research", tech = id }
-			end
-		elseif kind == "policy" then
-			local share = tonumber(o.warship_share)
-			if share then
-				if share < 0 then share = 0 end
-				if share > 1 then share = 1 end
-				if seen_policy then
-					for k = #clean, 1, -1 do
-						if clean[k].kind == "policy" then table.remove(clean, k) break end
-					end
-				end
-				seen_policy = true
-				clean[#clean + 1] = { kind = "policy", warship_share = share }
 			end
 		end
 	end

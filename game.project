@@ -53,3 +53,6 @@ dependencies#1 = https://github.com/britzl/monarch/archive/refs/tags/6.0.2.zip
 dependencies#2 = https://github.com/Insality/druid/archive/refs/tags/1.2.5.zip
 dependencies#3 = https://github.com/Insality/defold-event/archive/refs/tags/16.zip
 dependencies#4 = https://github.com/defold/extension-safearea/archive/refs/tags/1.5.2.zip
+
+[druid]
+no_auto_input = 1

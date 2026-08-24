@@ -11,6 +11,11 @@
 -- was traced. Since it cannot be detected at runtime without paying for it on
 -- every call, it is banned by lint in the code the server shares.
 --
+-- `goto` and labels are banned for a related reason: they are Lua 5.2, LuaJIT
+-- accepts them happily, and gopher-lua is a 5.1 runtime - so a `goto continue`
+-- passes every offline test and is a coin flip on the server. The editor's
+-- language server, also configured for 5.1, is the only thing that caught it.
+--
 -- Run: luajit tools/lint_shared.lua
 
 local DIRS = { "galaxy" }
@@ -24,6 +29,14 @@ local function check(path)
 	for line in f:lines() do
 		line_no = line_no + 1
 		local code = line:match("^(.-)%-%-") or line
+
+		-- Lua 5.2 control flow. See the header.
+		if code:match("%f[%w]goto%f[%W]") or code:match("::%s*[%w_]+%s*::") then
+			problems = problems + 1
+			print(string.format("%s:%d: goto/label is Lua 5.2; gopher-lua is 5.1\n    %s",
+				path, line_no, line:gsub("^%s+", "")))
+		end
+
 		-- Two comma-separated targets whose right-hand side is the same two
 		-- names in the other order.
 		local x, y, p, q = code:match("([%w_%.%[%]]+)%s*,%s*([%w_%.%[%]]+)%s*=%s*([%w_%.%[%]]+)%s*,%s*([%w_%.%[%]]+)%s*$")
@@ -52,7 +65,7 @@ for _, dir in ipairs(DIRS) do
 end
 
 if problems == 0 then
-	print(string.format("lint_shared: clean (%d files, no swap idioms in server-shared code)",
+	print(string.format("lint_shared: clean (%d files, no swap idioms or Lua 5.2 syntax)",
 		checked))
 	os.exit(0)
 end

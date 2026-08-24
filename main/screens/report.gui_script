@@ -48,31 +48,27 @@ local function describe(event, me)
 			ui.plural(event.systems, "system"),
 			ui.plural(event.ships, "ship"),
 		}
+		if (event.colonies or 0) > 0 then
+			bits[#bits + 1] = ui.plural(event.colonies, "colony", "colonies")
+		end
 		if (event.built or 0) > 0 then bits[#bits + 1] = "+" .. event.built .. " built" end
-		if (event.freighters_built or 0) > 0 then
-			bits[#bits + 1] = "+" .. ui.plural(event.freighters_built, "freighter")
+		if (event.buildings_done or 0) > 0 then
+			bits[#bits + 1] = "+" .. ui.plural(event.buildings_done, "installation")
 		end
 		if (event.scrapped or 0) > 0 then bits[#bits + 1] = event.scrapped .. " scrapped" end
-		if (event.trade or 0) > 0 then bits[#bits + 1] = event.trade .. " from trade" end
 		return {
 			heading = true,
-			icon = "icon_clock",
 			title = "Turn " .. tostring(event.turn),
 			subtitle = table.concat(bits, "   "),
-			colour = ui.DIM,
 		}
+
 	elseif kind == "claimed" then
 		return {
 			icon = "icon_flag", tone = ui.GOOD,
 			title = "Claimed " .. system_name(event.at),
-			subtitle = ui.plural(event.ships or 0, "ship") .. " now hold it",
+			subtitle = ui.plural(event.ships or 0, "ship") .. " passed through",
 		}
-	elseif kind == "reinforced" then
-		return {
-			icon = "icon_warship",
-			title = "Reinforced " .. system_name(event.at),
-			subtitle = "+" .. ui.plural(event.ships or 0, "ship"),
-		}
+
 	elseif kind == "battle" then
 		local mine = event.attacker == me
 		local won = event.winner == me
@@ -84,15 +80,53 @@ local function describe(event, me)
 		else
 			title = "Battle at " .. system_name(event.at)
 		end
-		local detail = string.format("%d vs %d   %d survived",
-			event.attacker_ships or 0, event.defender_ships or 0, event.survivors or 0)
-		if (event.freighters_taken or 0) > 0 then
-			detail = detail .. "   " .. ui.plural(event.freighters_taken, "freighter") .. " seized"
+		local detail = string.format("%d against %d", event.attacker_ships or 0,
+			event.defender_ships or 0)
+		if (event.defence_static or 0) > 0 then
+			detail = detail .. " and " .. event.defence_static .. " of planetary defence"
 		end
+		detail = detail .. string.format("   %d survived", event.survivors or 0)
 		return {
 			icon = "icon_attack", tone = won and ui.GOOD or ui.BAD,
 			title = title, subtitle = detail,
 		}
+
+	elseif kind == "intercepted" then
+		local won = event.winner == me
+		return {
+			icon = "icon_speed", tone = won and ui.GOOD or ui.BAD,
+			title = "Caught in the open",
+			subtitle = string.format("Between %s and %s   %d against %d, %d survived",
+				system_name(event.a), system_name(event.b),
+				event.attacker_ships or 0, event.defender_ships or 0,
+				event.survivors or 0),
+		}
+
+	elseif kind == "fleet_launched" then
+		return {
+			icon = "icon_warship", tone = ui.ACCENT,
+			title = (event.name or "A fleet") .. " sailed",
+			subtitle = string.format("%s from %s, bound for %s",
+				ui.plural(event.ships or 0, "ship"),
+				system_name(event.at), system_name(event.to)),
+		}
+
+	elseif kind == "fleet_stood_down" then
+		return {
+			icon = "icon_warship",
+			title = (event.name or "A fleet") .. " stood down",
+			subtitle = "Its ships joined the garrison at " .. system_name(event.at),
+		}
+
+	elseif kind == "building_complete" then
+		local entry = require("galaxy.sim.buildings").by_id(event.building)
+		return {
+			icon = entry and entry.icon or "icon_industry", tone = ui.GOOD,
+			title = (entry and entry.label or event.building) .. " finished",
+			subtitle = string.format("%s, now level %d",
+				system_name(event.at), event.level or 1),
+		}
+
 	elseif kind == "research_complete" then
 		local entry = require("galaxy.sim.tech").by_id(event.tech)
 		return {
@@ -100,44 +134,96 @@ local function describe(event, me)
 			title = "Researched " .. (entry and entry.label or event.tech),
 			subtitle = entry and entry.blurb or "",
 		}
-	elseif kind == "route_established" then
-		return {
-			icon = "icon_trade", tone = ui.RESOURCE_COLOUR.fuel,
-			title = "Trade route opened",
-			subtitle = string.format("%s to %s   %s",
-				system_name(event.a), system_name(event.b),
-				ui.plural(event.ships or 0, "freighter")),
-		}
-	elseif kind == "route_lost" then
-		return {
-			icon = "icon_trade", tone = ui.BAD,
-			title = "Trade route cut",
-			subtitle = string.format("%s to %s   %s",
-				system_name(event.a), system_name(event.b),
-				event.recovered and "freighters recovered" or "freighters lost"),
-		}
-	elseif kind == "trade_lost" then
-		return {
-			icon = "icon_freighter", tone = ui.BAD,
-			title = "Freighters intercepted at " .. system_name(event.at),
-			subtitle = ui.plural(event.ships or 0, "freighter") .. " lost",
-		}
+
 	elseif kind == "attrition" then
 		return {
-			icon = "icon_fuel", tone = ui.WARN,
-			title = "Fleet out of fuel",
+			icon = "icon_warship", tone = ui.WARN,
+			title = "Ships paid off",
 			subtitle = ui.plural(event.ships or 0, "ship")
-				.. " scrapped - income does not cover upkeep",
+				.. " scrapped - more than your worlds can support",
 		}
+
 	elseif kind == "order_rejected" then
-		local what = event.tech
-			and ("Research " .. tostring(event.tech))
-			or (system_name(event.from) .. " to " .. system_name(event.to))
+		local what
+		if event.tech then
+			what = "Research " .. tostring(event.tech)
+		elseif event.building then
+			what = "Build " .. tostring(event.building) .. " at " .. system_name(event.at)
+		elseif event.fleet then
+			what = "Fleet order"
+		else
+			what = "Order at " .. system_name(event.at)
+		end
 		return {
 			icon = "icon_close", tone = ui.BAD,
-			title = "Order rejected",
+			title = "Order refused",
 			subtitle = what .. "   " .. tostring(event.reason),
 		}
+
+	elseif kind == "commander_promoted" then
+		return {
+			icon = "icon_warship", tone = ui.GOOD,
+			title = event.name .. " promoted",
+			subtitle = (event.rank or "") .. "   level " .. tostring(event.level),
+		}
+
+	elseif kind == "commander_scattered" then
+		return {
+			icon = "icon_warship", tone = ui.WARN,
+			title = event.name .. " was broken at " .. system_name(event.at),
+			subtitle = "Fell back a rank, to " .. (event.rank or "")
+				.. " - reinforce them where they stand",
+		}
+
+	elseif kind == "commander_lost" then
+		return {
+			icon = "icon_close", tone = ui.BAD,
+			title = event.name .. " was lost",
+			subtitle = "Nowhere left to fall back to",
+		}
+
+	elseif kind == "reinforced" then
+		return {
+			icon = "icon_warship",
+			title = event.name .. " reinforced at " .. system_name(event.at),
+			subtitle = "+" .. ui.plural(event.ships or 0, "ship")
+				.. ", now " .. tostring(event.total),
+		}
+
+	elseif kind == "region_control" then
+		local where = event.name or ("region " .. tostring(event.region))
+		if event.player == me then
+			return {
+				icon = "icon_flag", tone = ui.GOOD,
+				title = "Took " .. where,
+				subtitle = "The region is yours",
+			}
+		elseif event.from == me then
+			return {
+				icon = "icon_flag", tone = ui.BAD,
+				title = "Lost " .. where,
+				subtitle = event.player ~= 0
+					and ("It fell to " .. player_name(event.player))
+					or "No one holds it now",
+			}
+		end
+		return {
+			icon = "icon_flag",
+			title = where .. " changed hands",
+			subtitle = event.player ~= 0
+				and (player_name(event.player) .. " holds it")
+				or "It is contested again",
+		}
+
+	elseif kind == "victory" then
+		return {
+			icon = "icon_flag", tone = event.player == me and ui.GOOD or ui.BAD,
+			title = event.player == me and "You have won"
+				or (player_name(event.player) .. " has won"),
+			subtitle = string.format("%d of %d regions held",
+				event.regions or 0, event.needed or 0),
+		}
+
 	elseif kind == "eliminated" then
 		return {
 			icon = "icon_close", tone = ui.BAD,

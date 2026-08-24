@@ -30,19 +30,21 @@ local RACE_GAP = 14
 -- days into a game.
 local EFFECT_LABEL = {
 	attack = "attack", defence = "defence", capture = "capture",
-	speed = "speed", upkeep = "upkeep", hops = "range",
-	industry = "industry", ship_cost = "hull cost", cap = "fleet cap",
-	growth = "growth", capacity = "capacity", trade = "trade",
-	yield_metal = "metal", yield_fuel = "fuel", yield_research = "research",
-	vision = "vision", tech_cost = "tech cost",
+	fortress = "fortresses", speed = "speed", hops = "range",
+	industry = "output", ship_cost = "hull cost", building_cost = "build cost",
+	cap = "fleet cap", growth = "growth", capacity = "capacity",
+	research = "research", vision = "vision", tech_cost = "tech cost",
 }
 
 -- Stable order, so a race always reads the same way.
 local EFFECT_ORDER = {
-	"attack", "defence", "capture", "speed", "upkeep", "hops",
-	"industry", "ship_cost", "cap", "growth", "capacity", "trade",
-	"yield_metal", "yield_fuel", "yield_research", "vision", "tech_cost",
+	"attack", "defence", "capture", "fortress", "speed", "hops",
+	"industry", "ship_cost", "building_cost", "cap", "growth", "capacity",
+	"research", "vision", "tech_cost",
 }
+
+-- Counts of lanes, not percentages.
+local WHOLE_NUMBER = { hops = true, vision = true }
 
 local function screen()
 	return store.screen.width, store.screen.height
@@ -55,12 +57,17 @@ local function race_effects(race)
 		local key = EFFECT_ORDER[i]
 		local value = race.mods[key]
 		if value then
-			local text = string.format("%+d%% %s", math.floor(value * 100 + 0.5),
-				EFFECT_LABEL[key] or key)
-			-- Cheaper upkeep and cheaper hulls are *good* despite being
+			local label = EFFECT_LABEL[key] or key
+			local text
+			if WHOLE_NUMBER[key] then
+				text = string.format("%+d %s", value, label)
+			else
+				text = string.format("%+d%% %s", math.floor(value * 100 + 0.5), label)
+			end
+			-- Cheaper hulls and cheaper buildings are *good* despite being
 			-- negative, so the sign alone cannot decide which column it lands in.
 			local beneficial = value > 0
-			if key == "upkeep" or key == "ship_cost" or key == "tech_cost" then
+			if key == "ship_cost" or key == "tech_cost" or key == "building_cost" then
 				beneficial = value < 0
 			end
 			if beneficial then ups[#ups + 1] = text else downs[#downs + 1] = text end
@@ -253,7 +260,7 @@ local function build(self)
 				-- Short turns by default so the prototype can actually be played
 				-- through; a real game would use the 12 hour default.
 				turn_interval = 60,
-				star_count = 120,
+				star_count = 160,
 			}, function(res, err)
 				if err then self:set_status("Could not create: " .. err) return end
 				self:refresh()

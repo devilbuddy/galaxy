@@ -1,22 +1,21 @@
---- Empire: the stockpile, the shipyard policy and the research tree.
+--- Empire: what you command, and what you are learning.
 --
 -- A Monarch popup over the map, for the same reason the turn report is one:
 -- dismissing it puts the player back on the map they were already looking at
 -- rather than reloading it.
 --
--- Nothing here is submitted immediately. Choosing a technology or a build split
--- stages the change in `store` and it travels with the next SEND, alongside the
--- movement orders, so one action covers the whole turn's plan and the player can
--- revise any of it freely until the turn resolves.
+-- Two top-level tabs rather than one long page. Forces and research are both
+-- lists that want to scroll, and nesting one scroll inside another is a fight
+-- over every drag; a tab strip means exactly one scrolling region is on screen.
 --
--- The tree is drawn one branch at a time, as a column: tier one, then the two
--- tier-two technologies side by side, then the tier-three that needs both. That
--- is the actual shape of every branch, and it reads as a tree in portrait -
--- which a left-to-right graph does not, at 720 points wide.
+-- The research tree is drawn one branch at a time, as a column: tier one, then
+-- the two tier-two technologies side by side, then the tier-three that needs
+-- both. That is the actual shape of every branch, and it reads as a tree in
+-- portrait - which a left-to-right graph does not, at 720 points wide.
 --
--- Only the tree scrolls. The page above it is fixed and sized from the screen
--- height, so a short screen squeezes the tree rather than pushing the resources
--- off the bottom.
+-- Choosing a technology stages the change in `store` and it travels with the
+-- next SEND alongside the fleet orders, so one action covers the whole turn's
+-- plan and the player can revise any of it until the turn resolves.
 
 local druid = require("druid.druid")
 local monarch = require("monarch.monarch")
@@ -24,11 +23,9 @@ local store = require("main.store")
 local ui = require("main.ui")
 local tech = require("galaxy.sim.tech")
 local races = require("galaxy.sim.races")
+local sim_systems = require("galaxy.sim.systems")
 
 local PAD = 26
--- A full-width node and a two-up one need different heights: at this text size
--- a 318-unit card cannot hold a name, an effect sentence and a cost on three
--- lines, and the first attempt at one card height ran them all into each other.
 local NODE_H = 140
 local NODE_H_SPLIT = 206
 local TIER_GAP = 40
@@ -37,23 +34,21 @@ local TIER_GAP = 40
 -- falls back to the raw key so a new effect shows up as something readable
 -- rather than vanishing from the card.
 local EFFECT = {
-	attack         = { "attack", "icon_attack" },
-	defence        = { "defence", "icon_defence" },
-	capture        = { "population kept on capture", "icon_growth" },
-	speed          = { "fleet speed", "icon_speed" },
-	hops           = { "order range", "icon_speed" },
-	upkeep         = { "fuel upkeep", "icon_fuel" },
-	industry       = { "build rate", "icon_industry" },
-	ship_cost      = { "hull cost", "icon_industry" },
-	cap            = { "fleet cap", "icon_warship" },
-	growth         = { "growth", "icon_growth" },
-	capacity       = { "world capacity", "icon_capacity" },
-	yield_metal    = { "metal yield", "icon_metal" },
-	yield_fuel     = { "fuel yield", "icon_fuel" },
-	yield_research = { "research yield", "icon_research" },
-	trade          = { "trade income", "icon_trade" },
-	vision         = { "vision", "icon_vision" },
-	tech_cost      = { "research cost", "icon_research" },
+	attack        = { "attack", "icon_attack" },
+	defence       = { "defence", "icon_defence" },
+	capture       = { "population kept on capture", "icon_growth" },
+	fortress      = { "fortress strength", "icon_defence" },
+	speed         = { "fleet speed", "icon_speed" },
+	hops          = { "order range", "icon_speed" },
+	industry      = { "output", "icon_industry" },
+	ship_cost     = { "hull cost", "icon_industry" },
+	building_cost = { "building cost", "icon_industry" },
+	cap           = { "fleet cap", "icon_warship" },
+	growth        = { "growth", "icon_growth" },
+	capacity      = { "world capacity", "icon_capacity" },
+	research      = { "research", "icon_research" },
+	vision        = { "vision", "icon_vision" },
+	tech_cost     = { "research cost", "icon_research" },
 }
 
 -- Counts of lanes, not percentages.
@@ -61,10 +56,9 @@ local WHOLE_NUMBER = { hops = true, vision = true }
 
 -- Stable order, so a technology always reads the same way.
 local EFFECT_ORDER = {
-	"attack", "defence", "capture", "speed", "hops", "upkeep",
-	"industry", "ship_cost", "cap", "growth", "capacity",
-	"yield_metal", "yield_fuel", "yield_research", "trade",
-	"vision", "tech_cost",
+	"attack", "defence", "capture", "fortress", "speed", "hops",
+	"industry", "ship_cost", "building_cost", "cap", "growth", "capacity",
+	"research", "vision", "tech_cost",
 }
 
 local function describe_effects(entry)
@@ -94,8 +88,6 @@ local function effect_icon(entry)
 	return "icon_research"
 end
 
--- Staged state ----------------------------------------------------------------
-
 --- What the player is aiming at, staged change included.
 local function current_target(view)
 	if store.pending_research ~= nil then
@@ -104,14 +96,8 @@ local function current_target(view)
 	return view.researching
 end
 
-local function current_share(view)
-	if store.pending_share ~= nil then return store.pending_share end
-	return view.warship_share or 1.0
-end
+-- The research tree -----------------------------------------------------------------
 
--- The tree --------------------------------------------------------------------
-
---- Techs of one branch, grouped by tier, in declaration order.
 local function branch_tiers(branch)
 	local tiers = {}
 	for i = 1, #tech.TECHS do
@@ -126,8 +112,7 @@ local function branch_tiers(branch)
 end
 
 --- The drawn height of the tallest branch, so switching tabs does not make the
---- page jump. Rows are not all the same height, so this has to add them up
---- rather than multiply.
+--- page jump. Rows are not all the same height, so this adds them up.
 local function tallest_branch()
 	local tallest = 0
 	for i = 1, #tech.BRANCHES do
@@ -143,7 +128,6 @@ local function tallest_branch()
 	return tallest
 end
 
---- One technology as a card, laid out relative to the tree's content origin.
 local function tech_node(self, x, y, w, h, entry, state, view, out)
 	local function keep(node) out[#out + 1] = node; return node end
 
@@ -165,17 +149,18 @@ local function tech_node(self, x, y, w, h, entry, state, view, out)
 
 	local text_x = x + 18 + tile + 16
 	local text_w = w - (text_x - x) - 62
-	keep(ui.body(text_x, y - 38, entry.label, locked and ui.DIM or ui.TEXT))
-
-	-- What it does. Wrapped rather than truncated: a technology whose effect is
-	-- cut off mid-word is not a choice a player can make.
-	keep(ui.text(text_x, y - 58, describe_effects(entry), ui.SMALL,
+	-- The name wraps rather than running out under the status badge: on a
+	-- two-up card "Jump Calibration" is wider than the space beside its icon,
+	-- and an overflowing title collided with the lock and the card edge both.
+	local title_lines = math.max(1,
+		math.ceil(ui.measure(ui.FONT_BOLD, entry.label, ui.BODY / 44) / text_w))
+	keep(ui.text(text_x, y - 22, entry.label, ui.BODY,
+		locked and ui.DIM or ui.TEXT,
+		{ bold = true, width = text_w, height = title_lines * 34, anchor_top = true }))
+	keep(ui.text(text_x, y - 22 - title_lines * 32, describe_effects(entry), ui.SMALL,
 		done and ui.GOOD or (locked and ui.FAINT or ui.DIM),
-		{ width = text_w, height = h - 110, anchor_top = true }))
+		{ width = text_w, height = h - 96 - title_lines * 32, anchor_top = true }))
 
-	-- The cost line. Shown as glyph-and-number pairs rather than
-	-- "2.7k research   60 metal", which did not fit a two-up card and was
-	-- clipped by its own border.
 	local footer_y = y - h + 30
 	if done then
 		keep(ui.small(text_x, footer_y, "Researched", ui.GOOD))
@@ -190,25 +175,15 @@ local function tech_node(self, x, y, w, h, entry, state, view, out)
 			ui.FAINT, { width = w - (text_x - x) - 24, anchor_top = true }))
 	else
 		local cost = tech.cost_of(entry.id, (view.rates and view.rates.tech_cost) or 0)
-		local cx = text_x
-		local function pair(icon, value, colour)
-			-- Icon centred on the text baseline: positioned by its top-left, so
-			-- that is the row centre plus half its own height.
-			keep(ui.icon(cx, footer_y + 11, 22, icon, colour))
-			local text = ui.number(value)
-			keep(ui.text(cx + 28, footer_y, text, ui.SMALL, colour))
-			cx = cx + 28 + ui.text_width(text, ui.SMALL) + 22
-		end
-		pair("icon_research", cost.research, ui.RESOURCE_COLOUR.research)
-		if cost.metal > 0 then
-			pair("icon_metal", cost.metal, ui.RESOURCE_COLOUR.metal)
-		end
+		keep(ui.icon(text_x, footer_y + 11, 22, "icon_research",
+			ui.RESOURCE_COLOUR.research))
+		keep(ui.text(text_x + 28, footer_y, ui.number(cost), ui.SMALL,
+			selected and ui.ACCENT or ui.RESOURCE_COLOUR.research))
 		if selected then
 			keep(ui.small(text_x, footer_y - 30, "Buying when affordable", ui.ACCENT))
 		end
 	end
 
-	-- Status badge, top right.
 	if done then
 		keep(ui.dot(x + w - 52, y - 16, 34, ui.GOOD))
 		keep(ui.icon(x + w - 47, y - 21, 24, "icon_check", ui.rgb(0x06170C)))
@@ -218,22 +193,23 @@ local function tech_node(self, x, y, w, h, entry, state, view, out)
 
 	if not locked and not done then
 		self.tree_buttons[#self.tree_buttons + 1] =
-			self.druid:new_button(fill, function()
-				-- Tapping the current target clears it; "" rather than nil so
-				-- the staged value stays distinguishable from "not staged".
+			self.body_druid:new_button(fill, function()
+				-- Tapping the current target clears it; "" rather than nil so the
+				-- staged value stays distinguishable from "not staged".
 				store.pending_research = selected and "" or entry.id
 				self:render_tree()
 			end)
 	end
 end
 
---- Draw the active branch as a column of tiers with connectors between them.
 local function render_tree(self)
 	local view = store.game_view
-	if not view then return end
+	if not view or not self.tree_content then return end
 
 	ui.clear(self.tree_nodes)
-	for i = 1, #self.tree_buttons do self.druid:remove(self.tree_buttons[i]) end
+	-- Switching branch rebuilds the tree inside a body that is staying put, so
+	-- these are removed individually rather than by dropping the instance.
+	for i = 1, #self.tree_buttons do self.body_druid:remove(self.tree_buttons[i]) end
 	self.tree_buttons = {}
 
 	self.known = {}
@@ -241,6 +217,7 @@ local function render_tree(self)
 	local target = current_target(view)
 
 	local out = self.tree_nodes
+	local previous = ui.collect(out)
 	local w = self.tree_width
 	local tiers = branch_tiers(self.branch)
 	local y = -4
@@ -252,23 +229,21 @@ local function render_tree(self)
 		return "available"
 	end
 
-	--- The lines between one tier and the next.
-	--
-	-- Forks when the tier below is wider than the one above, merges when it is
-	-- narrower, and runs straight when they match. Drawing a bare straight line
-	-- into a technology that needs *both* of the two above it would misstate
-	-- the prerequisite, which is the one thing the diagram exists to show.
+	--- Forks when the tier below is wider than the one above, merges when it is
+	--- narrower. A bare straight line into a technology that needs *both* of the
+	--- two above it would misstate the prerequisite, which is the one thing the
+	--- diagram exists to show.
 	local function connector(from_y, above, below)
 		local half = TIER_GAP * 0.5
-		local function stub(x, y0) out[#out + 1] = ui.sprite(x - 1, y0, 2, half, "solid", ui.BORDER) end
+		local function stub(x, y0)
+			out[#out + 1] = ui.sprite(x - 1, y0, 2, half, "solid", ui.BORDER)
+		end
 		local function spread(count)
 			if count > 1 then return w * 0.25, w * 0.75 end
 			return w * 0.5, w * 0.5
 		end
-
 		local a_left, a_right = spread(above)
 		local b_left, b_right = spread(below)
-
 		stub(a_left, from_y)
 		if above > 1 then stub(a_right, from_y) end
 		if a_left ~= b_left or a_right ~= b_right then
@@ -302,33 +277,196 @@ local function render_tree(self)
 		tier = tier + 1
 	end
 
+	ui.collect(previous)
 	for i = 1, #out do gui.set_parent(out[i], self.tree_content) end
 	ui.fit_scroll(self.tree_scroll, self.tree_content, w, -y + 8, self.tree_height)
 end
 
--- Shipyards -------------------------------------------------------------------
+-- Tab bodies ------------------------------------------------------------------------
 
-local POLICIES = {
-	{ label = "WARSHIPS", share = 1.0, icon = "icon_warship" },
-	{ label = "MIXED", share = 0.5, icon = "icon_industry" },
-	{ label = "FREIGHTERS", share = 0.0, icon = "icon_freighter" },
-}
-
-local function refresh_policy(self)
-	local share = current_share(store.game_view)
-	for i = 1, #POLICIES do
-		local on = math.abs(share - POLICIES[i].share) < 0.01
-		local seg = self.policy[i]
-		gui.set_color(seg.fill, on and ui.ACCENT or ui.CLEAR)
-		gui.set_color(seg.glyph, on and ui.ACCENT_TEXT or ui.DIM)
-		gui.set_color(seg.label, on and ui.ACCENT_TEXT or ui.DIM)
-	end
-	gui.set_text(self.policy_hint, string.format(
-		"New production: %d%% warships, %d%% freighters",
-		math.floor(share * 100 + 0.5), math.floor((1 - share) * 100 + 0.5)))
+--- Clear whatever the previous tab put on the page.
+--
+-- The body has its own Druid instance and it is dropped wholesale. Tracking
+-- individual components here is what broke: `ui.tabs` and `ui.scroll` each
+-- register one of their own, only the buttons were being removed, and the
+-- survivors went on polling nodes that had been deleted - `hover.lua: Deleted
+-- node` on the next touch anywhere on screen.
+local function clear_body(self)
+	ui.region(self.body_druid, self.body_nodes)
+	ui.clear(self.tree_nodes)
+	self.body_druid = nil
+	self.body_nodes, self.tree_buttons = {}, {}
+	self.tree_content, self.tree_scroll = nil, nil
 end
 
--- Screen ----------------------------------------------------------------------
+local function build_forces(self, view, x, top, width, height)
+	local previous = ui.collect(self.body_nodes)
+	local rates = view.rates or {}
+	local g = store.galaxy
+
+	local held, colonies = 0, 0
+	for id, sys in pairs(view.systems) do
+		if sys.owner == view.you and sys.live then
+			held = held + 1
+			if g and sim_systems.kind(g, tonumber(id)) == "colony" then
+				colonies = colonies + 1
+			end
+		end
+	end
+
+	local card_h = 172
+	ui.card(x, top, width, card_h)
+	ui.section(x + PAD, top - 16, width - PAD * 2, "the empire")
+
+	local column = (width - PAD * 2) / 3
+	local function stat(i, icon, value, label, colour)
+		local cx = x + PAD + column * i
+		local cy = top - 96
+		ui.icon(cx, cy + 15, 28, icon, ui.DIM)
+		ui.text(cx + 38, cy, value, ui.BODY, colour or ui.TEXT, { bold = true })
+		ui.small(cx + 38, cy - 28, label, ui.DIM)
+	end
+	stat(0, "icon_warship", ui.number(rates.ships or 0),
+		"of " .. ui.number(rates.ship_cap or 0),
+		(rates.ships or 0) > (rates.ship_cap or 0) and ui.BAD or ui.TEXT)
+	stat(1, "icon_growth", ui.number(rates.population or 0), "people")
+	stat(2, "icon_flag", tostring(held), colonies .. " colonies")
+
+	local list_top = top - card_h - ui.GAP
+	local list_h = list_top - (top - height)
+	ui.card(x, list_top, width, list_h)
+	local ry = ui.section(x + PAD, list_top - 16, width - PAD * 2, "fleets",
+		#view.fleets)
+
+	local inner_w = width - PAD * 2
+	local scroll_h = (ry - 8) - (list_top - list_h) - PAD
+	local view_node, content, scroll = ui.scroll(self.body_druid, x + PAD, ry - 8,
+		inner_w, scroll_h)
+	ui.collect(previous)
+	self.body_nodes[#self.body_nodes + 1] = view_node
+
+	-- Rows belong to the scroll's content, so they are collected separately and
+	-- reparented once laid out.
+	local rows = {}
+	local was = ui.collect(rows)
+	local y = 0
+	if #view.fleets == 0 then
+		ui.body(4, -30, "No fleets under way. Send a garrison somewhere.", ui.DIM,
+			{ width = inner_w - 8, anchor_top = true })
+		y = -90
+	else
+		local ordered = {}
+		for i = 1, #view.fleets do ordered[i] = view.fleets[i] end
+		table.sort(ordered, function(p, q)
+			if p.ships ~= q.ships then return p.ships > q.ships end
+			return p.id < q.id
+		end)
+		for i = 1, #ordered do
+			local f = ordered[i]
+			local at = g and g.stars[f.at]
+			local moving = (f.eta or 0) > 0
+			local subtitle
+			if moving then
+				local target_id = (f.route and f.route[#f.route]) or f.next_hop
+				local dest = g and target_id and g.stars[target_id]
+				subtitle = string.format("Bound for %s   %s to go",
+					dest and dest.name or "?", ui.plural(f.eta, "lane"))
+			else
+				subtitle = "Holding at " .. (at and at.name or "?")
+			end
+			local row = ui.panel(0, y, inner_w, 96, ui.CARD_ALT)
+			ui.icon(16, y - 34, 30, "icon_warship", moving and ui.ACCENT or ui.TEXT)
+			-- Rank before the name, the way it would be said out loud. It is
+			-- the level made legible: a player should be able to tell a veteran
+			-- from a green officer without reading a number.
+			ui.body(60, y - 30, (f.rank and (f.rank .. " ") or "") .. f.name)
+			ui.small(60, y - 58, subtitle, ui.DIM, { width = inner_w - 200 })
+			-- Strength against what this commander can actually lead: a force
+			-- at capacity is why the rest of your ships are sitting at home.
+			ui.value(inner_w - 16, y - 34, tostring(f.ships), ui.H2,
+				(f.command and f.ships >= f.command) and ui.WARN or ui.TEXT)
+			if f.command then
+				ui.small(inner_w - 16, y - 62, "of " .. tostring(f.command), ui.FAINT,
+					{ pivot = gui.PIVOT_E })
+			end
+			-- Tapping a fleet puts the map on it and closes the sheet, which is
+			-- the only thing a list like this is really for.
+			self.body_druid:new_button(row, function()
+					store.selected = f.at
+					store.selected_fleet = f.id
+					monarch.hide(hash("empire"))
+				end)
+			y = y - 106
+		end
+	end
+	ui.collect(was)
+	for i = 1, #rows do
+		gui.set_parent(rows[i], content)
+		self.body_nodes[#self.body_nodes + 1] = rows[i]
+	end
+	ui.fit_scroll(scroll, content, inner_w, -y + 12, scroll_h)
+end
+
+local function build_research(self, view, x, top, width, height)
+	local previous = ui.collect(self.body_nodes)
+
+	local HEAD = 158
+	local wanted = tallest_branch() + 16
+	local available = height - HEAD - PAD
+	local tree_h = math.min(wanted, available)
+
+	ui.card(x, top, width, HEAD + tree_h + PAD)
+	ui.section(x + PAD, top - 16, width - PAD * 2, "research")
+	ui.icon(x + width - PAD - 150, top - 8, 28, "icon_research",
+		ui.RESOURCE_COLOUR.research)
+	ui.value(x + width - PAD, top - 22, ui.number(view.research or 0), ui.BODY, ui.TEXT)
+	ui.small(x + PAD, top - 66,
+		"One at a time; bought the turn you can afford it", ui.FAINT)
+
+	local tabs = {}
+	for i = 1, #tech.BRANCHES do
+		tabs[i] = { id = tech.BRANCHES[i].id, label = tech.BRANCHES[i].label }
+	end
+	local tab_y = top - 88
+	self.branch = self.branch or tabs[1].id
+	self.branch_tabs = ui.tabs(self.body_druid, x + PAD, tab_y, width - PAD * 2, tabs,
+		self.branch, function(id)
+			self.branch = id
+			self.branch_tabs.set_active(id)
+			self:render_tree()
+		end)
+
+	self.tree_width = width - PAD * 2
+	self.tree_height = tree_h
+	local view_node, content, scroll = ui.scroll(self.body_druid, x + PAD, tab_y - 70,
+		self.tree_width, tree_h)
+	self.tree_content = content
+	self.tree_scroll = scroll
+	ui.collect(previous)
+	self.body_nodes[#self.body_nodes + 1] = view_node
+
+	self:render_tree()
+end
+
+-- Screen -----------------------------------------------------------------------------
+
+local TABS = {
+	{ id = "forces", label = "Forces" },
+	{ id = "research", label = "Research" },
+}
+
+local function show_tab(self, id)
+	self.tab = id
+	clear_body(self)
+	local view = store.game_view
+	if not view then return end
+	self.body_druid = druid.new(self)
+	if id == "research" then
+		build_research(self, view, self.body_x, self.body_top, self.body_w, self.body_h)
+	else
+		build_forces(self, view, self.body_x, self.body_top, self.body_w, self.body_h)
+	end
+end
 
 local function build(self)
 	local w, h = store.screen.width, store.screen.height
@@ -338,143 +476,66 @@ local function build(self)
 
 	ui.shade()
 
-	-- Header. The close control sits in the top corner and the footer repeats
-	-- the action full-width, because the top of a tall phone is a stretch.
 	local top = h - pad.top
 	local race = races.by_id(view and view.race)
 	ui.h1(pad.left + 6, top - 34, "Empire")
-	-- Race and blurb on separate lines. Joined onto one they wrapped, and the
-	-- wrap ran straight into the title above.
 	ui.body(pad.left + 6, top - 84, race.label, ui.race_colour(race.id))
 	ui.small(pad.left + 6, top - 108, race.blurb, ui.DIM,
 		{ width = card_w - 20, anchor_top = true })
 	ui.icon_button(self.druid, w - pad.right - 60, top, 60, "icon_close",
 		function() monarch.hide(hash("empire")) end)
 
-	-- The lowest the footer may sit. It is placed for real once the cards are
-	-- laid out, so it follows the content on a tall screen instead of leaving a
-	-- crater between the last card and the bottom edge.
-	local footer_floor = pad.bottom + ui.CONTROL
-
-	local function footer(at)
-		ui.button(self.druid, pad.left, at, card_w, ui.CONTROL, "TO THE MAP",
-			function() monarch.hide(hash("empire")) end,
-			{ style = "secondary", size = ui.CAPS })
-	end
-
 	if not view then
 		ui.body(pad.left + 6, top - 170, "No game loaded.", ui.DIM)
-		footer(footer_floor)
 		return
 	end
 
-	local y = top - 150
-
-	-- Stockpile ---------------------------------------------------------------
-	local kinds = { "metal", "fuel", "research" }
-	local stock_h = 40 + #kinds * 88 + PAD
-	ui.card(pad.left, y, card_w, stock_h)
-	local ry = ui.section(pad.left + PAD, y - 16, card_w - PAD * 2, "resources")
-	for i = 1, #kinds do
-		ry = ui.resource_row(pad.left + PAD, ry, card_w - PAD * 2, kinds[i],
-			view.stock[kinds[i]], view.income and view.income[kinds[i]])
-	end
-	y = y - stock_h - ui.GAP
-
-	-- Shipyards ---------------------------------------------------------------
-	local yard_h = 216
-	ui.card(pad.left, y, card_w, yard_h)
-	ui.section(pad.left + PAD, y - 16, card_w - PAD * 2, "shipyards")
-	self.policy_hint = ui.small(pad.left + PAD, y - 74, "", ui.DIM,
-		{ width = card_w - PAD * 2, anchor_top = true })
-
-	local seg_y = y - 110
-	local seg_w = card_w - PAD * 2
-	ui.pill(pad.left + PAD, seg_y, seg_w, ui.CONTROL, ui.CARD_ALT)
-	ui.pill_line(pad.left + PAD, seg_y, seg_w, ui.CONTROL, ui.BORDER)
-	self.policy = {}
-	for i = 1, #POLICIES do
-		local p = POLICIES[i]
-		local hw = (seg_w - 10) / #POLICIES
-		local hx = pad.left + PAD + 5 + hw * (i - 1)
-		local fill = ui.pill(hx, seg_y - 5, hw, ui.CONTROL - 10, ui.CLEAR)
-		-- Glyph and label centred as a pair inside the segment.
-		local label_w = ui.text_width(p.label, ui.CAPS)
-		local total = 28 + 10 + label_w
-		local gx = hx + (hw - total) * 0.5
-		local glyph = ui.icon(gx, seg_y - 19, 28, p.icon, ui.DIM)
-		local label = ui.text(gx + 38, seg_y - ui.CONTROL * 0.5, p.label,
-			ui.CAPS, ui.DIM, { bold = true })
-		self.policy[i] = { fill = fill, glyph = glyph, label = label }
-		self.druid:new_button(fill, function()
-			store.pending_share = p.share
-			refresh_policy(self)
-		end)
-	end
-	refresh_policy(self)
-	y = y - yard_h - ui.GAP
-
-	-- Research ----------------------------------------------------------------
-	-- The card is as tall as the tree needs, or as tall as the space allows,
-	-- whichever is smaller - so a tall phone does not get a card two thirds
-	-- empty and a short one scrolls instead of overflowing.
-	local HEAD = 158              -- section label, hint, tabs
-	local wanted = tallest_branch() + 16
-	local available = y - (footer_floor + ui.GAP) - HEAD - PAD
-	local tree_h = math.min(wanted, available)
-	local research_h = HEAD + tree_h + PAD
-	ui.card(pad.left, y, card_w, research_h)
-	ui.section(pad.left + PAD, y - 16, card_w - PAD * 2, "research")
-	ui.icon(pad.left + card_w - PAD - 150, y - 8, 28, "icon_research",
-		ui.RESOURCE_COLOUR.research)
-	ui.value(pad.left + card_w - PAD, y - 22, ui.number(view.stock.research),
-		ui.BODY, ui.TEXT)
-	ui.small(pad.left + PAD, y - 66,
-		"One at a time; bought the turn you can afford it", ui.FAINT)
-
-	local tabs = {}
-	for i = 1, #tech.BRANCHES do
-		tabs[i] = { id = tech.BRANCHES[i].id, label = tech.BRANCHES[i].label }
-	end
-	local tab_y = y - 88
-	self.branch = self.branch or tabs[1].id
-	self.tabs = ui.tabs(self.druid, pad.left + PAD, tab_y, card_w - PAD * 2, tabs,
-		self.branch, function(id)
-			self.branch = id
-			self.tabs.set_active(id)
-			self:render_tree()
+	local strip_y = top - 150
+	self.page_tabs = ui.tabs(self.druid, pad.left, strip_y, card_w, TABS,
+		"forces", function(id)
+			self.page_tabs.set_active(id)
+			show_tab(self, id)
 		end)
 
-	self.tree_width = card_w - PAD * 2
-	self.tree_height = tree_h
-	local _, content, scroll = ui.scroll(self.druid, pad.left + PAD, tab_y - 70,
-		self.tree_width, tree_h)
-	self.tree_content = content
-	self.tree_scroll = scroll
-
-	self:render_tree()
-
-	footer(math.max(footer_floor, y - research_h - ui.GAP))
+	self.body_x = pad.left
+	self.body_top = strip_y - 82
+	self.body_w = card_w
+	-- The close glyph in the corner is the only way out, so the sheet runs down
+	-- to the bottom inset instead of reserving a control row for a second button
+	-- that said the same thing.
+	self.body_h = self.body_top - pad.bottom
+	show_tab(self, "forces")
 end
 
 function init(self)
 	msg.post(".", "acquire_input_focus")
 	ui.install_druid_picking()
 	self.druid = druid.new(self)
-	self.tree_nodes = {}
-	self.tree_buttons = {}
+	self.body_nodes, self.tree_nodes, self.tree_buttons = {}, {}, {}
 	self.known = {}
 	self.render_tree = render_tree
 	build(self)
 end
 
-function final(self) self.druid:final() end
-function update(self, dt) self.druid:update(dt) end
-function on_input(self, action_id, action)
-	-- A full-screen popup claims every action, so the map behind it neither
-	-- pans nor changes selection while this is up.
-	return ui.modal_input(self.druid, action_id, action)
+function final(self)
+	if self.body_druid then self.body_druid:final() end
+	self.druid:final()
 end
+
+function update(self, dt)
+	self.druid:update(dt)
+	if self.body_druid then self.body_druid:update(dt) end
+end
+
+function on_input(self, action_id, action)
+	-- A full-screen popup claims every action, so the map behind it neither pans
+	-- nor changes selection while this is up.
+	return ui.modal_input({ self.druid, self.body_druid }, action_id, action)
+end
+
 function on_message(self, message_id, message, sender)
 	self.druid:on_message(message_id, message, sender)
+	if self.body_druid then
+		self.body_druid:on_message(message_id, message, sender)
+	end
 end

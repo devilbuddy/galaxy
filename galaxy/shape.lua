@@ -12,9 +12,19 @@ local noise = require("galaxy.noise")
 local floor = math.floor
 
 -- Lua 5.1 (Defold, gopher-lua) has math.atan2; 5.3+ folded it into a two
--- argument math.atan. Resolving it once keeps the generator runnable on any
--- host that might end up running the server.
-local atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
+-- argument math.atan. Resolving it once keeps the generator runnable on any host
+-- that might end up running the server, and both branches are live: the client
+-- and Nakama take the first, tools/verify_cross_runtime.sh runs under Lua 5.5
+-- and takes the second.
+--
+-- The fallback reaches math.atan **by name** on purpose. The language server is
+-- pinned to 5.1 (.vscode/settings.json), where math.atan takes one argument, so
+-- a direct `math.atan(y, x)` is reported as passing too many arguments - it
+-- cannot know that branch only runs where the two-argument form exists. Indexing
+-- with a string is what stops it resolving the signature. Do not "tidy" this
+-- back: the 5.1 setting is deliberate, and it is what caught a `goto` that would
+-- have been a coin flip on gopher-lua.
+local atan2 = math.atan2 or function(y, x) return math["atan"](y, x) end
 
 local M = {}
 

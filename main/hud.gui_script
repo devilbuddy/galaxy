@@ -1,61 +1,80 @@
---- The in-game interface: map labels, the overview bar, and the order controls.
+--- The in-game interface: map labels, fleet markers, and the order controls.
 --
--- Two very different jobs live here, and they are kept apart deliberately.
+-- Three jobs, kept apart deliberately.
 --
--- *Map labels* are a pool of text nodes recycled every frame. Only what is on
--- screen and worth naming gets one, so the node count stays flat however large
--- the galaxy is, and the placement pass rejects overlaps so names never stack.
+-- *Map labels and fleet markers* are pools of nodes recycled every frame. Only
+-- what is on screen gets one, so the count stays flat however large the galaxy
+-- is, and the label pass rejects overlaps so names never stack.
 --
--- *Chrome* - the overview bar, the selected-system card, the order controls - is
--- built once from main/ui.lua and driven by setting text and colours. Every
--- control is a real Druid button: the previous version hand-rolled rectangle
--- hit-testing because `gui.pick_node` is unusable in this project's coordinate
--- space, but ui.install_druid_picking() fixes that at the source, so there is no
--- longer any reason for the HUD to own its own input handling.
+-- *The system sheet* is rebuilt whenever the selection changes, because its
+-- content varies enormously - a waypoint you have never visited needs three
+-- lines, a developed colony of yours needs garrison, output, three installations
+-- and a list of fleets. `ui.collect` records the nodes so the rebuild does not
+-- leak.
 --
--- The camera also wants these touches. Rather than relying on winning the
--- input-focus race with the GUI - acquisition order is not guaranteed - the HUD
--- publishes the rectangles it occupies into `store.hud_zones`, and the camera
--- declines any gesture that starts inside one.
+-- *The order bar* is built once and driven by setting text.
+--
+-- Every control is a real Druid button. The camera also wants these touches, so
+-- rather than relying on winning the input-focus race - acquisition order is not
+-- guaranteed - the HUD publishes the rectangles it occupies into
+-- `store.hud_zones`, and the camera declines any gesture starting inside one.
 
 local store = require("main.store")
 local backend = require("main.backend")
 local ui = require("main.ui")
 local monarch = require("monarch.monarch")
 local druid = require("druid.druid")
-local resources = require("galaxy.sim.resources")
+local config = require("galaxy.config")
+local sim_systems = require("galaxy.sim.systems")
+local sim_buildings = require("galaxy.sim.buildings")
+local sim_tech = require("galaxy.sim.tech")
+local sim_path = require("galaxy.sim.path")
 
-local STAR_LABEL_POOL = 80
+local STAR_LABEL_POOL = 70
 local REGION_LABEL_POOL = 12
+local FLEET_POOL = 40
 
--- Below this zoom individual systems are too dense to label legibly, and only
--- region names are drawn.
 local STAR_LABEL_MIN_ZOOM = 0.30
--- How many system labels to show at the extremes of the zoom range. Filling the
--- screen with names at full zoom-out turns the map into a wall of text, so the
--- budget grows as the player zooms in and the map earns the detail.
-local STAR_LABELS_AT_MIN_ZOOM = 14
-local STAR_LABELS_AT_MAX_ZOOM = 80
--- Above this, region names would sit uselessly far off screen.
+local STAR_LABELS_AT_MIN_ZOOM = 12
+local STAR_LABELS_AT_MAX_ZOOM = 70
 local REGION_LABEL_MAX_ZOOM = 1.10
 
 -- map.font is baked at 34px; these are the fractions of it the map draws at.
 local STAR_FONT_SCALE = 0.62
 local REGION_FONT_SCALE = 1.00
 
--- Chrome metrics. Outer margins come from ui.inset(), which adds the device's
--- safe-area insets to the design gap - the world still draws edge to edge, only
--- the chrome is held clear of a notch or a gesture strip.
 local TOP_H = 96
-local BOTTOM_H = 176
-local INFO_H = 264
+-- Shorter now that EMPIRE lives in the top bar: a status line and one row of
+-- controls. Every point saved here is map.
+local BAR_H = 156
+-- The staged plan is listed in the bar, and the bar grows *upward* to hold it,
+-- so SEND stays exactly where a thumb last found it. Past this many lines the
+-- rest collapse into a count: the bar still has to leave a map behind it.
+local MANIFEST_LINES = 3
+local MANIFEST_LINE_H = 34
+-- Where the first manifest line sits below the top of the card. The status line
+-- is above it and the control row below, and both stay put as the list grows:
+-- see layout_bar for why every line lands in the same place regardless of how
+-- many there are.
+local MANIFEST_TOP = 60
+-- The sheet is as tall as its content, between these.
+local SHEET_MIN = 200
+local SHEET_MAX = 640
 
 local STAR_COLOUR = ui.rgb(0xC2CCDE)
 local SELECTED_COLOUR = ui.rgb(0xFFE79E)
 
-local RESOURCE_KINDS = { "metal", "fuel", "research" }
+local KIND_LABEL = { colony = "Colony", outpost = "Outpost", waypoint = "Deep space" }
 
-local function make_text(pool, size, colour)
+local function player_colour(index)
+	local palette = config.player_palette
+	local c = palette[((index - 1) % #palette) + 1]
+	return vmath.vector4(c[1], c[2], c[3], 1)
+end
+
+-- Pools --------------------------------------------------------------------------
+
+local function make_label(pool, size, colour)
 	local node = gui.new_text_node(vmath.vector3(0, 0, 0), "")
 	gui.set_font(node, "map")
 	gui.set_scale(node, vmath.vector3(size, size, 1))
@@ -66,204 +85,614 @@ local function make_text(pool, size, colour)
 	return node
 end
 
--- Chrome ----------------------------------------------------------------------
+local function make_marker(pool)
+	local box = ui.sprite(0, 0, 34, 34, "icon_warship", ui.TEXT)
+	gui.set_pivot(box, gui.PIVOT_CENTER)
+	gui.set_enabled(box, false)
+	local text = ui.text(0, 0, "", ui.SMALL, ui.TEXT,
+		{ bold = true, pivot = gui.PIVOT_CENTER })
+	gui.set_enabled(text, false)
+	pool[#pool + 1] = { box = box, text = text }
+end
 
---- Republish the rectangles the camera must not pan from.
+-- Chrome -------------------------------------------------------------------------
+
 local function publish_zones(self)
 	local zones = {}
 	if self.top_zone then zones[#zones + 1] = self.top_zone end
-	if self.bottom_zone then zones[#zones + 1] = self.bottom_zone end
-	if self.info_zone and self.info_visible then zones[#zones + 1] = self.info_zone end
+	if self.bar_zone then zones[#zones + 1] = self.bar_zone end
+	if self.sheet_zone then zones[#zones + 1] = self.sheet_zone end
 	store.hud_zones = zones
 end
 
---- The always-visible balances, plus the turn clock.
---
--- These are the numbers a player checks most often, so they cost no taps. The
--- rate matters as much as the balance - a balance only says where you are - so
--- both are on the chip.
-local function build_overview(self, w, h, pad)
+--- The always-visible numbers: what the empire has, and when the turn lands.
+local function build_overview(self, w, h, pad, on_empire)
 	local y = h - pad.top
 	local width = w - pad.left - pad.right
 	local card, border = ui.card(pad.left, y, width, TOP_H)
-	self.overview = { card = card, border = border, value = {}, rate = {}, icon = {} }
+	self.overview = { card = card, border = border }
 
-	local column = (width - 36) / 4
-	local x = pad.left + 20
-	for i = 1, #RESOURCE_KINDS do
-		local kind = RESOURCE_KINDS[i]
+	-- EMPIRE sits top right, in the bar the player already reads every turn,
+	-- rather than competing with SEND for the thumb row at the bottom.
+	local empire_w = 168
+	self.empire = ui.button(self.druid, w - pad.right - 14 - empire_w, y - 18,
+		empire_w, 60, "EMPIRE", on_empire,
+		{ icon = "icon_research", icon_size = 24, size = ui.CAPS })
+
+	local x = pad.left + 14
+	local column = ((w - pad.right - 14 - empire_w - 16) - x) / 3
+	local function slot(i, icon, colour)
 		local cx = x + column * (i - 1)
-		self.overview.icon[kind] = ui.icon(cx, y - 26, 34, ui.RESOURCE_ICON[kind],
-			ui.RESOURCE_COLOUR[kind])
-		self.overview.value[kind] = ui.text(cx + 44, y - 36, "0", ui.BODY, ui.TEXT,
-			{ bold = true })
-		self.overview.rate[kind] = ui.text(cx + 44, y - 68, "", ui.SMALL, ui.DIM)
+		return {
+			icon = ui.icon(cx, y - 26, 30, icon, colour),
+			value = ui.text(cx + 38, y - 34, "0", ui.BODY, ui.TEXT, { bold = true }),
+			note = ui.text(cx + 38, y - 66, "", ui.SMALL, ui.DIM),
+		}
 	end
+	-- Regions replace the raw research number here. Research is a means and
+	-- lives on the empire screen; regions are the objective, and how close the
+	-- game is has to be readable without opening anything.
+	self.overview.ships = slot(1, "icon_warship", ui.TEXT)
+	self.overview.regions = slot(2, "icon_flag", ui.ACCENT)
+	self.overview.clock = slot(3, "icon_clock", ui.DIM)
 
-	local cx = x + column * 3
-	self.overview.clock_icon = ui.icon(cx, y - 27, 32, "icon_clock", ui.DIM)
-	self.overview.turn = ui.text(cx + 42, y - 36, "", ui.BODY, ui.TEXT, { bold = true })
-	self.overview.clock = ui.text(cx + 42, y - 68, "", ui.SMALL, ui.DIM)
+	-- A turn resolving while the map is open must not throw a popup over
+	-- somebody mid-read, so the digest is held rather than shown (see
+	-- main/galaxy.script) and the turn card becomes the way in. The hit area is
+	-- its own transparent node because the slot is three separate nodes and the
+	-- whole of it should be the target; picking here is an axis-aligned test
+	-- against position and size, so an invisible node is still pickable.
+	local clock_x = x + column * 2
+	self.report_hit = ui.panel(clock_x - 8, y - 12, column, 74, ui.CLEAR)
+	self.report_button = self.druid:new_button(self.report_hit, function()
+		local digest = store.pending_report
+		if not digest then return end
+		store.pending_report = nil
+		-- Opening it is what marks it read; until then the poll keeps asking
+		-- for the same window so nothing is lost if the player never taps.
+		store.seen_turn = digest.turn or store.seen_turn
+		monarch.show(hash("report"), nil, digest)
+	end)
+	self.report_button:set_enabled(false)
 
 	self.top_zone = { pad.left, h - pad.top - TOP_H, w - pad.right, h - pad.top }
 end
 
---- What the player has selected: what it is, what it holds, what it produces.
+local function star_name(id)
+	local g = store.galaxy
+	local star = id and g and g.stars[id]
+	return (star and star.name) or ("system " .. tostring(id))
+end
+
+local function fleet_by_id(id)
+	local view = store.game_view
+	if not view or not view.fleets then return nil end
+	for i = 1, #view.fleets do
+		if view.fleets[i].id == id then return view.fleets[i] end
+	end
+	return nil
+end
+
+--- One staged order, in the words the player thought it in.
 --
--- Built once with a fixed shape and then filled in, rather than rebuilt per
--- selection. Selection changes on every tap, and deleting and recreating twenty
--- nodes each time is churn the frame does not need.
-local function build_info(self, w, pad)
-	local y = pad.bottom + BOTTOM_H + ui.GAP + INFO_H
-	local width = w - pad.left - pad.right
-	local inner = pad.left + 24
-	local nodes = {}
-	local function keep(node) nodes[#nodes + 1] = node; return node end
+-- A count on the button is not enough to act on. The batch *replaces* whatever
+-- the server is holding, so the thing that has to be right is the list, and the
+-- only way to check a list is to read it.
+local function describe_order(o)
+	local kind = o.kind
 
-	local card, border = ui.card(pad.left, y, width, INFO_H)
-	keep(card)
-	keep(border)
+	if kind == "launch" then
+		local dest = o.route and o.route[#o.route]
+		return string.format("Send %s from %s to %s",
+			o.ships and ui.plural(o.ships, "ship") or "the garrison",
+			star_name(o.at), star_name(dest))
 
-	self.info = { nodes = nodes, stat = {}, yield = {} }
-	self.info.name = keep(ui.h2(inner, y - 40, ""))
-	self.info.subtitle = keep(ui.small(inner, y - 76, ""))
-	keep(ui.divider(inner, y - 96, width - 48))
+	elseif kind == "move" then
+		local fleet = fleet_by_id(o.fleet)
+		local who = (fleet and fleet.name) or ("Fleet " .. tostring(o.fleet))
+		local dest = o.route and o.route[#o.route]
+		if not dest then return who .. " holds" end
+		if o.ships then
+			return string.format("Detach %s of %s to %s",
+				ui.plural(o.ships, "ship"), who, star_name(dest))
+		end
+		return string.format("%s to %s", who, star_name(dest))
 
-	-- Holdings: warships, population, freighters.
-	local column = (width - 48) / 3
-	local slots = { "warship", "growth", "freighter" }
-	for i = 1, #slots do
-		local sx = inner + column * (i - 1)
-		self.info.stat[i] = {
-			icon = keep(ui.icon(sx, y - 112, 30, "icon_" .. slots[i], ui.FAINT)),
-			value = keep(ui.text(sx + 40, y - 127, "-", ui.BODY, ui.TEXT, { bold = true })),
-		}
+	elseif kind == "garrison" then
+		local fleet = fleet_by_id(o.fleet)
+		return ((fleet and fleet.name) or ("Fleet " .. tostring(o.fleet)))
+			.. " stands down"
+
+	elseif kind == "build" then
+		if o.building == "" then return "Stop building at " .. star_name(o.at) end
+		local entry = sim_buildings.by_id(o.building)
+		return string.format("%s at %s", (entry and entry.label) or tostring(o.building),
+			star_name(o.at))
+
+	elseif kind == "research" then
+		if o.tech == "" then return "Stop researching" end
+		local entry = sim_tech.by_id(o.tech)
+		return "Research " .. ((entry and entry.label) or tostring(o.tech))
 	end
 
-	keep(ui.caps(inner, y - 166, "yield"))
-	for i = 1, #RESOURCE_KINDS do
-		local kind = RESOURCE_KINDS[i]
-		local sx = inner + column * (i - 1)
-		self.info.yield[kind] = {
-			icon = keep(ui.icon(sx, y - 186, 28, ui.RESOURCE_ICON[kind],
-				ui.RESOURCE_COLOUR[kind])),
-			value = keep(ui.text(sx + 38, y - 200, "", ui.SMALL, ui.TEXT)),
-		}
-	end
-
-	self.info.hint = keep(ui.small(inner, y - 228, "", ui.ACCENT,
-		{ width = width - 48, anchor_top = true }))
-	self.info_zone = { pad.left, y - INFO_H, w - pad.right, y }
-	self.info_visible = nil
+	return tostring(kind)
 end
 
---- Show or hide the whole selected-system card, its exclusion zone included.
-local function set_info_visible(self, visible)
-	if self.info_visible == visible then return end
-	self.info_visible = visible
-	for i = 1, #self.info.nodes do
-		gui.set_enabled(self.info.nodes[i], visible)
+--- The plan as lines. Research goes last: it is a standing directive rather
+--- than a thing that happens at a place, and it reads better as a footnote.
+local function plan_lines()
+	local lines = {}
+	for i = 1, #store.orders do
+		lines[#lines + 1] = describe_order(store.orders[i])
 	end
-	publish_zones(self)
+	if store.pending_research ~= nil then
+		lines[#lines + 1] = describe_order({
+			kind = "research", tech = store.pending_research })
+	end
+	return lines
 end
 
---- The order controls.
-local function build_controls(self, w, pad, submit)
-	local y = pad.bottom + BOTTOM_H
+--- The order bar: what is about to be sent, cancel an aim, or send it.
+local function build_bar(self, w, pad, submit)
+	local y = pad.bottom + BAR_H
 	local width = w - pad.left - pad.right
-	ui.card(pad.left, y, width, BOTTOM_H)
+	local card, border = ui.card(pad.left, y, width, BAR_H)
 
 	local inner = 24
 	self.status = ui.small(pad.left + inner, y - 26, "", ui.DIM,
 		{ width = width - inner * 2, anchor_top = true })
 
-	local row_y = y - 66
-	local bh = ui.CONTROL
-	local left = pad.left + inner
-	local right = w - pad.right - inner
-
-	-- EMPIRE opens the stockpile and research popup.
-	local empire_w = 176
-	self.empire = ui.button(self.druid, left, row_y, empire_w, bh, "EMPIRE",
-		function() monarch.show(hash("empire")) end,
-		{ icon = "icon_research", icon_size = 30, size = ui.CAPS })
-
-	-- What the next planned order sends. A segmented control rather than one
-	-- button that changes label: sending warships when you meant freighters is
-	-- expensive, so which mode is active has to be readable at a glance rather
-	-- than inferred from a caption.
-	local seg_x = left + empire_w + 14
-	local seg_w = 240
-	-- The track is visibly lighter than the card, not darker: at BG_SOFT it
-	-- disappeared into the panel and the control read as one blue pill sitting
-	-- next to some grey text rather than as two choices.
-	ui.pill(seg_x, row_y, seg_w, bh, ui.CARD_ALT)
-	ui.pill_line(seg_x, row_y, seg_w, bh, ui.BORDER)
-	self.mode_halves = {}
-	local modes = {
-		{ id = "move", label = "MOVE", icon = "icon_warship" },
-		{ id = "trade", label = "TRADE", icon = "icon_freighter" },
-	}
-	for i = 1, #modes do
-		local mode = modes[i]
-		local hw = (seg_w - 10) * 0.5
-		local hx = seg_x + 5 + hw * (i - 1)
-		local fill = ui.pill(hx, row_y - 5, hw, bh - 10, ui.CLEAR)
-		local glyph = ui.icon(hx + 12, row_y - 18, 28, mode.icon, ui.DIM)
-		local label = ui.text(hx + 48, row_y - bh * 0.5, mode.label, ui.CAPS, ui.DIM,
-			{ bold = true })
-		self.mode_halves[i] = { id = mode.id, fill = fill, glyph = glyph, label = label }
-		self.druid:new_button(fill, function()
-			store.order_mode = mode.id
-			-- A half-made plan in the other mode would send the wrong hulls.
-			store.order_source = nil
-		end)
+	-- Created once at full capacity and then repositioned, rather than rebuilt
+	-- whenever the plan changes. The plan changes on every tap, and running the
+	-- whole bar through Druid that often is how the deleted-node traps in
+	-- ui.lua get sprung.
+	self.manifest = {}
+	for i = 1, MANIFEST_LINES + 1 do
+		local node = ui.small(pad.left + inner + 10, y, "", ui.TEXT,
+			{ width = width - inner * 2 - 10 })
+		gui.set_enabled(node, false)
+		self.manifest[i] = node
 	end
 
-	local send_x = seg_x + seg_w + 14
-	self.send = ui.button(self.druid, send_x, row_y, right - send_x, bh, "SEND",
+	local row_y = y - 52
+	local bh = ui.CONTROL
+	local right = w - pad.right - inner
+
+	-- CANCEL only exists while something is being aimed, so SEND keeps the far
+	-- right where a thumb expects it either way.
+	local send_w = 300
+	self.cancel = ui.button(self.druid, right - send_w - 182, row_y, 168, bh,
+		"CANCEL", function()
+			store.aiming = nil
+			store.selected_fleet = nil
+			self.sheet_dirty = true
+		end, { size = ui.CAPS })
+
+	self.send = ui.button(self.druid, right - send_w, row_y, send_w, bh, "SEND",
 		function() submit(self) end, { style = "primary", size = ui.CAPS })
 
-	self.bottom_zone = { pad.left, y - BOTTOM_H, w - pad.right, y }
-	-- Includes the safe inset, so the camera frames the galaxy in the space the
-	-- player can actually see.
-	store.hud_bar_height = pad.bottom + BOTTOM_H
+	self.bar = {
+		card = card, border = border, width = width,
+		x = pad.left, base_top = y, inner = inner, lines = -1,
+	}
+	self.bar_zone = { pad.left, y - BAR_H, w - pad.right, y }
+	-- Deliberately the *base* height, not the grown one: the camera derives the
+	-- zoom floor and the framed centre from this, so letting it move whenever an
+	-- order is staged would shift the map under the player - the same trap the
+	-- ten-second poll used to spring on the zoom.
+	store.hud_bar_height = pad.bottom + BAR_H
 end
 
--- Map labels ------------------------------------------------------------------
+--- Grow the bar upward to fit `lines` of manifest.
+--
+-- The control row never moves: it is anchored the same distance above the
+-- bottom whatever the card does, which is what lets SEND be somewhere a thumb
+-- can find without looking. The list grows upward *into* the new space, so the
+-- last line always sits the same distance above the row and only the top of the
+-- card and the status line above it actually travel.
+local function layout_bar(self, lines)
+	local b = self.bar
+	if not b or b.lines == lines then return end
+	b.lines = lines
+
+	local extra = lines * MANIFEST_LINE_H
+	local top = b.base_top + extra
+	local height = BAR_H + extra
+
+	for _, node in ipairs({ b.card, b.border }) do
+		gui.set_position(node, vmath.vector3(b.x, top, 0))
+		gui.set_size(node, vmath.vector3(b.width, height, 0))
+	end
+	gui.set_position(self.status,
+		vmath.vector3(b.x + b.inner, top - 26, 0))
+	for i = 1, #self.manifest do
+		gui.set_position(self.manifest[i], vmath.vector3(b.x + b.inner + 10,
+			top - MANIFEST_TOP - (i - 1) * MANIFEST_LINE_H, 0))
+	end
+
+	self.bar_zone[4] = top
+	publish_zones(self)
+	-- The sheet stacks on top of the bar, so it has to move with it. It is
+	-- rebuilt rather than nudged because its own height depends on what is
+	-- selected, and this only happens when the line count actually changes.
+	self.sheet_dirty = true
+end
+
+--- How far the manifest has pushed the top of the bar up.
+local function bar_extra(self)
+	return (self.bar and self.bar.lines or 0) * MANIFEST_LINE_H
+end
+
+-- The system sheet -----------------------------------------------------------------
+
+--- What the player knows about a system, or nil if they have never seen it.
+local function known(id)
+	local view = store.game_view
+	if not view then return nil end
+	return view.systems[tostring(id)]
+end
+
+local function my_fleets_at(id)
+	local view = store.game_view
+	local out = {}
+	if not view then return out end
+	for i = 1, #view.fleets do
+		local f = view.fleets[i]
+		if f.at == id and (f.eta or 0) == 0 then out[#out + 1] = f end
+	end
+	table.sort(out, function(p, q) return p.id < q.id end)
+	return out
+end
+
+--- Ships already committed out of a garrison by staged orders, so the sheet
+--- never offers to launch the same ships twice.
+local function committed_from(id)
+	local n = 0
+	for i = 1, #store.orders do
+		local o = store.orders[i]
+		if o.kind == "launch" and o.at == id then n = n + (o.ships or 0) end
+	end
+	return n
+end
+
+local function staged_build(id)
+	for i = 1, #store.orders do
+		local o = store.orders[i]
+		if o.kind == "build" and o.at == id then return o.building end
+	end
+	return nil
+end
+
+--- Rebuild the panel describing whatever is selected. Returns its height.
+--
+-- Laid out downward from zero and shifted into place at the end, because the
+-- height is not known until the content is on the page.
+local function build_sheet(self, w, pad)
+	-- Its own Druid instance, dropped wholesale. Tracking each component by hand
+	-- is what broke the empire screen: helpers like ui.scroll register one of
+	-- their own, and a component that outlives its node throws on the next touch
+	-- anywhere on screen.
+	ui.region(self.sheet_druid, self.sheet_nodes)
+	self.sheet_druid = nil
+	self.sheet_zone = nil
+
+	local id = store.selected
+	local g = store.galaxy
+	if not id or not g or not g.stars[id] then return 0 end
+
+	self.sheet_druid = druid.new(self)
+
+	local previous = ui.collect(self.sheet_nodes)
+	local view = store.game_view
+	local info = known(id)
+	local star = g.stars[id]
+	local kind = sim_systems.kind(g, id)
+	local mine = (view and info and info.owner == view.you and info.live) and true or false
+
+	local width = w - pad.left - pad.right
+	local inner = pad.left + 24
+	local text_w = width - 48
+
+	-- The card first, so everything else lands on top of it in node order. Its
+	-- height is fixed up once the content below is measured.
+	local card = ui.panel(pad.left, 0, width, SHEET_MIN, ui.CARD)
+	local edge = ui.panel_line(pad.left, 0, width, SHEET_MIN, ui.BORDER)
+
+	local y = -34
+	ui.h2(inner, y, star.name)
+	local subtitle = KIND_LABEL[kind] or kind
+	local region = g.regions[star.region]
+	if region then subtitle = subtitle .. "   " .. region.name end
+	if star.feature_label ~= "" then subtitle = subtitle .. "   " .. star.feature_label end
+	y = y - 34
+	ui.small(inner, y, subtitle, ui.DIM, { width = text_w, anchor_top = true })
+	y = y - 28
+	ui.divider(inner, y, text_w)
+
+	if not info then
+		y = y - 44
+		ui.body(inner, y, "Unexplored", ui.FAINT)
+		y = y - 24
+	else
+		local column = text_w / 3
+		y = y - 46
+		local function stat(i, icon, value, colour)
+			ui.icon(inner + column * (i - 1), y + 15, 28, icon, ui.DIM)
+			ui.text(inner + column * (i - 1) + 38, y, value, ui.BODY,
+				colour or ui.TEXT, { bold = true })
+		end
+		stat(1, "icon_warship", tostring(info.garrison or 0))
+		if kind == "colony" then
+			stat(2, "icon_growth",
+				string.format("%d/%d", info.population or 0, info.capacity or 0))
+		else
+			stat(2, "icon_growth", "-", ui.FAINT)
+		end
+		stat(3, "icon_defence", tostring(info.defence or 0))
+
+		y = y - 34
+		if not info.live then
+			ui.small(inner, y, "Last seen turn " .. tostring(info.seen), ui.WARN)
+		elseif info.owner == 0 then
+			ui.small(inner, y, "Unclaimed", ui.DIM)
+		elseif not mine then
+			local name = (view.players[info.owner] and view.players[info.owner].name)
+				or ("Player " .. info.owner)
+			ui.small(inner, y, "Held by " .. name, ui.BAD)
+		else
+			ui.small(inner, y,
+				string.format("Producing %d a turn", info.output or 0), ui.GOOD)
+		end
+
+		-- Installations. Shown wherever you can see them, tappable only on yours.
+		local allowed = sim_buildings.available(g, id)
+		if #allowed > 0 and info.buildings then
+			y = y - 42
+			ui.caps(inner, y, "installations")
+			local staged = staged_build(id)
+			for k = 1, #allowed do
+				local entry = sim_buildings.by_id(allowed[k])
+				local level = info.buildings[entry.id] or 0
+				local pips = sim_buildings.max_level(entry.id)
+				local maxed = level >= pips
+				y = y - 56
+				local row = ui.panel(inner, y + 46, text_w, 52,
+					(staged == entry.id) and ui.ACCENT_SOFT or ui.CARD_ALT)
+				ui.icon(inner + 14, y + 36, 28, entry.icon,
+					level > 0 and ui.TEXT or ui.FAINT)
+				ui.body(inner + 54, y + 20, entry.label,
+					level > 0 and ui.TEXT or ui.DIM)
+
+				-- Level pips read faster than a number at a glance.
+				for pip = 1, pips do
+					ui.dot(inner + text_w - 26 - (pips - pip) * 26, y + 33, 14,
+						pip <= level and ui.GOOD or ui.BORDER)
+				end
+
+				local note = nil
+				if info.building and info.building.kind == entry.id then
+					note = string.format("%d/%d", info.building.paid,
+						info.building.cost or 0)
+				elseif staged == entry.id then
+					note = "queued"
+				elseif maxed then
+					note = "complete"
+				elseif mine then
+					local cost = sim_buildings.cost(entry.id, level,
+						(view.rates and view.rates.building_cost) or 0)
+					note = cost and ui.number(cost) or nil
+				end
+				if note then
+					ui.small(inner + text_w - 34 - pips * 26, y + 33, note, ui.DIM,
+						{ pivot = gui.PIVOT_E })
+				end
+
+				if mine and not maxed then
+					self.sheet_druid:new_button(row, function()
+							-- Tapping what is queued cancels it.
+							for oi = #store.orders, 1, -1 do
+								local o = store.orders[oi]
+								if o.kind == "build" and o.at == id then
+									table.remove(store.orders, oi)
+								end
+							end
+							if staged ~= entry.id then
+								store.orders[#store.orders + 1] = {
+									kind = "build", at = id, building = entry.id,
+								}
+							end
+							self.sheet_dirty = true
+						end)
+				end
+			end
+		end
+
+		-- Forces here, and what can be done with them.
+		local fleets = mine and my_fleets_at(id) or {}
+		local garrison = (info.garrison or 0) - committed_from(id)
+		if mine and (#fleets > 0 or garrison > 0) then
+			y = y - 42
+			ui.caps(inner, y, "forces here")
+
+			if garrison > 0 then
+				y = y - 58
+				ui.panel(inner, y + 48, text_w, 54, ui.CARD_ALT)
+				ui.icon(inner + 14, y + 37, 28, "icon_warship", ui.TEXT)
+				ui.body(inner + 54, y + 21, "Garrison", ui.TEXT)
+				ui.value(inner + text_w - 116, y + 21, tostring(garrison), ui.BODY, ui.TEXT)
+				local send = ui.button(self.sheet_druid, inner + text_w - 104, y + 48, 104, 54,
+					"SEND", function()
+						-- Half by default: emptying a world by accident is the
+						-- most expensive mistake available.
+						store.aiming = { kind = "launch", at = id,
+							ships = math.max(1, math.floor(garrison * 0.5)) }
+						store.selected_fleet = nil
+						self.sheet_dirty = true
+					end, { style = "primary", size = ui.CAPS })
+			end
+
+			for k = 1, #fleets do
+				local fleet = fleets[k]
+				local chosen = store.selected_fleet == fleet.id
+				y = y - 58
+				local row = ui.panel(inner, y + 48, text_w, 54,
+					chosen and ui.ACCENT_SOFT or ui.CARD_ALT)
+				ui.icon(inner + 14, y + 37, 28, "icon_warship",
+					chosen and ui.ACCENT or ui.TEXT)
+				ui.body(inner + 54, y + 27, fleet.name, ui.TEXT)
+				ui.small(inner + 54, y + 6, fleet.rank or "", ui.FAINT)
+				ui.value(inner + text_w - 14, y + 21,
+					fleet.command and (fleet.ships .. "/" .. fleet.command)
+						or tostring(fleet.ships),
+					ui.BODY,
+					(fleet.command and fleet.ships >= fleet.command) and ui.WARN or ui.TEXT)
+				self.sheet_druid:new_button(row, function()
+						if chosen then
+							store.selected_fleet = nil
+							store.aiming = nil
+						else
+							store.selected_fleet = fleet.id
+							store.aiming = { kind = "move", fleet = fleet.id }
+						end
+						self.sheet_dirty = true
+					end)
+			end
+
+			if store.selected_fleet then
+				y = y - 64
+				local stand = ui.button(self.sheet_druid, inner, y + 58, text_w, 54,
+					"STAND DOWN", function()
+						store.orders[#store.orders + 1] = {
+							kind = "garrison", fleet = store.selected_fleet,
+						}
+						store.selected_fleet = nil
+						store.aiming = nil
+						self.sheet_dirty = true
+					end, { size = ui.CAPS })
+			end
+		end
+
+		-- Enemy forces in sight here.
+		if view then
+			local seen = 0
+			for c = 1, #view.contacts do
+				if view.contacts[c].at == id then seen = seen + view.contacts[c].ships end
+			end
+			if seen > 0 then
+				y = y - 40
+				ui.small(inner, y, ui.plural(seen, "hostile ship") .. " in sight", ui.BAD)
+			end
+		end
+		y = y - 24
+	end
+
+	local height = math.max(SHEET_MIN, math.min(SHEET_MAX, -y))
+	gui.set_size(card, vmath.vector3(width, height, 0))
+	gui.set_size(edge, vmath.vector3(width, height, 0))
+
+	local top = pad.bottom + BAR_H + bar_extra(self) + ui.GAP + height
+	for i = 1, #self.sheet_nodes do
+		local node = self.sheet_nodes[i]
+		local p = gui.get_position(node)
+		gui.set_position(node, vmath.vector3(p.x, p.y + top, 0))
+	end
+
+	ui.collect(previous)
+	self.sheet_zone = { pad.left, top - height, w - pad.right, top }
+	return height
+end
+
+-- Map labels and fleet markers -------------------------------------------------------
+
+local function project(cam, w, h, wx, wy)
+	return (wx - cam.x) * cam.zoom + w * 0.5, (wy - cam.y) * cam.zoom + h * 0.5
+end
+
+--- Draw every fleet the player can see, positioned along its lane.
+--
+-- GUI nodes rather than world geometry: a marker wants to stay a constant size
+-- at every zoom and to carry a crisp glyph, which is what the labels already do.
+-- It also avoids rebuilding a vertex buffer whenever a fleet moves.
+local function update_fleets(self, g, cam, w, h)
+	local view = store.game_view
+	local used = 0
+	if view and self.lane_lengths then
+		local lengths = self.lane_lengths
+
+		local function place(at, next_hop, progress, ships, colour, mine)
+			if used >= FLEET_POOL then return end
+			local a = g.stars[at]
+			if not a then return end
+			local wx, wy = a.x, a.y
+			local angle = nil
+			local b = next_hop and g.stars[next_hop]
+			if b then
+				local leg = sim_path.lane_length(lengths, at, next_hop) or 0
+				local t = leg > 0 and math.min(1, (progress or 0) / leg) or 0
+				wx = a.x + (b.x - a.x) * t
+				wy = a.y + (b.y - a.y) * t
+				angle = math.atan2(b.y - a.y, b.x - a.x)
+			end
+			local sx, sy = project(cam, w, h, wx, wy)
+			if sx < -60 or sx > w + 60 or sy < self.floor_y or sy > self.ceiling_y then
+				return
+			end
+			used = used + 1
+			local marker = self.fleet_nodes[used]
+			gui.set_enabled(marker.box, true)
+			gui.set_enabled(marker.text, true)
+			gui.set_position(marker.box, vmath.vector3(sx, sy, 0))
+			gui.set_position(marker.text, vmath.vector3(sx, sy - 30, 0))
+			gui.set_color(marker.box, colour)
+			gui.set_color(marker.text, colour)
+			gui.set_text(marker.text, ui.number(ships))
+			-- Point it along the lane; a parked fleet points up.
+			gui.set_rotation(marker.box, vmath.vector3(0, 0,
+				angle and (math.deg(angle) - 90) or 0))
+			local scale = mine and 1.0 or 0.82
+			gui.set_scale(marker.box, vmath.vector3(scale, scale, 1))
+		end
+
+		local mine_colour = player_colour(view.you)
+		for i = 1, #view.fleets do
+			local f = view.fleets[i]
+			place(f.at, f.next_hop, f.progress, f.ships, mine_colour, true)
+		end
+		for i = 1, #view.contacts do
+			local c = view.contacts[i]
+			place(c.at, c.next_hop, c.progress, c.ships, player_colour(c.owner), false)
+		end
+	end
+	for i = used + 1, FLEET_POOL do
+		gui.set_enabled(self.fleet_nodes[i].box, false)
+		gui.set_enabled(self.fleet_nodes[i].text, false)
+	end
+end
 
 local function update_labels(self, g, cam, w, h)
 	local zoom = cam.zoom
-	local half_w, half_h = w * 0.5, h * 0.5
-	-- Labels never intrude on the chrome, nor under a notch.
 	local pad = self.pad
-	local floor_y = pad.bottom + BOTTOM_H
-		+ (self.info_visible and (ui.GAP + INFO_H) or 0)
-	local ceiling_y = h - pad.top - TOP_H
+	local floor_y, ceiling_y = self.floor_y, self.ceiling_y
 
-	local function to_screen(wx, wy)
-		return (wx - cam.x) * zoom + half_w, (wy - cam.y) * zoom + half_h
-	end
-
-	-- Region names first: they own the space, and star labels avoid them.
 	local placed = {}
 	local used_regions = 0
 	if zoom <= REGION_LABEL_MAX_ZOOM then
 		for i = 1, #g.regions do
 			if used_regions >= REGION_LABEL_POOL then break end
 			local r = g.regions[i]
-			local sx, sy = to_screen(r.cx, r.cy)
+			local sx, sy = project(cam, w, h, r.cx, r.cy)
 			local text = r.name:upper()
 			local pw = ui.measure("map", text, REGION_FONT_SCALE)
-			local pbox = { sx - pw * 0.5, sy - 22, sx + pw * 0.5, sy + 22 }
-			-- A region name is centred on its centroid, so it can hang off
-			-- either edge - and past a rounded corner or a notch.
-			local blocked = pbox[1] < pad.left or pbox[3] > (w - pad.right)
-			for pi = 1, #placed do
-				local q = placed[pi]
-				if not (pbox[3] < q[1] or pbox[1] > q[3] or pbox[4] < q[2] or pbox[2] > q[4]) then
-					blocked = true
-					break
+			local box = { sx - pw * 0.5, sy - 22, sx + pw * 0.5, sy + 22 }
+			local blocked = box[1] < pad.left or box[3] > (w - pad.right)
+			if not blocked then
+				for pi = 1, #placed do
+					local q = placed[pi]
+					if not (box[3] < q[1] or box[1] > q[3]
+						or box[4] < q[2] or box[2] > q[4]) then
+						blocked = true
+						break
+					end
 				end
 			end
 			if not blocked and sy - 22 > floor_y and sy + 22 < ceiling_y then
@@ -273,14 +702,13 @@ local function update_labels(self, g, cam, w, h)
 				gui.set_text(node, text)
 				gui.set_position(node, vmath.vector3(sx, sy, 0))
 				local c = r.colour
-				-- Fade the region name out as the player zooms into it.
 				local fade = 1.0 - math.max(0, math.min(1,
 					(zoom - REGION_LABEL_MAX_ZOOM * 0.55) / (REGION_LABEL_MAX_ZOOM * 0.45)))
 				gui.set_color(node, vmath.vector4(
 					math.min(1, c[1] * 0.5 + 0.5),
 					math.min(1, c[2] * 0.5 + 0.5),
 					math.min(1, c[3] * 0.5 + 0.5), 0.28 + 0.52 * fade))
-				placed[#placed + 1] = pbox
+				placed[#placed + 1] = box
 			end
 		end
 	end
@@ -288,7 +716,6 @@ local function update_labels(self, g, cam, w, h)
 		gui.set_enabled(self.region_nodes[i], false)
 	end
 
-	-- Star names, brightest first, skipping any that would collide.
 	local used_stars = 0
 	local span = math.max(0.01, 1.4 - STAR_LABEL_MIN_ZOOM)
 	local t = math.max(0, math.min(1, (zoom - STAR_LABEL_MIN_ZOOM) / span))
@@ -299,16 +726,10 @@ local function update_labels(self, g, cam, w, h)
 		for oi = 1, #order do
 			if used_stars >= budget then break end
 			local s = g.stars[order[oi]]
-			local sx, sy = to_screen(s.x, s.y)
-			-- The label's own half-height, not a fudge factor: a name whose box
-			-- overlapped a card by a few pixels was still being drawn.
+			local sx, sy = project(cam, w, h, s.x, s.y)
 			if sy - 16 > floor_y and sy + 16 < ceiling_y then
 				local tw = ui.measure("map", s.name, STAR_FONT_SCALE)
 				local gap = 14
-				-- Place to the right normally, but flip to the left rather than
-				-- let the name run off the edge of the screen. If it does not
-				-- fit either way, it is simply not drawn - a name sliced by the
-				-- screen edge is worse than no name.
 				local x0 = sx + gap
 				local right_limit = w - pad.right
 				if (x0 + tw) > right_limit then x0 = sx - gap - tw end
@@ -330,7 +751,8 @@ local function update_labels(self, g, cam, w, h)
 					gui.set_enabled(node, true)
 					gui.set_text(node, s.name)
 					gui.set_position(node, vmath.vector3(x0, sy, 0))
-					gui.set_color(node, store.selected == s.id and SELECTED_COLOUR or STAR_COLOUR)
+					gui.set_color(node,
+						store.selected == s.id and SELECTED_COLOUR or STAR_COLOUR)
 					placed[#placed + 1] = box
 				end
 			end
@@ -341,109 +763,64 @@ local function update_labels(self, g, cam, w, h)
 	end
 end
 
--- Orders ----------------------------------------------------------------------
+-- Orders ----------------------------------------------------------------------------
 
---- What the player knows about a system, or nil if they have never seen it.
-local function known(id)
-	local view = store.game_view
-	if not view then return nil end
-	return view.systems[tostring(id)]
-end
-
---- Turn a pair of taps into a queued order.
---
--- First tap on a system you own picks the origin; the next tap on another
--- system queues half of what is there. Half rather than all, because emptying a
--- system by accident is the most expensive mistake available and this is a
--- two-tap gesture.
---
--- The MOVE/TRADE toggle decides which hulls travel. A trade run is the same
--- gesture but sends freighters, and only to a system you already own, since a
--- route needs two ends you hold.
-local function plan_orders(self)
+--- Turn a tap on the map into an order, if one was being aimed.
+local function resolve_aim(self)
 	local selected = store.selected
 	if selected == self.last_selected then return end
 	self.last_selected = selected
-	if not selected or not store.game_view then return end
+	self.sheet_dirty = true
 
-	local me = store.game_view.you
-	local trading = store.order_mode == "trade"
-	local info = known(selected)
+	local aim = store.aiming
+	if not aim or not selected then return end
 
-	local function stock_at(entry)
-		if not entry then return 0 end
-		return trading and (entry.freighters or 0) or (entry.ships or 0)
-	end
-
-	if not store.order_source then
-		if info and info.owner == me and info.live and stock_at(info) > 1 then
-			store.order_source = selected
-		end
-		return
-	end
-
-	if selected == store.order_source then
-		store.order_source = nil
-		return
-	end
-
-	-- A trade run has to end somewhere you hold; anything else is refused by
-	-- the server anyway, and refusing it here saves the player a turn.
-	if trading and not (info and info.owner == me and info.live) then
-		store.order_source = nil
-		return
-	end
-
-	local available = stock_at(known(store.order_source))
-	for i = 1, #store.orders do
-		local o = store.orders[i]
-		if o.from == store.order_source and (o.kind == "trade") == trading then
-			available = available - o.ships
-		end
-	end
-
-	local send = math.floor(available * 0.5)
-	if send >= 1 then
+	if aim.kind == "launch" then
+		if selected == aim.at then return end
 		store.orders[#store.orders + 1] = {
-			kind = trading and "trade" or "move",
-			from = store.order_source, to = selected, ships = send,
+			kind = "launch", at = aim.at, ships = aim.ships, route = { selected },
+		}
+	elseif aim.kind == "move" then
+		store.orders[#store.orders + 1] = {
+			kind = "move", fleet = aim.fleet, route = { selected },
 		}
 	end
-	store.order_source = nil
+	store.aiming = nil
+	store.selected_fleet = nil
+	-- No flash: the manifest in the bar now names the order that was just
+	-- added, and a flash would cover the line saying it has not been sent.
 end
 
---- How many separate things are waiting to be sent.
-local function pending_count()
-	local n = #store.orders
-	if store.pending_research ~= nil then n = n + 1 end
-	if store.pending_share ~= nil then n = n + 1 end
-	return n
-end
-
---- Send the whole plan: movement, trade, research target and build policy.
+--- Send the whole plan in one batch.
 --
--- One batch, because the server replaces the turn's orders wholesale. Sending
--- the standing choices separately would mean the second call wiped the first.
+-- Every send carries the *entire* plan, not the part added since the last one.
+-- `game.orders` replaces what the server holds rather than appending to it, so
+-- a batch that left anything out would silently discard it - which is exactly
+-- what happened while the client cleared its own orders on success. The plan
+-- now lives until its turn resolves (see main/store.lua).
 local function submit_orders(self)
 	local game = store.game
 	if not game or game.status ~= "active" then
 		msg.post("/galaxy#galaxy_script", "regenerate", {})
 		return
 	end
+	if self.sending or store.plan_count() == 0 then return end
 
 	local payload = {}
-	for i = 1, #store.orders do
-		payload[#payload + 1] = store.orders[i]
-	end
+	for i = 1, #store.orders do payload[#payload + 1] = store.orders[i] end
 	if store.pending_research ~= nil then
 		payload[#payload + 1] = { kind = "research", tech = store.pending_research }
 	end
-	if store.pending_share ~= nil then
-		payload[#payload + 1] = { kind = "policy", warship_share = store.pending_share }
-	end
-	if #payload == 0 then return end
+
+	-- Held over the round trip so the button can say so. A send that vanishes
+	-- into a request with no visible change is indistinguishable from a tap
+	-- that missed.
+	self.sending = true
+	self.flash, self.flash_timer = nil, 0
+	self.sent_flash = nil
 
 	backend.game_orders(game.id, payload, function(res, err)
+		self.sending = false
 		if err then
 			self.flash = "Orders rejected: " .. tostring(err)
 			self.flash_timer = 0
@@ -452,27 +829,22 @@ local function submit_orders(self)
 		end
 		print(string.format("galaxy: %d order(s) accepted for turn %s",
 			res.accepted or 0, tostring(res.for_turn)))
-		store.orders = {}
-		store.order_source = nil
-		store.pending_research = nil
-		store.pending_share = nil
-		self.flash = "Orders in for turn " .. tostring(res.for_turn)
-		self.flash_timer = 0
+		store.plan_sent(tonumber(res.for_turn) or store.orders_turn)
+		store.aiming = nil
+		store.selected_fleet = nil
+		self.sent_flash = 0
+		self.flash = nil
+		self.sheet_dirty = true
 	end)
 end
 
---- Build every piece of chrome. Re-run when the view size or the insets change.
+-- Lifecycle -------------------------------------------------------------------------
+
 local function build_chrome(self, w, h)
-	-- Druid components hold node references, so a relayout drops the whole
-	-- instance rather than removing them one at a time...
-	if self.chrome_druid then self.chrome_druid:final() end
-	-- ...and the nodes themselves have to go with it. ui.collect records them;
-	-- without this every rebuild leaked a whole layout and the scene ran out of
-	-- nodes after a few window changes.
-	if self.chrome_nodes then
-		for i = 1, #self.chrome_nodes do gui.delete_node(self.chrome_nodes[i]) end
-	end
-	self.chrome_nodes = {}
+	ui.region(self.sheet_druid, self.sheet_nodes)
+	ui.region(self.chrome_druid, self.chrome_nodes)
+	self.sheet_druid, self.chrome_druid = nil, nil
+	self.chrome_nodes, self.sheet_nodes = {}, {}
 	local previous = ui.collect(self.chrome_nodes)
 
 	self.chrome_druid = druid.new(self)
@@ -480,16 +852,15 @@ local function build_chrome(self, w, h)
 
 	local pad = ui.inset()
 	self.pad = pad
-	build_overview(self, w, h, pad)
-	build_info(self, w, pad)
-	build_controls(self, w, pad, submit_orders)
-	set_info_visible(self, false)
-	publish_zones(self)
-
+	build_overview(self, w, h, pad,
+		function() monarch.show(hash("empire")) end)
+	build_bar(self, w, pad, submit_orders)
 	ui.collect(previous)
-end
 
--- Per-frame refresh -----------------------------------------------------------
+	self.sheet_height = 0
+	self.sheet_dirty = true
+	publish_zones(self)
+end
 
 local function refresh_overview(self)
 	local view = store.game_view
@@ -499,143 +870,150 @@ local function refresh_overview(self)
 
 	gui.set_enabled(o.card, on)
 	gui.set_enabled(o.border, on)
-	gui.set_enabled(o.clock_icon, on)
-	gui.set_enabled(o.turn, on)
-	gui.set_enabled(o.clock, on)
-	for i = 1, #RESOURCE_KINDS do
-		local kind = RESOURCE_KINDS[i]
-		gui.set_enabled(o.icon[kind], on)
-		gui.set_enabled(o.value[kind], on)
-		gui.set_enabled(o.rate[kind], on)
+	self.empire.set_visible(on)
+	local slots = { o.ships, o.regions, o.clock }
+	for i = 1, #slots do
+		gui.set_enabled(slots[i].icon, on)
+		gui.set_enabled(slots[i].value, on)
+		gui.set_enabled(slots[i].note, on)
 	end
 	if not on then return end
 
-	for i = 1, #RESOURCE_KINDS do
-		local kind = RESOURCE_KINDS[i]
-		gui.set_text(o.value[kind], ui.number(view.stock[kind]))
-		local rate = view.income and view.income[kind] or 0
-		gui.set_text(o.rate[kind], ui.rate(rate))
-		gui.set_color(o.rate[kind], rate >= 0 and ui.GOOD or ui.BAD)
+	local rates = view.rates or {}
+	gui.set_text(o.ships.value, ui.number(rates.ships or 0))
+	local commanders_out = #(view.fleets or {})
+	local cap = view.commander_cap or rates.commander_cap or 0
+	gui.set_text(o.ships.note, string.format("%d/%d led", commanders_out, cap))
+	gui.set_color(o.ships.note, commanders_out >= cap and ui.WARN or ui.DIM)
+
+	local held = view.regions_held or 0
+	local needed = view.regions_needed or 0
+	gui.set_text(o.regions.value, string.format("%d/%d", held, needed))
+	gui.set_text(o.regions.note, held >= needed and "victory" or "regions")
+	gui.set_color(o.regions.value, held >= needed and ui.GOOD or ui.TEXT)
+
+	gui.set_text(o.clock.value, "Turn " .. tostring(view.turn or 0))
+	local report = store.pending_report
+	if self.report_button then self.report_button:set_enabled(report ~= nil) end
+	if report then
+		gui.set_text(o.clock.note, "new - tap to read")
+		gui.set_color(o.clock.note, ui.ACCENT)
+		gui.set_color(o.clock.icon, ui.ACCENT)
+	else
+		local remaining = math.max(0, (game.next_turn_at or 0) - (store.now_estimate or 0))
+		gui.set_text(o.clock.note, ui.duration(remaining))
+		gui.set_color(o.clock.note, ui.DIM)
+		gui.set_color(o.clock.icon, ui.DIM)
 	end
-	gui.set_text(o.turn, "Turn " .. tostring(view.turn or 0))
-	local remaining = math.max(0, (game.next_turn_at or 0) - (store.now_estimate or 0))
-	gui.set_text(o.clock, ui.duration(remaining))
 end
 
-local function refresh_info(self, g)
-	local id = store.selected
-	if not id or not g or not g.stars[id] then
-		set_info_visible(self, false)
-		return
-	end
-	set_info_visible(self, true)
+--- Put the plan on the page, and return how many lines it took.
+local function refresh_manifest(self, lines, sent)
+	local shown = math.min(#lines, MANIFEST_LINES)
+	local overflow = #lines - shown
+	-- Sent lines are stated rather than proposed, so they sit back a weight.
+	local colour = sent and ui.DIM or ui.TEXT
 
-	local s = g.stars[id]
-	local info = known(id)
-	local view = store.game_view
-
-	gui.set_text(self.info.name, s.name)
-
-	local subtitle = s.class_label
-	local region = g.regions[s.region]
-	if region then subtitle = subtitle .. "   " .. region.name end
-	if s.feature_label ~= "" then subtitle = subtitle .. "   " .. s.feature_label end
-	gui.set_text(self.info.subtitle, subtitle)
-
-	local values = { "-", "-", "-" }
-	local stat_colour = ui.FAINT
-	if info then
-		values[1] = tostring(info.ships or 0)
-		values[2] = tostring(info.population or 0)
-		if (info.freighters or 0) > 0 then values[3] = tostring(info.freighters) end
-		stat_colour = info.live and ui.TEXT or ui.DIM
-	end
-	for i = 1, 3 do
-		gui.set_text(self.info.stat[i].value, values[i])
-		gui.set_color(self.info.stat[i].value, stat_colour)
-		gui.set_color(self.info.stat[i].icon, values[i] == "-" and ui.FAINT or ui.DIM)
-	end
-
-	-- Yields are derived from the star class and feature, which are public map
-	-- data, so they are worth showing even somewhere never visited: knowing what
-	-- a system is worth is how a conquest gets planned.
-	local y = resources.base_yield(g, id)
-	for i = 1, #RESOURCE_KINDS do
-		local kind = RESOURCE_KINDS[i]
-		gui.set_text(self.info.yield[kind].value, string.format("%.1f", y[kind]))
-	end
-
-	-- The line that says what tapping next will do.
-	local hint, hint_colour = "", ui.DIM
-	if view then
-		local me = view.you
-		if store.order_source == id then
-			hint = store.order_mode == "trade"
-				and "Selected - tap a system you own to open a route"
-				or "Selected - tap a destination"
-			hint_colour = ui.ACCENT
-		elseif store.order_source then
-			hint = "Tap again to send from " .. g.stars[store.order_source].name
-			hint_colour = ui.ACCENT
-		elseif not info then
-			hint = "Unexplored"
-			hint_colour = ui.FAINT
-		elseif info.owner == 0 then
-			hint = "Unclaimed"
+	for i = 1, MANIFEST_LINES do
+		local node = self.manifest[i]
+		if i <= shown then
+			gui.set_enabled(node, true)
+			gui.set_text(node, "- " .. lines[i])
+			gui.set_color(node, colour)
 		else
-			local stale = info.live and "" or "   last seen turn " .. tostring(info.seen)
-			if info.owner == me then
-				hint = "Yours" .. stale
-				hint_colour = ui.GOOD
-			else
-				local who = (view.players[info.owner] and view.players[info.owner].name)
-					or ("Player " .. info.owner)
-				hint = who .. stale
-				hint_colour = ui.BAD
-			end
+			gui.set_enabled(node, false)
 		end
 	end
-	gui.set_text(self.info.hint, hint)
-	gui.set_color(self.info.hint, hint_colour)
+
+	local last = self.manifest[MANIFEST_LINES + 1]
+	if overflow > 0 then
+		gui.set_enabled(last, true)
+		gui.set_text(last, "  +" .. overflow .. " more")
+		gui.set_color(last, ui.FAINT)
+		return shown + 1
+	end
+	gui.set_enabled(last, false)
+	return shown
 end
 
-local function refresh_controls(self, g)
+local function refresh_bar(self, g)
 	local game = store.game
 	local in_game = (game and game.status == "active") and true or false
 
-	self.empire.set_visible(in_game)
-	for i = 1, #self.mode_halves do
-		local half = self.mode_halves[i]
-		local on = store.order_mode == half.id
-		gui.set_enabled(half.fill, in_game)
-		gui.set_enabled(half.glyph, in_game)
-		gui.set_enabled(half.label, in_game)
-		gui.set_color(half.fill, on and ui.ACCENT or ui.CLEAR)
-		gui.set_color(half.glyph, on and ui.ACCENT_TEXT or ui.DIM)
-		gui.set_color(half.label, on and ui.ACCENT_TEXT or ui.DIM)
-	end
+	self.cancel.set_visible(in_game and store.aiming ~= nil)
 
 	if in_game then
-		local pending = pending_count()
-		self.send.set_text(pending > 0 and ("SEND " .. pending) or "NO ORDERS")
-		self.send.set_style(pending > 0 and "primary" or "disabled")
+		local view = store.game_view
+		local count = store.plan_count()
 
-		local text = self.flash
+		-- A plan adopts the turn it is aimed at the moment it has anything in
+		-- it, which is what lets a resolving turn tell a live plan from a stale
+		-- one. This runs every frame, so there is no window in which a staged
+		-- order has no turn against it.
+		if count > 0 and not store.orders_turn then
+			store.orders_turn = (view and view.turn or 0) + 1
+		end
+
+		-- One signature does both jobs: it says whether anything is unsent, and
+		-- it is the cache key for the manifest. Without the key this rebuilt
+		-- three formatted strings and walked the fleet list every frame, and
+		-- nothing else in this project does per-frame work on the CPU.
+		local signature = (count > 0) and store.plan_signature() or ""
+		local unsent = (count > 0) and (store.sent_signature ~= signature) or false
+		local turn = store.orders_turn or ((view and view.turn or 0) + 1)
+
+		local key = signature .. (unsent and "|unsent" or "|in")
+		if key ~= self.manifest_key then
+			self.manifest_key = key
+			layout_bar(self, refresh_manifest(self, plan_lines(), not unsent))
+		end
+
+		-- Four states, and each one has to be distinguishable at a glance from
+		-- a tap that did nothing: SEND is the only one that is interactive, and
+		-- SENT is a receipt that reverts on its own.
+		local label, style, enabled
+		if self.sending then
+			label, style, enabled = "SENDING", "disabled", false
+		elseif self.sent_flash then
+			label, style, enabled = "SENT", "success", false
+		elseif unsent then
+			label, style, enabled = "SEND " .. count, "primary", true
+		elseif count > 0 then
+			label, style, enabled = "ORDERS IN", "disabled", false
+		else
+			label, style, enabled = "NO ORDERS", "disabled", false
+		end
+		self.send.set_text(label)
+		-- Enabled first: set_enabled picks a style of its own, so the exact one
+		-- has to be applied after it.
+		self.send.set_enabled(enabled)
+		self.send.set_style(style)
+
+		local text, tone = self.flash, ui.ACCENT
 		if not text then
-			if store.order_source then
-				text = "Choose where to send them"
-			elseif pending > 0 then
-				text = string.format("%d order%s ready", pending, pending == 1 and "" or "s")
+			local aim = store.aiming
+			if aim and aim.kind == "launch" then
+				text, tone = "Tap where to send " .. ui.plural(aim.ships, "ship"), ui.ACCENT
+			elseif aim then
+				text, tone = "Tap where the fleet should go", ui.ACCENT
+			elseif self.sending then
+				text, tone = "Sending...", ui.DIM
+			elseif count > 0 and not unsent then
+				text, tone = string.format("%s in for turn %d",
+					ui.plural(count, "order"), turn), ui.GOOD
+			elseif count > 0 then
+				text, tone = string.format("%s for turn %d, not sent yet",
+					ui.plural(count, "order"), turn), ui.WARN
 			else
-				text = store.order_mode == "trade"
-					and "Tap a system with freighters to open a route"
-					or "Tap one of your systems to move ships"
+				text, tone = "Tap one of your systems to move ships", ui.DIM
 			end
 		end
 		gui.set_text(self.status, text)
-		gui.set_color(self.status, self.flash and ui.ACCENT or ui.DIM)
+		gui.set_color(self.status, tone)
 	else
+		layout_bar(self, 0)
 		self.send.set_text("NEW GALAXY")
+		self.send.set_enabled(true)
 		self.send.set_style("secondary")
 		gui.set_text(self.status, g and string.format("Seed %d   %s", g.seed,
 			tostring(store.source or "?")) or "")
@@ -643,23 +1021,22 @@ local function refresh_controls(self, g)
 	end
 end
 
--- Lifecycle -------------------------------------------------------------------
-
 function init(self)
 	msg.post(".", "acquire_input_focus")
 	ui.install_druid_picking()
 
 	self.star_nodes = {}
 	for _ = 1, STAR_LABEL_POOL do
-		make_text(self.star_nodes, STAR_FONT_SCALE, STAR_COLOUR)
+		make_label(self.star_nodes, STAR_FONT_SCALE, STAR_COLOUR)
 	end
 	self.region_nodes = {}
 	for _ = 1, REGION_LABEL_POOL do
-		local n = make_text(self.region_nodes, REGION_FONT_SCALE, STAR_COLOUR)
+		local n = make_label(self.region_nodes, REGION_FONT_SCALE, STAR_COLOUR)
 		gui.set_pivot(n, gui.PIVOT_CENTER)
 	end
+	self.fleet_nodes = {}
+	for _ = 1, FLEET_POOL do make_marker(self.fleet_nodes) end
 
-	-- Centred status line, shown while connecting or waiting on the server.
 	self.status_text = ui.text(0, 0, "", ui.TITLE, ui.DIM, { pivot = gui.PIVOT_CENTER })
 	gui.set_enabled(self.status_text, false)
 
@@ -667,20 +1044,23 @@ function init(self)
 	self.layout_w, self.layout_h = -1, -1
 	self.layout_safe = -1
 	self.pad = ui.inset()
-	self.flash = nil
-	self.flash_timer = 0
-	store.hud_bar_height = self.pad.bottom + BOTTOM_H
+	self.sheet_nodes = {}
+	self.sheet_height = 0
+	self.sheet_dirty = true
+	self.flash, self.flash_timer = nil, 0
+	self.sent_flash, self.sending = nil, false
+	self.floor_y, self.ceiling_y = 0, 0
+	store.hud_bar_height = self.pad.bottom + BAR_H
 end
 
 function final(self)
+	if self.sheet_druid then self.sheet_druid:final() end
 	if self.chrome_druid then self.chrome_druid:final() end
 	store.hud_zones = {}
 end
 
 function update(self, dt)
 	local w, h = store.screen.width, store.screen.height
-	-- The platform reports safe-area insets as not-ready for the first frames,
-	-- so a layout built once at startup would sit under the notch forever.
 	if w ~= self.layout_w or h ~= self.layout_h
 		or self.layout_safe ~= store.safe_revision then
 		build_chrome(self, w, h)
@@ -690,15 +1070,19 @@ function update(self, dt)
 	end
 
 	self.chrome_druid:update(dt)
+	if self.sheet_druid then self.sheet_druid:update(dt) end
 
-	-- A flash message is a confirmation, not state; it should not sit there.
 	if self.flash then
 		self.flash_timer = self.flash_timer + dt
 		if self.flash_timer > 4 then self.flash = nil end
 	end
+	-- The receipt on the SEND button. Long enough to be read, short enough that
+	-- the button is back to saying what it would do next before a thumb returns.
+	if self.sent_flash then
+		self.sent_flash = self.sent_flash + dt
+		if self.sent_flash > 2.5 then self.sent_flash = nil end
+	end
 
-	-- The status line has to work before there is a galaxy: it is what the
-	-- player sees while the backend is being contacted.
 	if store.status then
 		gui.set_enabled(self.status_text, true)
 		gui.set_text(self.status_text, store.status)
@@ -708,18 +1092,22 @@ function update(self, dt)
 
 	local g = store.galaxy
 	refresh_overview(self)
-	refresh_controls(self, g)
-	if not g then
-		set_info_visible(self, false)
-		return
-	end
+	refresh_bar(self, g)
+	if not g then return end
 
-	-- Rank stars once per galaxy: brightest and largest get labelled first.
 	if self.revision ~= store.revision then
 		self.revision = store.revision
+		-- Lane lengths for placing fleet markers, and a label ranking: the
+		-- places that matter get named first, so a colony beats a barren
+		-- waypoint however bright its star.
+		self.lane_lengths = sim_path.lane_lengths(g)
+		local rank = { colony = 2, outpost = 1, waypoint = 0 }
 		local order = {}
 		for i = 1, #g.stars do order[i] = i end
 		table.sort(order, function(a, b)
+			local ka = rank[sim_systems.kind(g, a)] or 0
+			local kb = rank[sim_systems.kind(g, b)] or 0
+			if ka ~= kb then return ka > kb end
 			local sa, sb = g.stars[a], g.stars[b]
 			local wa = sa.radius * sa.glow
 			local wb = sb.radius * sb.glow
@@ -727,14 +1115,24 @@ function update(self, dt)
 			return a < b
 		end)
 		self.label_order = order
+		self.sheet_dirty = true
 	end
 
-	plan_orders(self)
-	refresh_info(self, g)
+	resolve_aim(self)
+	if self.sheet_dirty then
+		self.sheet_dirty = false
+		self.sheet_height = build_sheet(self, w, self.pad)
+		publish_zones(self)
+	end
+
+	self.floor_y = self.pad.bottom + BAR_H + bar_extra(self)
+		+ (self.sheet_height > 0 and (ui.GAP + self.sheet_height) or 0)
+	self.ceiling_y = h - self.pad.top - TOP_H
+
 	update_labels(self, g, store.camera, w, h)
+	update_fleets(self, g, store.camera, w, h)
 end
 
---- Is a point inside any chrome the HUD currently owns?
 local function on_chrome(self, x, y)
 	local zones = store.hud_zones
 	for i = 1, #zones do
@@ -746,9 +1144,11 @@ end
 
 function on_input(self, action_id, action)
 	if not self.chrome_druid then return false end
-	-- Druid hit-tests with the action it is given; it must be in GUI space.
 	local converted = ui.gui_action(action)
 	local handled = self.chrome_druid:on_input(action_id, converted)
+	if self.sheet_druid and self.sheet_druid:on_input(action_id, converted) then
+		handled = true
+	end
 
 	-- Claim the input only if it landed on the chrome. Druid reports a touch as
 	-- handled whenever one of its hover components tracked it, which is every
@@ -772,5 +1172,8 @@ end
 function on_message(self, message_id, message, sender)
 	if self.chrome_druid then
 		self.chrome_druid:on_message(message_id, message, sender)
+	end
+	if self.sheet_druid then
+		self.sheet_druid:on_message(message_id, message, sender)
 	end
 end

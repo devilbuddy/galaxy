@@ -452,6 +452,9 @@ local BUTTON_STYLE = {
 	ghost     = { fill = M.CLEAR,      border = M.BORDER,   text = M.DIM },
 	danger    = { fill = M.CARD_ALT,   border = M.BORDER,   text = M.BAD },
 	disabled  = { fill = M.BG_SOFT,    border = M.BORDER,   text = M.FAINT },
+	-- For the moment after an action landed. Not interactive - it is a receipt,
+	-- and it reverts to whatever the button says at rest.
+	success   = { fill = M.GOOD,       border = M.GOOD,     text = M.BG },
 }
 
 --- A button, as a real Druid component.
@@ -535,6 +538,7 @@ end
 -- @return a handle with set_active(id)
 function M.tabs(druid, x, y, w, items, active, on_pick)
 	local labels, marks = {}, {}
+	local components = {}
 	local column = w / #items
 	for i = 1, #items do
 		local cx = x + column * (i - 1)
@@ -545,13 +549,16 @@ function M.tabs(druid, x, y, w, items, active, on_pick)
 			M.DIM, { bold = true, pivot = gui.PIVOT_CENTER, tracking = 0.10 })
 		marks[i] = M.sprite(cx + column * 0.12, y - 60, column * 0.76, 3, "solid", M.CLEAR)
 		if druid then
-			druid:new_button(target, function()
+			components[#components + 1] = druid:new_button(target, function()
 				if on_pick then on_pick(items[i].id) end
 			end)
 		end
 	end
 
-	local handle = {}
+	-- Handed back so a caller that rebuilds a region can take them out again.
+	-- Without this they outlived their nodes and Druid went on polling deleted
+	-- ones - `hover.lua: Deleted node` on the next touch anywhere.
+	local handle = { components = components }
 	function handle.set_active(id)
 		for i = 1, #items do
 			local on = items[i].id == id
@@ -603,12 +610,40 @@ end
 
 --- Input handling for a full-screen popup.
 --
--- Always claims the action, whether or not a component here used it: the map
--- and its camera are a separate scene that would otherwise pan and select
--- underneath the popup.
+-- Always claims the action, whether or not a component here used it: the map and
+-- its camera are a separate scene that would otherwise pan and select underneath
+-- the popup.
+--
+-- Takes one Druid instance or a list of them, because a screen that rebuilds
+-- part of itself wants a separate instance for that part - see M.region.
 function M.modal_input(druid, action_id, action)
-	druid:on_input(action_id, M.gui_action(action))
+	local converted = M.gui_action(action)
+	if druid[1] ~= nil or druid.on_input == nil then
+		for i = 1, #druid do
+			if druid[i] then druid[i]:on_input(action_id, converted) end
+		end
+	else
+		druid:on_input(action_id, converted)
+	end
 	return true
+end
+
+--- Tear down a rebuildable region: its Druid instance, then its nodes.
+--
+-- The order is the point. A component whose node has already been deleted throws
+-- from its own teardown, and one that outlives its node throws on the next touch
+-- anywhere on screen. Giving a region its own instance makes both impossible
+-- without anybody having to remember to track every component they created -
+-- which is exactly what went wrong: `ui.tabs` and `ui.scroll` each quietly
+-- registered one and the caller only tracked its buttons.
+function M.region(instance, nodes)
+	if instance then instance:final() end
+	if nodes then
+		for i = 1, #nodes do
+			if nodes[i] then gui.delete_node(nodes[i]) end
+		end
+		for i = #nodes, 1, -1 do nodes[i] = nil end
+	end
 end
 
 -- Formatting ------------------------------------------------------------------

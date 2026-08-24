@@ -3,35 +3,35 @@
 -- `resolve.turn(galaxy, state, orders)` advances the game by exactly one turn
 -- and returns the events it produced. It is a pure function of its inputs plus
 -- the seeded RNG, so a turn can be replayed and a whole game reconstructed from
--- (seed, orders history). That is what makes it testable at LuaJIT speed
--- offline while running on Nakama's much slower interpreter in production.
+-- (seed, orders history). That is what makes it testable at LuaJIT speed offline
+-- while running on Nakama's much slower interpreter in production.
 --
 -- Order within a turn:
---   0. directives   - standing choices (research target, build policy) apply
---                     before anything spends, so a change takes effect at once
---   1. growth       - population moves towards capacity
---   2. income       - systems and trade routes pay into the stockpile
---   3. upkeep       - the fuel bill; unfuelled warships are lost
---   4. research     - buy the chosen technology if it is now affordable
---   5. build        - lay down warships and freighters
---   6. departures   - orders become fleets, ships leave their systems
---   7. movement     - fleets advance along lanes, stopping at hostile systems
---   8. battles      - everything that met this turn fights
---   9. arrivals     - surviving freighters open or reinforce trade routes
---  10. aftermath    - eliminations, then each player's fog of war is updated
+--   1. directives    - standing choices: research target, what to build where
+--   2. growth        - colony populations move towards capacity
+--   3. industry      - output becomes a building or ships; research pools
+--   4. research      - buy the chosen technology if it is now affordable
+--   5. fleet orders  - split, merge, and set routes
+--   6. movement      - fleets advance along their routes
+--   7. interception  - hostile fleets that met in a lane
+--   8. battles       - everything that met at a system
+--   9. aftermath     - eliminations, then each player's fog of war
 --
--- Stockpiles are integers. Rates are not: income, upkeep and unit costs are all
--- fractional once races and technology scale them, so each is summed as a float
--- and rounded exactly once, per player per turn. Keeping the *stored* numbers
--- integral is what lets state survive a JSON round-trip through Nakama storage
--- without the replay drifting from the original.
+-- Numbers stored in state are integers. Output and research are fractional once
+-- races, technology and star class have scaled them, so each is summed as a
+-- float and floored exactly once, per system per turn. Keeping the *stored*
+-- values integral is what lets state survive a JSON round-trip through Nakama
+-- storage without a replay drifting from the original.
 
 local rng = require("galaxy.rng")
 local rules = require("galaxy.sim.rules")
+local commanders = require("galaxy.sim.commanders")
+local regions_mod = require("galaxy.sim.regions")
 local state_mod = require("galaxy.sim.state")
 local path_mod = require("galaxy.sim.path")
 local view = require("galaxy.sim.view")
-local resources = require("galaxy.sim.resources")
+local systems = require("galaxy.sim.systems")
+local buildings = require("galaxy.sim.buildings")
 local modifiers = require("galaxy.sim.modifiers")
 local tech_mod = require("galaxy.sim.tech")
 
@@ -44,15 +44,61 @@ local function emit(events, e)
 	return e
 end
 
---- Remove `count` warships from a player, systems first and weakest last.
+--- A beaten commander is scattered, not killed.
 --
--- Sorted by system id so the choice never depends on table iteration order,
--- and fleets in transit are raided only once every garrison is empty: losing a
--- fleet mid-flight to an accounting rule reads as a bug to the player.
-local function strip_warships(state, player, count)
+-- Losing an officer outright would make one bad battle unrecoverable in a game
+-- checked twice a day, and would teach players never to commit. They fall back
+-- to a world they still hold, one rank lighter. Only a player with nowhere left
+-- to fall back to actually loses them.
+local function scatter(state, events)
+	local surviving = {}
+	for i = 1, #state.fleets do
+		local fleet = state.fleets[i]
+		if fleet.ships >= rules.min_fleet_size then
+			surviving[#surviving + 1] = fleet
+		else
+			local refuge = state_mod.refuge(state, fleet.owner)
+			if refuge then
+				local level = commanders.demote(fleet)
+				fleet.at = refuge
+				fleet.progress = 0
+				fleet.route = {}
+				fleet.ships = 0
+				surviving[#surviving + 1] = fleet
+				emit(events, {
+					kind = "commander_scattered", turn = state.turn,
+					player = fleet.owner, fleet = fleet.id, name = fleet.name,
+					at = refuge, level = level, rank = commanders.rank(level),
+					visible_to = { fleet.owner },
+				})
+			else
+				emit(events, {
+					kind = "commander_lost", turn = state.turn,
+					player = fleet.owner, fleet = fleet.id, name = fleet.name,
+					visible_to = { fleet.owner },
+				})
+			end
+		end
+	end
+	state.fleets = surviving
+end
+
+--- Remove `count` ships from a player: garrisons first, then parked fleets,
+--- then whatever is under way.
+--
+-- A fleet in transit is the last thing raided. Losing an in-flight force to an
+-- accounting rule reads as a bug to the player, whereas a garrison quietly
+-- shrinking reads as ships being paid off.
+local function strip_ships(state, player, count, events)
 	if count <= 0 then return 0 end
 	local removed = 0
+
 	local owned = state_mod.owned_by(state, player)
+	table.sort(owned, function(p, q)
+		local a, b = state.systems[p].ships, state.systems[q].ships
+		if a ~= b then return a > b end
+		return p < q
+	end)
 	for i = 1, #owned do
 		if removed >= count then break end
 		local sys = state.systems[owned[i]]
@@ -60,36 +106,44 @@ local function strip_warships(state, player, count)
 		sys.ships = sys.ships - take
 		removed = removed + take
 	end
-	for i = 1, #state.fleets do
-		if removed >= count then break end
-		local f = state.fleets[i]
-		if f.owner == player and f.kind ~= "trade" then
-			local take = min(f.ships, count - removed)
-			f.ships = f.ships - take
+
+	if removed < count then
+		local ordered = {}
+		for i = 1, #state.fleets do
+			local f = state.fleets[i]
+			if f.owner == player then ordered[#ordered + 1] = f end
+		end
+		table.sort(ordered, function(p, q)
+			local pp = state_mod.is_parked(p) and 1 or 0
+			local qp = state_mod.is_parked(q) and 1 or 0
+			if pp ~= qp then return pp > qp end
+			if p.ships ~= q.ships then return p.ships > q.ships end
+			return p.id < q.id
+		end)
+		for i = 1, #ordered do
+			if removed >= count then break end
+			local take = min(ordered[i].ships, count - removed)
+			ordered[i].ships = ordered[i].ships - take
 			removed = removed + take
 		end
+		scatter(state, events)
 	end
-	-- A fleet stripped to nothing must not linger as a zero-strength ghost that
-	-- still blockades a lane.
-	local surviving = {}
-	for i = 1, #state.fleets do
-		if state.fleets[i].ships > 0 then surviving[#surviving + 1] = state.fleets[i] end
-	end
-	state.fleets = surviving
+
 	return removed
 end
 
--- 0. Directives ---------------------------------------------------------------
+-- 1. Directives ----------------------------------------------------------------
 
 --- Apply the standing choices in this turn's orders.
 --
--- These are not actions; they are settings. Applying them first means a player
--- who switches research target and submits in the same turn gets the new
--- target funded this turn rather than next.
-local function directives(state, orders, events)
+-- These are settings, not actions. Applying them first means a player who
+-- switches research target and submits in the same turn gets the new target
+-- funded this turn rather than next.
+local function directives(galaxy, state, orders, mods, events)
 	for i = 1, #orders do
 		local order = orders[i]
-		local player = state.players[order.player]
+		local who = order.player
+		local player = state.players[who]
 		if player then
 			if order.kind == "research" then
 				local id = order.tech
@@ -102,202 +156,198 @@ local function directives(state, orders, events)
 					else
 						emit(events, {
 							kind = "order_rejected", turn = state.turn,
-							player = order.player, tech = id, reason = why,
-							visible_to = { order.player },
+							player = who, tech = id, reason = why,
+							visible_to = { who },
 						})
 					end
 				end
-			elseif order.kind == "policy" then
-				local share = tonumber(order.warship_share)
-				if share then
-					if share < 0 then share = 0 end
-					if share > 1 then share = 1 end
-					player.warship_share = share
+
+			elseif order.kind == "build" then
+				local at = order.at
+				local sys = state.systems[at]
+				local reason = nil
+				if not sys then
+					reason = "no such system"
+				elseif sys.owner ~= who then
+					reason = "you do not hold it"
+				end
+
+				if not reason and (order.building == nil or order.building == "") then
+					-- Cancelling refunds nothing: the yard has already been
+					-- poured. It stops the drain, which is the point.
+					sys.building = nil
+				elseif not reason then
+					local ok, why = buildings.can_start(galaxy, at, sys, order.building)
+					if not ok then
+						reason = why
+					elseif not sys.building or sys.building.kind ~= order.building then
+						sys.building = { kind = order.building, paid = 0 }
+					end
+				end
+
+				if reason then
+					emit(events, {
+						kind = "order_rejected", turn = state.turn,
+						player = who, at = at, building = order.building,
+						reason = reason, visible_to = { who },
+					})
 				end
 			end
 		end
 	end
 end
 
--- 1. Growth --------------------------------------------------------------------
+-- 2. Growth --------------------------------------------------------------------
 
 local function growth(galaxy, state, mods, summaries)
 	for id = 1, #galaxy.stars do
 		local sys = state.systems[id]
 		if sys.owner ~= 0 then
-			local m = mods[sys.owner]
-			local capacity = state_mod.capacity(galaxy, id, m)
-			-- Growth on remaining headroom, so an empty colony fills quickly and
-			-- a full one stagnates. This also lets a freshly claimed system with
-			-- zero population get started without a special case.
-			local headroom = capacity - sys.population
-			if headroom > 0 then
-				-- At least one per turn: floor(headroom * rate) reaches zero once
-				-- headroom drops below 1/rate, which left every system stalled a
-				-- few percent short of capacity forever.
-				local grown = max(1, floor(headroom * m.growth))
-				sys.population = min(capacity, sys.population + grown)
-			elseif headroom < 0 then
-				-- Capacity can fall - a captured world loses the previous
-				-- owner's terraforming - so the excess has to drain somewhere.
-				sys.population = capacity
-			end
-
 			local s = summaries[sys.owner]
-			if s then
-				s.population = s.population + sys.population
-				s.systems = s.systems + 1
-			end
-		end
-	end
-end
-
--- 2. Income ---------------------------------------------------------------------
-
---- What one route pays this turn, before it is split between the two resources.
-local function route_value(state, route, m)
-	local a, b = state.systems[route.a], state.systems[route.b]
-	local length_factor = min(rules.trade_length_cap, route.length / rules.trade_length_reference)
-	local pop_factor = min(rules.trade_pop_cap,
-		(a.population + b.population) / rules.trade_pop_reference)
-	return route.ships * m.trade * length_factor * pop_factor
-end
-
-local function income(galaxy, state, mods, events, summaries)
-	local gross = {}
-	for i = 1, #state.players do gross[i] = resources.zero() end
-
-	for id = 1, #galaxy.stars do
-		local sys = state.systems[id]
-		if sys.owner ~= 0 then
-			local base = resources.base_yield(galaxy, id)
-			-- The flat term is what makes a newly taken world worth something
-			-- before it has filled; the per-head term is what makes holding it
-			-- long-term worth more.
-			local scale = rules.yield_flat + sys.population * rules.yield_per_pop
 			local m = mods[sys.owner]
-			local g = gross[sys.owner]
-			g.metal = g.metal + base.metal * scale * m.yield_metal
-			g.fuel = g.fuel + base.fuel * scale * m.yield_fuel
-			g.research = g.research + base.research * scale * m.yield_research
-		end
-	end
-
-	-- Trade routes pay in research and fuel, never metal. Hulls always have to
-	-- come out of ground you hold, so a commercial empire still needs one.
-	local surviving = {}
-	for i = 1, #state.routes do
-		local route = state.routes[i]
-		local a, b = state.systems[route.a], state.systems[route.b]
-		local intact = a and b and a.owner == route.owner and b.owner == route.owner
-		if intact and route.ships > 0 then
-			local value = route_value(state, route, mods[route.owner])
-			local g = gross[route.owner]
-			if g then
-				g.research = g.research + value * 0.5
-				g.fuel = g.fuel + value * 0.5
+			local capacity = systems.capacity(galaxy, id, m)
+			if capacity > 0 then
+				-- Growth on remaining headroom, so an empty world fills quickly
+				-- and a full one stagnates. At least one a turn, because
+				-- floor(headroom * rate) reaches zero once headroom drops below
+				-- 1/rate and every world stalled a few percent short forever.
+				local headroom = capacity - sys.population
+				if headroom > 0 then
+					sys.population = min(capacity, sys.population
+						+ max(1, floor(headroom * m.growth)))
+				elseif headroom < 0 then
+					-- Capacity can fall: a captured world loses the previous
+					-- owner's technology.
+					sys.population = capacity
+				end
+				if s then s.colonies = s.colonies + 1 end
 			end
-			local s = summaries[route.owner]
-			if s then s.trade = s.trade + value end
-			surviving[#surviving + 1] = route
-		elseif route.ships > 0 then
-			-- One end has changed hands. The freighters make for whichever end
-			-- is still friendly and dock there; if neither is, they are gone.
-			local refuge = nil
-			if a and a.owner == route.owner then refuge = route.a
-			elseif b and b.owner == route.owner then refuge = route.b end
-			if refuge then
-				state.systems[refuge].freighters = state.systems[refuge].freighters + route.ships
+			if s then
+				s.systems = s.systems + 1
+				s.population = s.population + sys.population
 			end
-			emit(events, {
-				kind = "route_lost", turn = state.turn, player = route.owner,
-				a = route.a, b = route.b, ships = route.ships,
-				recovered = refuge ~= nil,
-				visible_to = { route.owner },
-			})
 		end
-	end
-	state.routes = surviving
-
-	for i = 1, #state.players do
-		local stock = state.players[i].stock
-		local g = gross[i]
-		local earned = {
-			metal = floor(g.metal), fuel = floor(g.fuel), research = floor(g.research),
-		}
-		resources.add(stock, earned)
-		local s = summaries[i]
-		if s then s.income = earned end
 	end
 end
 
--- 3. Upkeep -----------------------------------------------------------------------
+-- 3. Industry -------------------------------------------------------------------
 
---- Charge the fuel bill, and take the difference out of the fleet.
+--- Turn every held system's output into a building or into ships, and pool
+--- research.
 --
--- This is the live ceiling on fleet size. The population cap in rules.lua is a
--- backstop that only binds if the fuel economy somehow does not.
-local function upkeep(state, mods, events, summaries, starved)
+-- One axis: a system produces build points, and they go to whatever it is
+-- building or to hulls. There is no second currency and nothing to ship around.
+local function industry(galaxy, state, mods, events, summaries)
+	-- The population ceiling first, so production is not fighting attrition.
 	for i = 1, #state.players do
-		local player = state.players[i]
 		local m = mods[i]
-		local warships = state_mod.warships_of(state, i)
-		if warships > 0 and m.upkeep > 0 then
-			local bill = ceil(warships * m.upkeep)
-			local paid = min(player.stock.fuel, bill)
-			player.stock.fuel = player.stock.fuel - paid
-
-			local s = summaries[i]
-			if s then s.fuel_spent = s.fuel_spent + paid end
-
-			if paid < bill then
-				starved[i] = true
-				-- Ships the tanks could not reach. They are not all lost at
-				-- once: a fuel crisis should be a slide the player can arrest,
-				-- not a fleet that evaporates in a turn.
-				local unfuelled = ceil((bill - paid) / m.upkeep)
-				local lost = max(1, floor(unfuelled * rules.unfuelled_attrition))
-				lost = strip_warships(state, i, min(lost, warships))
-				if lost > 0 then
+		local supported = floor(state_mod.population_of(state, i) * m.cap)
+		local have = state_mod.ships_of(state, i)
+		if have > supported then
+			local excess = floor((have - supported) * rules.over_cap_attrition)
+			if excess > 0 then
+				local shed = strip_ships(state, i, excess, events)
+				if shed > 0 then
 					emit(events, {
 						kind = "attrition", turn = state.turn, player = i,
-						ships = lost, reason = "fuel",
+						ships = shed, reason = "over capacity",
 						visible_to = { i },
 					})
-					if s then s.attrition = s.attrition + lost end
+					local s = summaries[i]
+					if s then s.scrapped = s.scrapped + shed end
 				end
 			end
 		end
 	end
+
+	local owned = {}
+	for i = 1, #state.players do owned[i] = state_mod.owned_by(state, i) end
+
+	-- Holding a whole region pays better than holding most of one. Without it
+	-- there is no reason to go back for the last stubborn outpost, and the map
+	-- fills with half-taken regions nobody finishes.
+	local held = regions_mod.control(galaxy, state)
+
+	for i = 1, #state.players do
+		local m = mods[i]
+		local player = state.players[i]
+		local s = summaries[i]
+		local research = 0
+
+		for k = 1, #owned[i] do
+			local id = owned[i][k]
+			local sys = state.systems[id]
+
+			research = research + systems.research(galaxy, id, sys, m)
+
+			local output = floor(systems.output(galaxy, id, sys, m, sys.buildings)
+				* regions_mod.bonus(galaxy, held, id, i))
+			if s then s.output = s.output + output end
+
+			-- Anything under construction takes the whole stream until it is
+			-- paid off, and the overflow on the turn it completes goes to hulls.
+			if output > 0 and sys.building then
+				local level = sys.buildings[sys.building.kind] or 0
+				local cost = buildings.cost(sys.building.kind, level, m.building_cost)
+				if not cost then
+					-- Reached maximum some other way; stop draining the world.
+					sys.building = nil
+				else
+					sys.building.paid = sys.building.paid + output
+					if sys.building.paid >= cost then
+						local spare = sys.building.paid - cost
+						local kind = sys.building.kind
+						sys.buildings[kind] = level + 1
+						sys.building = nil
+						emit(events, {
+							kind = "building_complete", turn = state.turn,
+							player = i, at = id, building = kind, level = level + 1,
+						})
+						if s then s.buildings_done = s.buildings_done + 1 end
+						output = spare
+					else
+						output = 0
+					end
+				end
+			end
+
+			if output > 0 then
+				local built = floor(output / m.ship_cost)
+				if built > 0 then
+					-- Into the garrison, not into a fleet: production landing in
+					-- fleets creates one per system and the list becomes noise.
+					sys.ships = sys.ships + built
+					if s then s.built = s.built + built end
+				end
+			end
+		end
+
+		player.research = player.research + floor(research)
+		if s then s.research = floor(research) end
+	end
 end
 
--- 4. Research ----------------------------------------------------------------------
+-- 4. Research -------------------------------------------------------------------
 
---- Buy the chosen technology if the stockpile now covers it.
---
--- Returns true when anything completed, so the caller can rebuild that
--- player's modifiers before the rest of the turn reads them.
+--- Buy the chosen technology if the pool now covers it.
 local function research(state, mods, events, summaries)
-	local changed = false
 	for i = 1, #state.players do
 		local player = state.players[i]
 		local target = player.researching
 		if target then
-			local ok = tech_mod.can_research(player.tech, target)
-			if not ok then
+			if not tech_mod.can_research(player.tech, target) then
 				player.researching = nil
 			else
 				local cost = tech_mod.cost_of(target, mods[i].tech_cost)
-				if resources.can_pay(player.stock, cost) then
-					resources.pay(player.stock, cost)
+				if player.research >= cost then
+					player.research = player.research - cost
 					player.tech[target] = true
 					player.researching = nil
-					changed = true
+					-- Rebuilt now, because the rest of the turn reads it.
 					mods[i] = modifiers.of(player)
 					emit(events, {
 						kind = "research_complete", turn = state.turn,
-						player = i, tech = target,
-						visible_to = { i },
+						player = i, tech = target, visible_to = { i },
 					})
 					local s = summaries[i]
 					if s then s.researched = target end
@@ -305,413 +355,629 @@ local function research(state, mods, events, summaries)
 			end
 		end
 	end
-	return changed
 end
 
--- 5. Build ------------------------------------------------------------------------
+-- 5. Fleet orders ---------------------------------------------------------------
 
-local function build(galaxy, state, mods, events, summaries, starved)
-	for i = 1, #state.players do
-		local player = state.players[i]
-		local m = mods[i]
-		local stock = player.stock
-		local pop = state_mod.population_of(state, i)
-		local warships = state_mod.warships_of(state, i)
-		local supported = floor(pop * m.cap)
-
-		-- Over the population backstop: shed the excess before building more.
-		if warships > supported then
-			local excess = floor((warships - supported) * rules.over_cap_attrition)
-			if excess > 0 then
-				local shed = strip_warships(state, i, excess)
-				warships = warships - shed
-				local s = summaries[i]
-				if s then s.scrapped = shed end
-			end
-		end
-
-		local room = max(0, supported - warships)
-		-- The yards stop while the tanks are dry. Without this the metal income
-		-- of a fuel-starved empire is spent entirely on replacing ships that
-		-- attrition removes the same turn - a treadmill that reads as the
-		-- economy being broken rather than as a fleet being too big.
-		if starved[i] then room = 0 end
-		local war_metal = rules.warship_cost.metal * m.ship_cost
-		local war_fuel = rules.warship_cost.fuel * m.ship_cost
-		local frt_metal = rules.freighter_cost.metal * m.ship_cost
-
-		local owned = state_mod.owned_by(state, i)
-		for k = 1, #owned do
-			local id = owned[k]
-			local sys = state.systems[id]
-			local rate = m.industry
-			if sys.home_of == i then rate = rate * rules.home_production_bonus end
-			local capacity = floor(sys.population * rate)
-			if capacity > 0 then
-				-- Rounded to nearest so a share of 1.0 never leaks a freighter
-				-- and a share of 0.0 never leaks a warship.
-				local want_war = floor(capacity * player.warship_share + 0.5)
-				local want_frt = capacity - want_war
-
-				if want_war > 0 and room > 0 then
-					local n = min(want_war, room)
-					if war_metal > 0 then n = min(n, floor(stock.metal / war_metal)) end
-					if war_fuel > 0 then n = min(n, floor(stock.fuel / war_fuel)) end
-					if n > 0 then
-						-- Charged with floor, so rounding can only ever favour
-						-- the player by less than one unit per system per turn.
-						stock.metal = stock.metal - floor(n * war_metal)
-						stock.fuel = stock.fuel - floor(n * war_fuel)
-						sys.ships = sys.ships + n
-						room = room - n
-						local s = summaries[i]
-						if s then
-							s.built = s.built + n
-							s.metal_spent = s.metal_spent + floor(n * war_metal)
-							s.fuel_spent = s.fuel_spent + floor(n * war_fuel)
-						end
-					end
-				end
-
-				if want_frt > 0 and frt_metal > 0 then
-					local n = min(want_frt, floor(stock.metal / frt_metal))
-					if n > 0 then
-						stock.metal = stock.metal - floor(n * frt_metal)
-						sys.freighters = sys.freighters + n
-						local s = summaries[i]
-						if s then
-							s.freighters_built = s.freighters_built + n
-							s.metal_spent = s.metal_spent + floor(n * frt_metal)
-						end
-					end
-				end
-			end
+--- Turn a list of places to visit into a lane-by-lane route.
+--
+-- The player names *where* to go; the pathfinder works out how, so fleets never
+-- move in straight lines and a route can be plotted around a defended world.
+-- Returns nil plus a reason if any leg is unreachable.
+local function expand_route(galaxy, lengths, from, fixed, waypoints, hops_allowed)
+	local route, hops = {}, 0
+	-- A fleet already in a lane must finish it before it can turn, so its
+	-- current leg is fixed and everything is plotted from the far end.
+	if fixed then
+		route[1] = fixed
+		from = fixed
+		hops = 1
+	end
+	for w = 1, #waypoints do
+		local to = math.floor(waypoints[w])
+		if to ~= from then
+			local leg = path_mod.find(galaxy, lengths, from, to, hops_allowed - hops)
+			if not leg or #leg == 0 then return nil, "no route" end
+			for h = 1, #leg do route[#route + 1] = leg[h] end
+			hops = hops + #leg
+			from = to
 		end
 	end
+	return route
 end
 
--- 6. Departures --------------------------------------------------------------
-
---- Turn this turn's movement orders into fleets. Invalid orders are dropped
---- with a reason rather than silently ignored, so a client can show why.
-local function departures(galaxy, state, orders, mods, lengths, events)
+--- Launch, redirect and stand down. Invalid orders are dropped with a reason
+--- rather than silently ignored, so a client can show why.
+--
+-- Three verbs, because that is what the two gestures on the map need: tap a
+-- world and a destination (launch), tap a fleet and a destination (move), or
+-- tell a fleet to stop being one (garrison). There is no split verb - a move
+-- carries an optional ship count instead, since splitting is only ever
+-- something you do in order to send part of a force somewhere.
+local function fleet_orders(galaxy, state, orders, mods, lengths, events)
 	for i = 1, #orders do
 		local order = orders[i]
+		local who = order.player
+		local m = mods[who]
 		local kind = order.kind
-		if kind == nil or kind == "move" or kind == "trade" then
-			local trading = (kind == "trade")
-			local player = order.player
-			local from, to = order.from, order.to
-			local sys = state.systems[from]
-			local m = mods[player]
 
-			local reason = nil
-			if not m then
-				reason = "no such player"
-			elseif not sys then
-				reason = "no such system"
-			elseif sys.owner ~= player then
-				reason = "you do not own the origin"
-			elseif not state.systems[to] then
-				reason = "no such destination"
-			elseif from == to then
-				reason = "origin and destination are the same"
-			elseif trading and state.systems[to].owner ~= player then
-				reason = "a trade route needs two systems you own"
+		local function reject(reason, extra)
+			local e = {
+				kind = "order_rejected", turn = state.turn,
+				player = who, reason = reason, visible_to = { who },
+			}
+			if extra then
+				for k, v in pairs(extra) do e[k] = v end
 			end
+			emit(events, e)
+		end
 
-			local available = 0
-			if sys then available = trading and sys.freighters or sys.ships end
+		if kind == "launch" then
+			local at = order.at
+			local sys = state.systems[at]
 			local ships = order.ships and floor(order.ships) or 0
-			if not reason then
-				-- Clamp rather than reject: the player ordered against the state
-				-- they last saw, which may be a turn out of date.
-				ships = min(ships, available)
-				if ships < 1 then
-					reason = trading and "no freighters available" or "no ships available"
-				end
-			end
-
-			local route = nil
-			if not reason then
-				route = path_mod.find(galaxy, lengths, from, to, m.hops)
-				if not route or #route == 0 then reason = "no route" end
-			end
-
-			if reason then
-				emit(events, {
-					kind = "order_rejected", turn = state.turn,
-					player = player, from = from, to = to, reason = reason,
-					visible_to = { player },
-				})
+			local waypoints = order.route
+			if not sys then
+				reject("no such system", { at = at })
+			elseif sys.owner ~= who then
+				reject("you do not hold it", { at = at })
+			elseif type(waypoints) ~= "table" or #waypoints == 0 then
+				reject("nowhere to send them", { at = at })
 			else
-				if trading then sys.freighters = sys.freighters - ships
-				else sys.ships = sys.ships - ships end
+				-- Clamp rather than refuse: the player ordered against the state
+				-- they last saw, which may be a turn out of date.
+				if ships < 1 then ships = sys.ships end
+				ships = min(ships, sys.ships)
+				if ships < 1 then
+					reject("no ships in the garrison", { at = at })
+				elseif not state_mod.can_raise(state, who) then
+					-- The cap is the shape of the game, so this is a refusal
+					-- with a reason rather than a silent clamp: the player has
+					-- to choose which front to give up.
+					reject("no commander to spare", { at = at })
+				else
+					local route, why = expand_route(galaxy, lengths, at, nil,
+						waypoints, m.hops)
+					if not route or #route == 0 then
+						reject(why or "no route", { at = at, to = waypoints[#waypoints] })
+					else
+						-- A fresh commander leads what a fresh commander can.
+						-- The rest stays in the garrison rather than being lost,
+						-- so over-ordering costs nothing but the trip.
+						local fleet = state_mod.add_fleet(state, who, at, 0)
+						local led = min(ships, commanders.command(fleet, m))
+						fleet.ships = led
+						sys.ships = sys.ships - led
+						fleet.route = route
+						emit(events, {
+							kind = "fleet_launched", turn = state.turn, player = who,
+							at = at, fleet = fleet.id, name = fleet.name,
+							rank = commanders.rank(fleet.level),
+							ships = led, left_behind = ships - led,
+							to = route[#route],
+							visible_to = { who },
+						})
+					end
+				end
+			end
 
-				-- Measured now, along the route actually taken, because it is
-				-- what the trade route will be paid on and the lane graph the
-				-- fleet used is the honest answer.
-				local distance, at = 0, from
-				for h = 1, #route do
-					distance = distance + (path_mod.lane_length(lengths, at, route[h]) or 0)
-					at = route[h]
+		elseif kind == "move" then
+			local fleet = state_mod.fleet_by_id(state, order.fleet)
+			if not fleet or fleet.owner ~= who then
+				reject("no such fleet", { fleet = order.fleet })
+			else
+				local waypoints = order.route
+				local parked = state_mod.is_parked(fleet)
+
+				-- A detachment: part of a parked fleet peels off and goes.
+				local detach = order.ships and floor(order.ships) or nil
+				if detach and parked and detach >= 1 and detach < fleet.ships then
+					fleet.ships = fleet.ships - detach
+					fleet = state_mod.add_fleet(state, who, fleet.at, detach)
 				end
 
-				state.fleets[#state.fleets + 1] = {
-					id = state.next_fleet_id,
-					owner = player,
-					kind = trading and "trade" or "move",
-					ships = ships,
-					at = from,
-					origin = from,
-					path = route,
-					destination = to,
-					distance = distance,
-					progress = 0,
-				}
-				state.next_fleet_id = state.next_fleet_id + 1
+				if type(waypoints) ~= "table" or #waypoints == 0 then
+					-- An empty route recalls the fleet: it holds where it is, or
+					-- finishes the lane it is in and stops.
+					fleet.route = parked and {} or { fleet.route[1] }
+				else
+					local route, why = expand_route(galaxy, lengths, fleet.at,
+						(not parked) and fleet.route[1] or nil, waypoints, m.hops)
+					if not route then
+						reject(why, { fleet = order.fleet, to = waypoints[#waypoints] })
+					else
+						fleet.route = route
+					end
+				end
+			end
+
+		elseif kind == "garrison" then
+			local fleet = state_mod.fleet_by_id(state, order.fleet)
+			if not fleet or fleet.owner ~= who then
+				reject("no such fleet", { fleet = order.fleet })
+			elseif not state_mod.is_parked(fleet) then
+				reject("a fleet under way cannot stand down", { fleet = order.fleet })
+			else
+				local sys = state.systems[fleet.at]
+				if not sys or sys.owner ~= who then
+					reject("you do not hold it", { fleet = order.fleet })
+				else
+					local handed_over = fleet.ships
+					sys.ships = sys.ships + handed_over
+					-- Retired outright, not left as an empty force. It used to
+					-- be zeroed and swept up by a prune at the end of the phase;
+					-- now that a force with no ships means "a commander who was
+					-- beaten" it has to say which of the two this is, or
+					-- standing down demotes the officer and holds the slot.
+					state_mod.retire_fleet(state, fleet)
+					emit(events, {
+						kind = "fleet_stood_down", turn = state.turn, player = who,
+						at = sys and fleet.at, name = fleet.name,
+						ships = handed_over, visible_to = { who },
+					})
+				end
 			end
 		end
 	end
+
+	scatter(state, events)
 end
 
--- 7. Movement ----------------------------------------------------------------
+-- 5b. Resupply ------------------------------------------------------------------
 
---- Advance every fleet, and record who ends the turn where.
+--- A commander sitting on one of your worlds tops up from its garrison.
 --
--- A fleet stops the moment it reaches a system held by someone else: lanes can
--- be blockaded, and you cannot slip a fleet past a defended border.
-local function movement(galaxy, state, mods, lengths, arrivals, docking)
-	local surviving = {}
-
+-- This is where production reaches the front. Ships accumulate in garrisons
+-- (industry puts them there deliberately, so the map does not fill with one
+-- force per system), and a commander parked on a world draws from it up to what
+-- they can lead. Parking one somewhere is therefore the standing instruction
+-- "send what you build here to the front", which is the right shape of decision
+-- for a game checked twice a day.
+--
+-- It is also what makes a scattered commander recoverable. Without it a beaten
+-- officer sat at a refuge with no ships forever, holding one of the four slots
+-- the player is allowed and unable to do anything with it - which froze the
+-- game outright once every player had lost four battles.
+local function resupply(state, mods, events)
 	for i = 1, #state.fleets do
 		local fleet = state.fleets[i]
-		local trading = fleet.kind == "trade"
-		local speed = mods[fleet.owner].speed
-		if trading then speed = speed * rules.freighter_speed_factor end
-		local budget = speed
-		local blocked = false
-
-		while budget > 0 and #fleet.path > 0 and not blocked do
-			local next_id = fleet.path[1]
-			local leg = path_mod.lane_length(lengths, fleet.at, next_id) or 0
-			local remaining = leg - fleet.progress
-
-			if budget >= remaining then
-				budget = budget - remaining
-				fleet.at = next_id
-				fleet.progress = 0
-				table.remove(fleet.path, 1)
-
-				local sys = state.systems[next_id]
-				local hostile = sys.owner ~= 0 and sys.owner ~= fleet.owner
-				if hostile or #fleet.path == 0 then
-					blocked = true
+		if #fleet.route == 0 and fleet.progress == 0 then
+			local sys = state.systems[fleet.at]
+			if sys and sys.owner == fleet.owner and (sys.ships or 0) > 0 then
+				local room = commanders.command(fleet, mods[fleet.owner]) - fleet.ships
+				local taken = min(room, sys.ships)
+				if taken > 0 then
+					sys.ships = sys.ships - taken
+					fleet.ships = fleet.ships + taken
+					emit(events, {
+						kind = "reinforced", turn = state.turn,
+						player = fleet.owner, fleet = fleet.id, name = fleet.name,
+						at = fleet.at, ships = taken, total = fleet.ships,
+						visible_to = { fleet.owner },
+					})
 				end
-			else
-				fleet.progress = fleet.progress + budget
-				budget = 0
 			end
-		end
-
-		if #fleet.path == 0 or blocked then
-			if trading then
-				-- Freighters take no part in a battle; they are sorted out
-				-- after one, when it is settled who holds the system.
-				docking[#docking + 1] = fleet
-			else
-				-- The fleet is sitting at a system this turn; group it with
-				-- anyone else who turned up, so a system resolves once.
-				local at = arrivals[fleet.at]
-				if not at then
-					at = { order = {}, by_player = {} }
-					arrivals[fleet.at] = at
-				end
-				if not at.by_player[fleet.owner] then
-					at.by_player[fleet.owner] = 0
-					at.order[#at.order + 1] = fleet.owner
-				end
-				at.by_player[fleet.owner] = at.by_player[fleet.owner] + fleet.ships
-			end
-		else
-			surviving[#surviving + 1] = fleet
 		end
 	end
-
-	state.fleets = surviving
 end
 
--- 8. Battles -----------------------------------------------------------------
+-- 6. Movement -------------------------------------------------------------------
+
+--- Advance every fleet along its route.
+--
+-- Unclaimed systems are taken in passing and do not stop the fleet, so a route
+-- through a chain of barren waypoints sweeps them all up - which is exactly what
+-- waypoints are for. A system somebody else holds *does* stop it: lanes can be
+-- blockaded, and you cannot slip a fleet past a defended border.
+--
+-- If two players' fleets pass through the same neutral system on the same turn,
+-- the earlier fleet in the list claims it and the later one arrives at a hostile
+-- system and stops. That is arbitrary but deterministic, and it reads as "we got
+-- there first".
+local function movement(galaxy, state, mods, lengths, events)
+	for i = 1, #state.fleets do
+		local fleet = state.fleets[i]
+		if #fleet.route > 0 then
+			-- Each commander moves at their own pace: level is most of it, race
+			-- and technology scale it. A green officer is slower than a lane is
+			-- long, which is what puts forces in transit where they can be
+			-- caught.
+			local budget = commanders.speed(fleet, mods[fleet.owner])
+			local blocked = false
+
+			while budget > 0 and #fleet.route > 0 and not blocked do
+				local next_id = fleet.route[1]
+				local leg = path_mod.lane_length(lengths, fleet.at, next_id) or 0
+				local remaining = leg - fleet.progress
+
+				if budget >= remaining then
+					budget = budget - remaining
+					fleet.at = next_id
+					fleet.progress = 0
+					table.remove(fleet.route, 1)
+
+					local sys = state.systems[next_id]
+					if sys.owner == 0 then
+						sys.owner = fleet.owner
+						emit(events, {
+							kind = "claimed", turn = state.turn,
+							at = next_id, player = fleet.owner, ships = fleet.ships,
+						})
+					elseif sys.owner ~= fleet.owner then
+						fleet.route = {}
+						blocked = true
+					end
+				else
+					fleet.progress = fleet.progress + budget
+					budget = 0
+				end
+			end
+		end
+	end
+end
+
+-- 7. Interception ---------------------------------------------------------------
+
+--- The multiplier the senior officer present applies to a side.
+--
+-- The most experienced commander leads: a battle is not fought better because
+-- three green captains turned up. A garrison with no commander gets nothing,
+-- which is what makes stationing one on a threatened world worth doing.
+local function senior_tactics(list, m)
+	local best = 1
+	for f = 1, #(list or {}) do
+		local t = commanders.tactics(list[f], m)
+		if t > best then best = t end
+	end
+	return best
+end
+
+--- Split experience across the commanders who won it, by what each brought.
+--
+-- Proportional rather than shared in full, so stacking every commander into one
+-- battle promotes the group no faster than fighting it alone would.
+local function award_xp(list, contributions, total, amount, events, turn)
+	if amount <= 0 or total <= 0 then return end
+	for f = 1, #list do
+		local fleet = list[f]
+		local share = (contributions[fleet.id] or 0) / total
+		local gained = commanders.award(fleet, floor(amount * share))
+		if gained > 0 then
+			emit(events, {
+				kind = "commander_promoted", turn = turn,
+				player = fleet.owner, fleet = fleet.id, name = fleet.name,
+				level = fleet.level, rank = commanders.rank(fleet.level),
+				visible_to = { fleet.owner },
+			})
+		end
+	end
+end
+
+--- What each fleet in a list brought, and the total. Taken before a battle
+--- rewrites `ships` with the survivors.
+local function contributions_of(list)
+	local by_id, total = {}, 0
+	for f = 1, #(list or {}) do
+		by_id[list[f].id] = list[f].ships
+		total = total + list[f].ships
+	end
+	return by_id, total
+end
 
 --- One engagement. Returns whether the attacker won, and the winner's survivors.
 --
 -- A Lanchester-style exchange: the loser is destroyed and the winner keeps the
 -- fraction of its force that the margin of victory implies, so a narrow win is
--- expensive and an overwhelming one is nearly free. The multipliers carry the
--- attacker's and defender's race and technology, including the defender's
--- inherent advantage.
-local function engage(r, att_ships, att_mult, def_ships, def_mult)
+-- expensive and an overwhelming one nearly free.
+local function engage(r, att, att_mult, def, def_mult)
 	local variance = rules.combat_variance
-	local a = att_ships * att_mult * r:range(1 - variance, 1 + variance)
-	local d = def_ships * def_mult * r:range(1 - variance, 1 + variance)
-	if d <= 0 then return true, att_ships end
-	if a <= 0 then return false, def_ships end
+	local a = att * att_mult * r:range(1 - variance, 1 + variance)
+	local d = def * def_mult * r:range(1 - variance, 1 + variance)
+	if d <= 0 then return true, att, 0 end
+	if a <= 0 then return false, def, att end
 	if a > d then
-		return true, max(1, floor(att_ships * (1 - d / a)))
+		return true, max(1, floor(att * (1 - d / a))), def
 	end
-	return false, max(1, floor(def_ships * (1 - a / d)))
+	return false, max(1, floor(def * (1 - a / d))), att
 end
 
-local function battles(galaxy, state, mods, arrivals, r, events, summaries)
-	-- Sorted so resolution order never depends on table iteration order.
-	local ids = {}
-	for id in pairs(arrivals) do ids[#ids + 1] = id end
+--- Hostile fleets that end the turn in the same lane fight there.
+--
+-- A deliberate abstraction: a lane is a narrow corridor, so two hostile forces
+-- inside one engage regardless of where along it they happen to be or which way
+-- they are pointing. Modelling the exact crossing point would need the whole
+-- path each fleet swept this turn, and the corridor reading is the one players
+-- will expect anyway.
+local function interception(state, mods, r, events, summaries)
+	local lanes, order = {}, {}
+	for i = 1, #state.fleets do
+		local fleet = state.fleets[i]
+		local next_id = fleet.route[1]
+		if next_id and fleet.progress > 0 then
+			local a, b = fleet.at, next_id
+			if a > b then
+				local swap = a
+				a = b
+				b = swap
+			end
+			local key = a * 100000 + b
+			local bucket = lanes[key]
+			if not bucket then
+				bucket = { a = a, b = b, owners = {}, order = {} }
+				lanes[key] = bucket
+				order[#order + 1] = key
+			end
+			if not bucket.owners[fleet.owner] then
+				bucket.owners[fleet.owner] = {}
+				bucket.order[#bucket.order + 1] = fleet.owner
+			end
+			local list = bucket.owners[fleet.owner]
+			list[#list + 1] = fleet
+		end
+	end
+	table.sort(order)
+
+	for k = 1, #order do
+		local bucket = lanes[order[k]]
+		if #bucket.order >= 2 then
+			table.sort(bucket.order)
+			-- Two sides at a time, in player order, so a three-way meeting
+			-- resolves as a sequence rather than needing its own rules.
+			local standing = bucket.order[1]
+			for oi = 2, #bucket.order do
+				local challenger = bucket.order[oi]
+				local function total(who)
+					local t = 0
+					local list = bucket.owners[who]
+					for f = 1, #list do t = t + list[f].ships end
+					return t
+				end
+				local held, came = total(standing), total(challenger)
+				if held > 0 and came > 0 then
+					local att_list = bucket.owners[challenger]
+					local def_list = bucket.owners[standing]
+					local att_share, att_total = contributions_of(att_list)
+					local def_share, def_total = contributions_of(def_list)
+					local won, survivors = engage(r,
+						came, mods[challenger].attack
+							* senior_tactics(att_list, mods[challenger]),
+						held, mods[standing].defence
+							* senior_tactics(def_list, mods[standing]))
+					local winner = won and challenger or standing
+					local loser = won and standing or challenger
+
+					local function wipe(who)
+						local list = bucket.owners[who]
+						for f = 1, #list do list[f].ships = 0 end
+					end
+					local function reduce(who, keep)
+						local list = bucket.owners[who]
+						-- Losses land on the smallest fleets first, so a
+						-- flagship survives a mauling.
+						table.sort(list, function(p, q)
+							if p.ships ~= q.ships then return p.ships < q.ships end
+							return p.id < q.id
+						end)
+						local remaining = keep
+						for f = #list, 1, -1 do
+							local take = min(list[f].ships, remaining)
+							list[f].ships = take
+							remaining = remaining - take
+						end
+					end
+
+					wipe(loser)
+					reduce(winner, survivors)
+
+					emit(events, {
+						kind = "intercepted", turn = state.turn,
+						a = bucket.a, b = bucket.b,
+						attacker = challenger, defender = standing,
+						attacker_ships = came, defender_ships = held,
+						winner = winner, survivors = survivors,
+					})
+					-- Experience is enemy ships destroyed, which is a number
+					-- the player can already read off the battle report.
+					if won then
+						award_xp(att_list, att_share, att_total, held, events, state.turn)
+					else
+						award_xp(def_list, def_share, def_total, came, events, state.turn)
+					end
+					local ws = summaries[winner]
+					if ws then ws.won = ws.won + 1 end
+					local ls = summaries[loser]
+					if ls then ls.lost_fleets = ls.lost_fleets + 1 end
+					standing = winner
+				elseif came > 0 then
+					standing = challenger
+				end
+			end
+		end
+	end
+
+	scatter(state, events)
+end
+
+-- 8. Battles --------------------------------------------------------------------
+
+local function battles(galaxy, state, mods, r, events, summaries)
+	-- Fleets sitting at a system, grouped by system. Sorted so resolution order
+	-- never depends on table iteration order.
+	local at_system, ids = {}, {}
+	for i = 1, #state.fleets do
+		local fleet = state.fleets[i]
+		if fleet.progress == 0 then
+			local bucket = at_system[fleet.at]
+			if not bucket then
+				bucket = { owners = {}, order = {} }
+				at_system[fleet.at] = bucket
+				ids[#ids + 1] = fleet.at
+			end
+			if not bucket.owners[fleet.owner] then
+				bucket.owners[fleet.owner] = {}
+				bucket.order[#bucket.order + 1] = fleet.owner
+			end
+			local list = bucket.owners[fleet.owner]
+			list[#list + 1] = fleet
+		end
+	end
 	table.sort(ids)
 
 	for k = 1, #ids do
 		local id = ids[k]
-		local incoming = arrivals[id]
+		local bucket = at_system[id]
 		local sys = state.systems[id]
-		table.sort(incoming.order)
+		table.sort(bucket.order)
 
-		for oi = 1, #incoming.order do
-			local player = incoming.order[oi]
-			local ships = incoming.by_player[player]
-
-			if sys.owner == player then
-				-- Reinforcement.
-				sys.ships = sys.ships + ships
-				emit(events, {
-					kind = "reinforced", turn = state.turn,
-					at = id, player = player, ships = ships,
-				})
-			elseif sys.owner == 0 then
-				-- Unclaimed: taking it is free, and it starts growing next turn.
-				sys.owner = player
-				sys.ships = ships
-				emit(events, {
-					kind = "claimed", turn = state.turn,
-					at = id, player = player, ships = ships,
-				})
-			else
+		for oi = 1, #bucket.order do
+			local attacker = bucket.order[oi]
+			if sys.owner ~= attacker and sys.owner ~= 0 then
 				local defender = sys.owner
-				local defender_ships = sys.ships
-				local won, survivors = engage(r,
-					ships, mods[player].attack,
-					defender_ships, mods[defender].defence)
+				local att_ships = 0
+				local list = bucket.owners[attacker]
+				for f = 1, #list do att_ships = att_ships + list[f].ships end
 
-				local spoils = 0
-				if won then spoils = floor(sys.freighters * rules.freighter_capture_rate) end
+				local def_list = bucket.owners[defender] or {}
+				local def_fleet = 0
+				for f = 1, #def_list do def_fleet = def_fleet + def_list[f].ships end
+				local garrison = sys.ships or 0
+				local def_ships = garrison + def_fleet
+				local def_static = floor(systems.defence(galaxy, id, sys, sys.buildings)
+					* mods[defender].fortress)
 
-				emit(events, {
-					kind = "battle", turn = state.turn, at = id,
-					attacker = player, defender = defender,
-					attacker_ships = ships, defender_ships = defender_ships,
-					winner = won and player or defender,
-					survivors = survivors,
-					captured = won,
-					freighters_taken = spoils,
-				})
+				if att_ships > 0 then
+					local att_share, att_total = contributions_of(list)
+					local def_share, def_total = contributions_of(def_list)
+					local att_tactics = senior_tactics(list, mods[attacker])
+					local def_tactics = senior_tactics(def_list, mods[defender])
+					local won, survivors = engage(r,
+						att_ships, mods[attacker].attack * att_tactics,
+						def_ships + def_static, mods[defender].defence * def_tactics)
 
-				if won then
-					sys.owner = player
-					sys.ships = survivors
-					sys.population = floor(sys.population * mods[player].capture_keep)
-					-- The losing side's civilian hulls are mostly scuttled; the
-					-- rest change flag.
-					sys.freighters = spoils
-					-- A captured home system stops being anyone's home.
-					if sys.home_of ~= 0 and sys.home_of ~= player then sys.home_of = 0 end
-					local s = summaries[player]
-					if s then s.captured = s.captured + 1 end
-					local d = summaries[defender]
-					if d then d.lost = d.lost + 1 end
-				else
-					sys.ships = survivors
+					emit(events, {
+						kind = "battle", turn = state.turn, at = id,
+						attacker = attacker, defender = defender,
+						attacker_ships = att_ships,
+						defender_ships = def_ships,
+						defender_garrison = garrison,
+						defence_static = def_static,
+						attacker_tactics = att_tactics,
+						defender_tactics = def_tactics,
+						winner = won and attacker or defender,
+						survivors = survivors,
+						captured = won,
+					})
+
+					-- Before either side's `ships` is rewritten with survivors.
+					if won then
+						award_xp(list, att_share, att_total, def_ships, events, state.turn)
+					else
+						award_xp(def_list, def_share, def_total, att_ships, events, state.turn)
+					end
+
+					if won then
+						sys.ships = 0
+						for f = 1, #def_list do def_list[f].ships = 0 end
+						-- The attacker's force is consolidated into its first
+						-- fleet; a victorious army does not stay in packets.
+						local keep = survivors
+						table.sort(list, function(p, q) return p.id < q.id end)
+						for f = 1, #list do
+							local take = min(list[f].ships, keep)
+							list[f].ships = take
+							keep = keep - take
+						end
+						sys.owner = attacker
+						sys.population = floor(sys.population * mods[attacker].capture_keep)
+						-- Buildings survive: taking a fortified world is meant
+						-- to be a prize, and it now defends its new owner.
+						if sys.home_of ~= 0 and sys.home_of ~= attacker then
+							sys.home_of = 0
+						end
+						-- Anything half-built belonged to the previous owner.
+						sys.building = nil
+						local s = summaries[attacker]
+						if s then s.captured = s.captured + 1 end
+						local d = summaries[defender]
+						if d then d.lost = d.lost + 1 end
+					else
+						-- Casualties fall on the garrison first, then on any
+						-- fleet stationed here - so keeping a fleet on a world
+						-- is worth doing - and never on the planet's own guns,
+						-- which are not something that can be shot down.
+						local losses = min(def_ships, (def_ships + def_static) - survivors)
+						if losses < 0 then losses = 0 end
+						local from_garrison = min(sys.ships, losses)
+						sys.ships = sys.ships - from_garrison
+						local remaining = losses - from_garrison
+						table.sort(def_list, function(p, q)
+							if p.ships ~= q.ships then return p.ships < q.ships end
+							return p.id < q.id
+						end)
+						for f = 1, #def_list do
+							local take = min(def_list[f].ships, remaining)
+							def_list[f].ships = def_list[f].ships - take
+							remaining = remaining - take
+						end
+						for f = 1, #list do list[f].ships = 0 end
+						local s = summaries[attacker]
+						if s then s.lost_fleets = s.lost_fleets + 1 end
+					end
 				end
 			end
 		end
 	end
+
+	scatter(state, events)
 end
 
--- 9. Freighter arrivals -------------------------------------------------------
-
---- Settle every freighter fleet that stopped this turn.
---
--- Run after the battles so the answer to "is the destination still mine?" is
--- the one the turn actually ended with.
-local function dock(state, docking, events, summaries)
-	for i = 1, #docking do
-		local fleet = docking[i]
-		local sys = state.systems[fleet.at]
-		local owner = fleet.owner
-
-		if not sys or (sys.owner ~= 0 and sys.owner ~= owner) then
-			-- Flew into somebody else's system, or into one that fell while
-			-- they were in transit.
-			local taken = 0
-			if sys and sys.owner ~= 0 then
-				taken = floor(fleet.ships * rules.freighter_capture_rate)
-				sys.freighters = sys.freighters + taken
-			end
-			emit(events, {
-				kind = "trade_lost", turn = state.turn, player = owner,
-				at = fleet.at, ships = fleet.ships, seized_by = sys and sys.owner or 0,
-				visible_to = (sys and sys.owner ~= 0) and { owner, sys.owner } or { owner },
-			})
-		elseif fleet.at == fleet.destination
-			and state.systems[fleet.origin]
-			and state.systems[fleet.origin].owner == owner
-			and fleet.origin ~= fleet.at then
-			-- Both ends still held: open the route, or reinforce it if these
-			-- two systems are already trading.
-			local existing = nil
-			for k = 1, #state.routes do
-				local route = state.routes[k]
-				if route.owner == owner
-					and ((route.a == fleet.origin and route.b == fleet.at)
-						or (route.a == fleet.at and route.b == fleet.origin)) then
-					existing = route
-					break
-				end
-			end
-			if existing then
-				existing.ships = existing.ships + fleet.ships
-				-- Keep the shorter measured distance; both fleets flew a real
-				-- route and the cheaper one is the one commerce would use.
-				if fleet.distance < existing.length then existing.length = fleet.distance end
-			else
-				state.routes[#state.routes + 1] = {
-					owner = owner,
-					a = fleet.origin,
-					b = fleet.at,
-					ships = fleet.ships,
-					length = fleet.distance,
-				}
-			end
-			emit(events, {
-				kind = "route_established", turn = state.turn, player = owner,
-				a = fleet.origin, b = fleet.at, ships = fleet.ships,
-				visible_to = { owner },
-			})
-			local s = summaries[owner]
-			if s then s.routes_opened = s.routes_opened + 1 end
-		else
-			-- Stopped short, or the far end is no longer worth trading with.
-			-- They dock where they are and can be re-tasked next turn.
-			sys.freighters = sys.freighters + fleet.ships
-		end
-	end
-end
-
--- 10. Aftermath ---------------------------------------------------------------
+-- 9. Aftermath ------------------------------------------------------------------
 
 local function aftermath(galaxy, state, mods, events, summaries)
+	-- Forces are deliberately *not* consolidated any more. Folding two
+	-- co-located fleets into one used to keep the list readable, and under a
+	-- commander cap it is no longer needed for that - but it would now quietly
+	-- destroy an officer for the crime of parking next to a colleague, which is
+	-- the last thing a game about attachment to them should do. Standing a
+	-- force down is what the `garrison` order is for.
+
 	for i = 1, #state.players do
 		local player = state.players[i]
 		if player.alive and not state_mod.is_alive(state, i) then
 			player.alive = false
 			emit(events, { kind = "eliminated", turn = state.turn, player = i })
+		end
+	end
+
+	-- Region control, and with it the only way the game ends.
+	--
+	-- Recomputed rather than tracked: it is a pure function of who owns what,
+	-- and storing it would be one more thing to keep in step across a JSON
+	-- round trip for no gain.
+	local held = regions_mod.control(galaxy, state)
+	local previous = state.regions_held or {}
+	for r = 1, #held do
+		if held[r] ~= (previous[r] or 0) then
+			emit(events, {
+				kind = "region_control", turn = state.turn, region = r,
+				name = galaxy.regions[r] and galaxy.regions[r].name,
+				player = held[r], from = previous[r] or 0,
+			})
+		end
+	end
+	state.regions_held = held
+
+	if not state.winner then
+		local needed = regions_mod.needed(galaxy)
+		local tally = regions_mod.tally(galaxy, state, held)
+		for i = 1, #state.players do
+			if (tally[i] or 0) >= needed and state.players[i].alive then
+				state.winner = i
+				emit(events, {
+					kind = "victory", turn = state.turn, player = i,
+					regions = tally[i], needed = needed,
+				})
+			end
 		end
 	end
 
@@ -725,35 +991,16 @@ local function aftermath(galaxy, state, mods, events, summaries)
 		local s = summaries[i]
 		if s then
 			local player = state.players[i]
-			local ships, freighters = 0, 0
-			for _, sys in pairs(state.systems) do
-				if sys.owner == i then
-					ships = ships + sys.ships
-					freighters = freighters + sys.freighters
-				end
-			end
-			for f = 1, #state.fleets do
-				local fleet = state.fleets[f]
-				if fleet.owner == i then
-					if fleet.kind == "trade" then freighters = freighters + fleet.ships
-					else ships = ships + fleet.ships end
-				end
-			end
-			for k = 1, #state.routes do
-				if state.routes[k].owner == i then freighters = freighters + state.routes[k].ships end
-			end
-
 			s.kind = "turn_summary"
 			s.turn = state.turn
 			s.player = i
-			s.ships = ships
-			s.freighters = freighters
-			s.trade = floor(s.trade)
-			s.stock = {
-				metal = player.stock.metal,
-				fuel = player.stock.fuel,
-				research = player.stock.research,
-			}
+			s.ships = state_mod.ships_of(state, i)
+			s.garrisoned = state_mod.garrisons_of(state, i)
+			s.fleets = 0
+			for f = 1, #state.fleets do
+				if state.fleets[f].owner == i then s.fleets = s.fleets + 1 end
+			end
+			s.research_banked = player.research
 			s.researching = player.researching
 			s.visible_to = { i }
 			emit(events, s)
@@ -763,9 +1010,9 @@ end
 
 --- Decide who may see each event.
 --
--- Participants always do. Everyone else only if the system it happened at is
--- visible to them at the end of the turn - so a battle on the far side of the
--- map is not broadcast.
+-- Participants always do. Everyone else only if the place it happened is visible
+-- to them at the end of the turn, so a battle on the far side of the map is not
+-- broadcast.
 local function apply_visibility(galaxy, state, events)
 	local visible = {}
 	for i = 1, #state.players do
@@ -777,10 +1024,12 @@ local function apply_visibility(galaxy, state, events)
 		if not event.visible_to then
 			local who = {}
 			for i = 1, #state.players do
-				local participant = (event.player == i) or (event.attacker == i) or (event.defender == i)
-				if participant or (event.at and visible[i][event.at]) then
-					who[#who + 1] = i
-				end
+				local part = (event.player == i) or (event.attacker == i)
+					or (event.defender == i)
+				local where = (event.at and visible[i][event.at])
+					or (event.a and visible[i][event.a])
+					or (event.b and visible[i][event.b])
+				if part or where then who[#who + 1] = i end
 			end
 			-- An elimination is public; it changes the shape of the whole game.
 			if event.kind == "eliminated" then
@@ -807,29 +1056,22 @@ function M.turn(galaxy, state, orders, lengths)
 	local mods = {}
 	for i = 1, #state.players do
 		summaries[i] = {
-			built = 0, freighters_built = 0, scrapped = 0, attrition = 0,
-			captured = 0, lost = 0, systems = 0, population = 0,
-			trade = 0, routes_opened = 0,
-			metal_spent = 0, fuel_spent = 0,
-			income = resources.zero(),
+			systems = 0, colonies = 0, population = 0,
+			output = 0, research = 0, built = 0, buildings_done = 0,
+			scrapped = 0, captured = 0, lost = 0, won = 0, lost_fleets = 0,
 		}
 		mods[i] = modifiers.of(state.players[i])
 	end
 
-	local starved = {}
-
-	directives(state, orders, events)
+	directives(galaxy, state, orders, mods, events)
 	growth(galaxy, state, mods, summaries)
-	income(galaxy, state, mods, events, summaries)
-	upkeep(state, mods, events, summaries, starved)
+	industry(galaxy, state, mods, events, summaries)
 	research(state, mods, events, summaries)
-	build(galaxy, state, mods, events, summaries, starved)
-	departures(galaxy, state, orders, mods, lengths, events)
-
-	local arrivals, docking = {}, {}
-	movement(galaxy, state, mods, lengths, arrivals, docking)
-	battles(galaxy, state, mods, arrivals, r, events, summaries)
-	dock(state, docking, events, summaries)
+	fleet_orders(galaxy, state, orders, mods, lengths, events)
+	resupply(state, mods, events)
+	movement(galaxy, state, mods, lengths, events)
+	interception(state, mods, r, events, summaries)
+	battles(galaxy, state, mods, r, events, summaries)
 	aftermath(galaxy, state, mods, events, summaries)
 	apply_visibility(galaxy, state, events)
 

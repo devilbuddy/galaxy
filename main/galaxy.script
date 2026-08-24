@@ -9,6 +9,7 @@ local meshbuild = require("main.meshbuild")
 local store = require("main.store")
 local backend = require("main.backend")
 local monarch = require("monarch.monarch")
+local sim_systems = require("galaxy.sim.systems")
 local config = require("galaxy.config")
 local rng = require("galaxy.rng")
 
@@ -62,6 +63,15 @@ end
 -- In a game this shows *ownership*, which is what a player needs to read at a
 -- glance; the region tint it replaces is scenery. Outside a game (browsing a
 -- seed) it falls back to regions so the map is not blank.
+-- How big each kind of place is drawn. A colony is somewhere you fight over; a
+-- waypoint is terrain, and reads as a point rather than a world. This is the
+-- only cue on the map for what a system is *for*, so it is deliberately large.
+local KIND_SCALE = { colony = 1.55, outpost = 1.0, waypoint = 0.58 }
+
+local function kind_scale(g, i)
+	return KIND_SCALE[sim_systems.kind(g, i)] or 1
+end
+
 local function build_wash(self, g, world)
 	local b = meshbuild.new(#g.stars)
 	local radius = world * WASH_SCALE
@@ -121,7 +131,7 @@ local function build_glow(self, g, world)
 	for i = 1, #g.stars do
 		local s = g.stars[i]
 		local c = s.colour
-		local size = base * s.glow * s.size_jitter
+		local size = base * s.glow * s.size_jitter * kind_scale(g, i)
 		b:sprite(s.x, s.y, size, Z_GLOW, c[1], c[2], c[3], 0.52 * knowledge(self, i))
 	end
 	b:apply("/galaxy#glow")
@@ -137,7 +147,7 @@ local function build_owners(self, g, world)
 		local alpha, owner = knowledge(self, i)
 		if owner and owner > 0 then
 			local c = player_colour(owner)
-			local size = base * s.radius * s.size_jitter * 3.4
+			local size = base * s.radius * s.size_jitter * kind_scale(g, i) * 3.4
 			-- Remembered ownership is drawn fainter: it may already be stale.
 			b:sprite(s.x, s.y, size, Z_OWNER, c[1], c[2], c[3], 0.95 * alpha)
 		else
@@ -155,7 +165,7 @@ local function build_stars(self, g, world)
 	for i = 1, #g.stars do
 		local s = g.stars[i]
 		local c = s.colour
-		local size = base * s.radius * s.size_jitter
+		local size = base * s.radius * s.size_jitter * kind_scale(g, i)
 		b:sprite(s.x, s.y, size, Z_STAR,
 			math.min(1, c[1] * 0.42 + 0.62),
 			math.min(1, c[2] * 0.42 + 0.62),
@@ -204,7 +214,7 @@ local function present(self, g, source, note)
 	local t0 = os.clock()
 	local world = g.world_size
 	build_nebula(world)
-	build_dust(seed, world)
+	build_dust(g.seed, world)
 	build_wash(self, g, world)
 	build_lanes(self, g, world)
 	build_glow(self, g, world)
@@ -272,20 +282,37 @@ local function load_game(self, game_id, silent)
 				self.presented_turn = turn
 				present(self, galaxy, source)
 			end
-			-- Only on arrival. Polling in the background must not throw a popup
-			-- over a player who is in the middle of reading the map; the turn
-			-- simply appears, and the digest waits until they next come back.
-			if not silent and #events > 0 and turn > store.seen_turn then
-				monarch.show(hash("report"), nil, {
-					events = events, you = res.you,
-					-- The server caps how far back a digest reaches; passing the
-					-- first turn it covers lets the report say so instead of
-					-- implying this is everything that happened.
-					from_turn = res.events_from,
-					since_turn = store.seen_turn,
-				})
+			-- A resolved turn consumes the plan. The orders it carried have
+			-- either taken effect or been rejected, and sending them again
+			-- would aim last turn's move at this turn's map - at a fleet that
+			-- may no longer exist.
+			store.plan_consumed(turn)
+
+			local digest = {
+				events = events, you = res.you, turn = turn,
+				-- The server caps how far back a digest reaches; passing the
+				-- first turn it covers lets the report say so instead of
+				-- implying this is everything that happened.
+				from_turn = res.events_from,
+				since_turn = store.seen_turn,
+			}
+			if #events > 0 and turn > store.seen_turn then
+				if silent then
+					-- Polling in the background must not throw a popup over a
+					-- player who is in the middle of reading the map - but the
+					-- digest must not be dropped either, and advancing
+					-- `seen_turn` here would drop it: the next request asks for
+					-- events *since* that turn and the server would never send
+					-- them again. So hold it and leave `seen_turn` alone; the
+					-- overview offers it, and opening it is what marks it read.
+					store.pending_report = digest
+				else
+					monarch.show(hash("report"), nil, digest)
+					store.seen_turn = turn
+				end
+			else
+				store.seen_turn = turn
 			end
-			store.seen_turn = turn
 		end
 
 		-- The galaxy is immutable and cacheable, so it is fetched separately

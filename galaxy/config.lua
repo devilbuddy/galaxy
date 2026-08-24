@@ -10,6 +10,16 @@ return {
 	-- lands near this number, so it is a genuine target rather than a hint.
 	star_count = 220,
 
+	-- Fraction of systems that must end up habitable, and therefore colonies -
+	-- the only places that hold population and host every building.
+	--
+	-- Habitability is a per-star roll off the class table, and on a small map
+	-- the variance is brutal: 120 stars produced anywhere from 13 to 26
+	-- colonies across seeds, and 13 is not a playable four-player game. The
+	-- generator promotes the best remaining candidates until it reaches this
+	-- floor, so every seed is fair without making the roll itself uniform.
+	colony_fraction = 0.20,
+
 	-- Mean lanes per system. Below ~2.4 the map degenerates towards a tree with
 	-- no strategic choices; above ~3.4 it stops reading as a lane network.
 	lane_degree = 2.9,

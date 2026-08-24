@@ -1,81 +1,77 @@
 --- Fog of war: what each player is allowed to know.
 --
--- The star map itself is public - geometry, names, lanes and, because they are
--- derived from the star class and feature, resource yields. Everyone gets it,
--- because the map is the game's visual centrepiece and hiding it would leave a
--- new player staring at emptiness, and because you should be able to plan a
--- conquest around what a system is worth. What is hidden is the *state*: who
--- owns what, who has ships where, and how strong they are.
+-- The star map itself is public - geometry, names, and because they are derived
+-- from the star class and feature, what kind of place every system is and what
+-- it is worth. Everyone gets that, because the map is the game's visual
+-- centrepiece and because you should be able to plan a conquest around what
+-- ground is *for*. What is hidden is the live state: who holds what, how
+-- developed it is, and where the fleets are.
+--
+-- **Detection is a range, per source.** A system sees as far as its radar can
+-- reach; a fleet barely sees past itself. That is what makes a developed border
+-- outpost a listening post worth fighting over, and it is why enemy fleets are
+-- visible at all - a conquest game where an invasion cannot be seen coming is
+-- one where you lose worlds overnight with no way to answer.
 
 local modifiers = require("galaxy.sim.modifiers")
-local resources = require("galaxy.sim.resources")
 local rules = require("galaxy.sim.rules")
+local systems = require("galaxy.sim.systems")
+local buildings = require("galaxy.sim.buildings")
 local state_mod = require("galaxy.sim.state")
 local tech = require("galaxy.sim.tech")
+local commanders = require("galaxy.sim.commanders")
+local regions_mod = require("galaxy.sim.regions")
 
 local M = {}
 
---- Systems a player can currently observe.
+--- Systems a player can currently observe, as id -> lanes of range to spare.
 --
--- Owned systems, everything within their vision radius in lanes, and wherever
--- the player has a fleet. One lane of vision means a border system is genuinely
--- a lookout post and losing it blinds you; the Survey Network technology buys a
--- second lane, which is the difference between seeing a build-up and seeing it
--- arrive.
+-- A relaxation rather than a plain breadth-first walk, because sources have
+-- different reach: a radar-3 world outranges a fleet by four lanes, and the
+-- widest source has to win wherever they overlap.
 function M.visible_systems(galaxy, state, player, mods)
 	mods = mods or modifiers.of(state.players[player])
-	local radius = mods.vision
-	if radius < 0 then radius = 0 end
 
-	-- Breadth-first out from every source at once, so a system is expanded at
-	-- its true minimum hop count and never re-expanded.
-	local visible = {}
-	local frontier = {}
+	local best = {}
+	local queue = {}
 
-	local function seed(id)
-		if id and not visible[id] then
-			visible[id] = true
-			frontier[#frontier + 1] = id
-		end
+	local function push(id, budget)
+		if not id or budget < 0 then return end
+		local seen = best[id]
+		if seen and seen >= budget then return end
+		best[id] = budget
+		queue[#queue + 1] = { id, budget }
 	end
 
 	for id, sys in pairs(state.systems) do
-		if sys.owner == player then seed(id) end
+		if sys.owner == player then
+			push(id, systems.vision(galaxy, id, sys.buildings, mods))
+		end
 	end
 	for i = 1, #state.fleets do
 		local fleet = state.fleets[i]
 		if fleet.owner == player then
-			seed(fleet.at)
-			seed(fleet.path[1])
-		end
-	end
-	-- A trade route is a standing presence on both of its endpoints, which the
-	-- owner holds anyway - but seeding them keeps the rule "you see what you
-	-- have something at" true without a special case.
-	for i = 1, #(state.routes or {}) do
-		local route = state.routes[i]
-		if route.owner == player then
-			seed(route.a)
-			seed(route.b)
+			local reach = rules.fleet_vision + mods.vision
+			push(fleet.at, reach)
+			push(fleet.route[1], reach)
 		end
 	end
 
-	for _ = 1, radius do
-		local next_frontier = {}
-		for i = 1, #frontier do
-			local neighbours = galaxy.adjacency[frontier[i]]
+	local head = 1
+	while head <= #queue do
+		local entry = queue[head]
+		head = head + 1
+		local id, budget = entry[1], entry[2]
+		-- Skip entries superseded by a wider source before they were reached.
+		if best[id] == budget and budget > 0 then
+			local neighbours = galaxy.adjacency[id]
 			for k = 1, #neighbours do
-				local id = neighbours[k]
-				if not visible[id] then
-					visible[id] = true
-					next_frontier[#next_frontier + 1] = id
-				end
+				push(neighbours[k], budget - 1)
 			end
 		end
-		frontier = next_frontier
 	end
 
-	return visible
+	return best
 end
 
 --- Fold what a player can see right now into their persistent memory.
@@ -95,45 +91,14 @@ function M.remember(galaxy, state, player)
 		memory[id] = {
 			turn = state.turn,
 			owner = sys.owner,
-			ships = sys.ships,
 			population = sys.population,
+			garrison = sys.ships,
+			radar = sys.buildings.radar,
+			fortress = sys.buildings.fortress,
+			shipyard = sys.buildings.shipyard,
 		}
 	end
 	return visible
-end
-
---- What one player's own empire is earning, so the client can show a rate
---- rather than only a balance. Recomputed rather than stored: it is a pure
---- function of the state and storing it would be one more thing to migrate.
-local function income_estimate(galaxy, state, player, mods)
-	local out = resources.zero()
-	for id, sys in pairs(state.systems) do
-		if sys.owner == player then
-			local base = resources.base_yield(galaxy, id)
-			local scale = rules.yield_flat + sys.population * rules.yield_per_pop
-			out.metal = out.metal + base.metal * scale * mods.yield_metal
-			out.fuel = out.fuel + base.fuel * scale * mods.yield_fuel
-			out.research = out.research + base.research * scale * mods.yield_research
-		end
-	end
-	local math_min, math_floor = math.min, math.floor
-	for i = 1, #(state.routes or {}) do
-		local route = state.routes[i]
-		local a, b = state.systems[route.a], state.systems[route.b]
-		if route.owner == player and a and b and a.owner == player and b.owner == player then
-			local lf = math_min(rules.trade_length_cap, route.length / rules.trade_length_reference)
-			local pf = math_min(rules.trade_pop_cap,
-				(a.population + b.population) / rules.trade_pop_reference)
-			local value = route.ships * mods.trade * lf * pf
-			out.research = out.research + value * 0.5
-			out.fuel = out.fuel + value * 0.5
-		end
-	end
-	return {
-		metal = math_floor(out.metal),
-		fuel = math_floor(out.fuel),
-		research = math_floor(out.research),
-	}
 end
 
 --- The state as one player is allowed to receive it.
@@ -151,60 +116,82 @@ function M.project(galaxy, state, player)
 	-- ambiguously as JSON - some encoders produce an object, others a
 	-- null-padded array - and the client must be able to tell which system each
 	-- entry describes. String keys always encode as an object.
-	local systems = {}
+	local out_systems = {}
 	for id in pairs(visible) do
 		local sys = state.systems[id]
-		systems[tostring(id)] = {
+		local mine = sys.owner == player
+		out_systems[tostring(id)] = {
 			owner = sys.owner,
 			population = sys.population,
-			ships = sys.ships,
-			-- Freighters are only ever reported for systems the player holds:
-			-- an enemy's civilian hulls are not something a border scout counts.
-			freighters = sys.owner == player and sys.freighters or nil,
+			-- The immobile force sitting on it, which is most of what defends it.
+			garrison = sys.ships,
+			-- Buildings are structures: if you can see the world you can see
+			-- its fortress and its radar mast.
+			buildings = {
+				radar = sys.buildings.radar,
+				fortress = sys.buildings.fortress,
+				shipyard = sys.buildings.shipyard,
+			},
+			-- What it would defend itself with, before any fleet.
+			defence = math.floor(systems.defence(galaxy, id, sys, sys.buildings)
+				* (mine and mods.fortress or 1)),
+			-- Only your own worlds report what they are producing and building.
+			output = mine and math.floor(
+				systems.output(galaxy, id, sys, mods, sys.buildings)) or nil,
+			building = mine and sys.building and {
+				kind = sys.building.kind,
+				paid = sys.building.paid,
+				cost = buildings.cost(sys.building.kind,
+					sys.buildings[sys.building.kind] or 0, mods.building_cost),
+			} or nil,
+			capacity = systems.capacity(galaxy, id, mine and mods or nil),
 			home_of = sys.home_of,
-			-- The observer's own worlds report the ceiling their technology
-			-- gives them; someone else's report what the star alone supports,
-			-- because their terraforming is not something you can see.
-			capacity = state_mod.capacity(galaxy, id, sys.owner == player and mods or nil),
 			seen = state.turn,
 			live = true,
 		}
 	end
 	for id, seen in pairs(memory) do
-		if not systems[tostring(id)] then
-			systems[tostring(id)] = {
+		if not out_systems[tostring(id)] then
+			out_systems[tostring(id)] = {
 				owner = seen.owner,
 				population = seen.population,
-				ships = seen.ships,
+				garrison = seen.garrison or 0,
+				buildings = {
+					radar = seen.radar or 0,
+					fortress = seen.fortress or 0,
+					shipyard = seen.shipyard or 0,
+				},
 				seen = seen.turn,
 				live = false,
 			}
 		end
 	end
 
-	-- Only the player's own fleets. Enemy fleets in transit are invisible;
-	-- you learn about them when they arrive.
-	local fleets = {}
+	-- Your own fleets in full; everyone else's only where you have eyes, and
+	-- without their orders - you can see a force in a lane, not its campaign.
+	local fleets, contacts = {}, {}
 	for i = 1, #state.fleets do
 		local f = state.fleets[i]
 		if f.owner == player then
+			local profile = commanders.profile(f, mods)
 			fleets[#fleets + 1] = {
-				id = f.id, ships = f.ships, at = f.at,
-				kind = f.kind or "move",
-				destination = f.destination,
-				next_hop = f.path[1],
-				eta = #f.path,
+				id = f.id, name = f.name, ships = f.ships,
+				at = f.at, next_hop = f.route[1], progress = f.progress,
+				route = f.route, eta = #f.route,
+				-- The commander, flattened: the client should never have to
+				-- know the level curve to draw a rank or a capacity bar.
+				level = profile.level, rank = profile.rank,
+				xp = profile.xp, next_xp = profile.next_xp,
+				command = profile.command, speed = profile.speed,
+				tactics = profile.tactics,
 			}
-		end
-	end
-
-	local routes = {}
-	for i = 1, #(state.routes or {}) do
-		local route = state.routes[i]
-		if route.owner == player then
-			routes[#routes + 1] = {
-				a = route.a, b = route.b, ships = route.ships,
-				length = route.length,
+		elseif visible[f.at] or (f.route[1] and visible[f.route[1]]) then
+			-- An enemy commander's rank shows - you can tell a veteran force
+			-- from a green one by how it moves - but not their experience.
+			contacts[#contacts + 1] = {
+				owner = f.owner, ships = f.ships,
+				at = f.at, next_hop = f.route[1], progress = f.progress,
+				rank = commanders.rank(f.level or 1),
 			}
 		end
 	end
@@ -221,38 +208,60 @@ function M.project(galaxy, state, player)
 	end
 
 	-- Researched technologies go out as an array, not a set: an empty set
-	-- encodes as `[]` or `{}` depending on the encoder and the client would
-	-- have to guess. Ordered by the tree so the list is stable.
+	-- encodes as `[]` or `{}` depending on the encoder and the client would have
+	-- to guess. Ordered by the tree so the list is stable.
 	local known = {}
 	for i = 1, #tech.TECHS do
 		if me.tech[tech.TECHS[i].id] then known[#known + 1] = tech.TECHS[i].id end
 	end
 
+	local population = state_mod.population_of(state, player)
+
+	-- Region control is public. Who holds what is visible from the borders on
+	-- the map, and an objective nobody can see the state of is not an
+	-- objective - a player has to be able to tell how close the game is.
+	local held, counts = regions_mod.control(galaxy, state)
+	local region_view = {}
+	for r = 1, #held do
+		region_view[r] = { held = held[r], mine = (counts[r] or {})[player] or 0 }
+	end
+
 	return {
 		turn = state.turn,
 		you = player,
+		winner = state.winner,
 		players = roster,
-		systems = systems,
+		regions = region_view,
+		region_weights = regions_mod.weights(galaxy),
+		regions_needed = regions_mod.needed(galaxy),
+		regions_held = regions_mod.tally(galaxy, state, held)[player] or 0,
+		commander_cap = rules.commander_cap,
+		systems = out_systems,
 		fleets = fleets,
-		routes = routes,
-		stock = {
-			metal = me.stock.metal, fuel = me.stock.fuel, research = me.stock.research,
-		},
-		income = income_estimate(galaxy, state, player, mods),
+		contacts = contacts,
+		research = me.research,
 		tech = known,
 		researching = me.researching,
 		available_tech = tech.available(me.tech),
-		warship_share = me.warship_share,
 		race = me.race,
-		-- The numbers the client needs to explain itself: what a ship costs,
-		-- what the fleet bill is, how far an order may reach.
+		-- The numbers the client needs to explain itself.
 		rates = {
-			upkeep = mods.upkeep,
-			speed = mods.speed,
+			ships = state_mod.ships_of(state, player),
+			garrisoned = state_mod.garrisons_of(state, player),
+			ship_cap = math.floor(population * mods.cap),
+			population = population,
+			-- A commander's speed is their own (level x race x tech), so what
+			-- the empire has is a multiplier, not a distance. Reported as the
+			-- speed a green officer actually moves at, which is the number a
+			-- player can compare against a lane.
+			speed = commanders.speed({ level = 1 }, mods),
+			speed_scale = mods.speed_scale,
+			commander_cap = rules.commander_cap,
 			hops = mods.hops,
 			vision = mods.vision,
 			tech_cost = mods.tech_cost,
 			ship_cost = mods.ship_cost,
+			building_cost = mods.building_cost,
 		},
 	}
 end

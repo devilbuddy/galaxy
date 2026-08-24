@@ -13,8 +13,15 @@ local sqrt, abs, huge = math.sqrt, math.abs, math.huge
 local Recognizer = {}
 Recognizer.__index = Recognizer
 
---- @param opts.tap_slop  total travel, in view units, still counted as a tap
---- @param opts.dead_zone ignore pinch scale changes below this distance
+--- Build a recogniser.
+--
+-- The parameter notes below are prose, not LuaLS annotations - a `---@param`
+-- line names a real declared parameter and a type, and `opts.tap_slop` is
+-- neither, so the language server reported both as undefined. The rest of this
+-- file already documents arguments with a plain `--`; this now matches.
+--
+-- @param opts.tap_slop  total travel, in view units, still counted as a tap
+-- @param opts.dead_zone ignore pinch scale changes below this distance
 function M.new(opts)
 	opts = opts or {}
 	return setmetatable({

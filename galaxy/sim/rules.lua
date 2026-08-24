@@ -4,112 +4,128 @@
 -- without reading the resolution logic. Values are per *turn*, and a turn is a
 -- scheduled batch (typically two a day), not a real-time tick.
 --
--- Where a value is a baseline that races and technology scale, the scaling
--- lives in galaxy/sim/modifiers.lua and the resolver never reads the raw
--- constant directly. The ones below marked "baseline" are in that group.
+-- Where a value is a baseline that races and technology scale, the scaling lives
+-- in galaxy/sim/modifiers.lua and the resolver never reads the raw constant
+-- directly. Those are marked "baseline".
+--
+-- The economy is one axis on purpose. A system produces **build points**, which
+-- become ships or pay for a building, and **research**, which is the only thing
+-- that pools empire-wide. There is no second currency, no upkeep and no
+-- logistics: what makes an empire strong is how much ground it holds.
 
 return {
-	-- Population -----------------------------------------------------------
-	-- Systems grow towards a capacity that depends on the star class; growth is
-	-- a fraction of the remaining headroom, so it is fast when empty and tapers.
-	base_capacity = 100,
-	habitable_capacity_bonus = 1.8,
-	growth_rate = 0.08,               -- baseline
-	-- A newly captured system keeps this fraction of its population.
-	capture_population_loss = 0.35,   -- baseline (via capture_keep)
+	-- Population --------------------------------------------------------------
+	-- Only colonies have any (see galaxy/sim/systems.lua). Growth is a fraction
+	-- of the remaining headroom, so an empty world fills quickly and a full one
+	-- stagnates.
+	base_capacity = 130,
+	growth_rate = 0.08,              -- baseline
+	-- A captured world keeps this fraction of its people. Buildings survive
+	-- intact, so this is the whole cost of conquest - and because output and
+	-- defence both scale with population, a blitz leaves you holding a lot of
+	-- strong, useless worlds.
+	capture_population_loss = 0.40,  -- baseline (via capture_keep)
 
-	-- Economy ---------------------------------------------------------------
-	-- A system's income per turn, per resource, is
-	--     base_yield(class, feature) * (yield_flat + population * yield_per_pop)
-	-- The flat part keeps a freshly claimed world from being worthless while it
-	-- fills, without which the first ten turns of every game are dead time.
-	yield_flat = 1.0,
-	yield_per_pop = 0.04,
-	-- Opening stockpile, so turn one is a decision rather than a wait.
-	start_stock = { metal = 60, fuel = 40, research = 0 },
+	-- Output ------------------------------------------------------------------
+	-- Build points per turn. A colony scales with its people; an outpost is a
+	-- flat trickle whoever holds it.
+	colony_output_flat = 1.0,
+	colony_output_per_pop = 0.05,
+	outpost_output = 2.0,
+	-- Build points per ship, so a colony of 150 lays down about eight a turn.
+	ship_cost = 1.0,                 -- baseline (via ship_cost)
+	shipyard_bonus = 0.35,           -- per shipyard level
+	-- Multiplies every building's list price in galaxy/sim/buildings.lua: the
+	-- one knob for how long infrastructure takes relative to a fleet.
+	building_cost_scale = 1.0,
 
-	-- Industry -------------------------------------------------------------
-	-- Ships a system can lay down per turn = population * ships_per_pop. This
-	-- is the *burst* ceiling; what usually binds is metal, so a player who
-	-- banks resources can surge and one living hand-to-mouth cannot.
-	ships_per_pop = 0.04,             -- baseline
-	-- A home system is worth holding.
-	home_production_bonus = 1.5,
-	-- Metal builds hulls; fuel runs them. Keeping the two costs on separate
-	-- resources is what makes the two levers legible: metal decides how fast
-	-- you can build a navy, fuel decides how big a one you can keep.
-	warship_cost = { metal = 2, fuel = 0 },
-	freighter_cost = { metal = 4 },
-	-- Ships a player can support, per point of population across their empire.
+	-- Research ----------------------------------------------------------------
+	research_per_pop = 0.04,
+	outpost_research = 0.5,
+	-- Multiplies the research half of every tech's list price; see
+	-- galaxy/sim/tech.lua for why metal is not scaled with it.
+	tech_cost_scale = 4.0,
+
+	-- Commanders --------------------------------------------------------------
+	-- How many forces a player may field at once. **This is the shape of the
+	-- game**, not a balance knob: with a cap, "which fronts am I fighting on"
+	-- is a decision, and without one a 400-turn run ends with one empire
+	-- holding a hundred and sixty forces and a list nobody can read.
+	commander_cap = 4,
+	commander_max_level = 10,
+	-- Experience is enemy ships destroyed. Quadratic thresholds, so the first
+	-- promotion comes from a skirmish and the last from a campaign:
+	-- level n at base * (n-1) * n, i.e. 150 / 450 / 900 / 1500 at base 75.
+	commander_xp_base = 75,
+	-- Ships a commander can lead. Anything over it stays in the garrison, so a
+	-- veteran is worth more than the sum of their ships.
 	--
-	-- This predates the fuel economy and is now a backstop rather than the live
-	-- constraint - fuel upkeep bites well before it does. It stays because
-	-- removing it reopens the failure it was added for: without any ceiling,
-	-- garrisons grow without bound, defence compounds and the map freezes into
-	-- a permanent stalemate by about turn 75, which is exactly what
-	-- tools/play.lua showed.
-	fleet_cap_per_pop = 1.4,          -- baseline
-	-- Fraction of the excess lost each turn when over the cap, so a shrinking
-	-- empire sheds ships rather than keeping a fleet it can no longer support.
+	-- Sized against the economy, not picked for feel: `fleet_cap_per_pop` lets a
+	-- developed empire support roughly 400 ships, and four commanders at level 1
+	-- have to be able to field about that many or the cap stops being "how many
+	-- fronts" and becomes "you may not attack anything defended". At 70 it did
+	-- exactly that - every AI in tools/play.lua froze at four systems by turn 75
+	-- because no assault it could mount ever met a defended world's price.
+	command_base = 120,
+	command_per_level = 40,          -- baseline (via command)
+	-- Battle multiplier from the officer alone: +6% a level, so a Grand Admiral
+	-- fights at about 1.5x a raw force of the same size.
+	tactics_per_level = 0.06,        -- baseline (via tactics)
+
+	-- Fleets ------------------------------------------------------------------
+	-- Ships a player can support per point of population. Without a ceiling,
+	-- forces grow without bound, defence compounds and the map freezes into a
+	-- permanent stalemate by about turn 75 - which is exactly what
+	-- tools/play.lua showed before it existed.
+	fleet_cap_per_pop = 1.4,         -- baseline (via cap)
 	over_cap_attrition = 0.15,
+	-- World units a commander covers per turn.
+	--
+	-- **Deliberately below a typical lane** (~130). At the old 150 every hop
+	-- completed inside one turn, so nothing was ever caught in transit and
+	-- interception was decoration that only tests ever saw. At 95 a green
+	-- commander spends a turn or two on a long lane, which is where the map
+	-- stops being a list of systems and starts being a distance.
+	commander_speed = 95,            -- baseline (via speed_scale)
+	speed_per_level = 7,             -- so a Grand Admiral crosses in one turn
+	-- How far ahead a route may be plotted, in lanes.
+	max_route_hops = 12,             -- baseline (via hops)
+	-- Fleets below this are folded into whatever they arrive at rather than
+	-- cluttering the map.
+	min_fleet_size = 1,
 
-	-- Upkeep ----------------------------------------------------------------
-	-- Fuel per warship per turn. This is the real limit on fleet size: a
-	-- ten-system empire earns roughly enough fuel for six hundred warships,
-	-- comfortably under what its population would allow, so expansion buys
-	-- military strength through economy rather than directly.
-	fuel_per_warship = 0.08,          -- baseline
-	-- Ships beyond what the fuel bill covers are lost at this rate per turn.
-	unfuelled_attrition = 0.10,
-
-	-- Trade -----------------------------------------------------------------
-	-- Per freighter per turn on an established route, before length and
-	-- population scaling. Paid half in research and half in fuel - never in
-	-- metal, so hulls always have to be dug out of ground you hold and a trade
-	-- empire cannot skip having territory.
-	trade_yield = 0.9,                -- baseline
-	-- Route income scales with distance up to this multiple, so a long route
-	-- across the map is worth the exposure it carries.
-	trade_length_reference = 300,
-	trade_length_cap = 2.0,
-	-- ...and with the population at both ends, up to this multiple.
-	trade_pop_reference = 200,
-	trade_pop_cap = 1.5,
-
-	-- Research ---------------------------------------------------------------
-	-- Multiplies the *research* half of every list price in galaxy/sim/tech.lua
-	-- (their metal costs are left alone; see tech.cost_of for why). The one knob
-	-- for how long the tree takes to walk: the costs there fix the ratio between
-	-- techs, this fixes the pace. At 1.0 a greedy AI in tools/play.lua finishes
-	-- the whole tree by turn 25, which is a fortnight of a twice-a-day game and
-	-- makes the back half of it scenery.
-	tech_cost_scale = 9.0,
-
-	-- Movement -------------------------------------------------------------
-	-- World units a fleet covers per turn. Typical lane length is ~130, so most
-	-- single-lane hops take one turn and long ones take two or three.
-	fleet_speed = 150,                -- baseline
-	-- Fleets always travel along lanes; this caps how far an order may path.
-	max_path_hops = 12,               -- baseline
-	-- Freighters are civilian hulls and slower than a warfleet.
-	freighter_speed_factor = 0.8,
-
-	-- Intelligence ----------------------------------------------------------
-	-- Lanes of visibility around anything you hold. Survey Network adds one.
-	base_vision = 1,                  -- baseline
-
-	-- Combat ---------------------------------------------------------------
+	-- Combat ------------------------------------------------------------------
 	-- Defenders fight above their weight; taking a system should cost more than
 	-- holding it.
-	defence_bonus = 1.25,             -- baseline
-	-- Losses are scaled by +/- this fraction, drawn from the turn's seeded RNG,
-	-- so battles are not perfectly predictable but stay reproducible.
+	defence_bonus = 1.25,            -- baseline (via defence)
+	-- Losses are scaled by +/- this fraction from the turn's seeded RNG, so
+	-- battles are not perfectly predictable but stay reproducible.
 	combat_variance = 0.12,
-	-- Freighters caught at a system that falls are captured, not destroyed:
-	-- this fraction survives into the winner's hands.
-	freighter_capture_rate = 0.5,
+	-- What a world defends itself with before any fleet is counted.
+	planet_defence_per_pop = 0.20,
+	fortress_defence = 40,           -- per fortress level
 
-	-- Starting position ----------------------------------------------------
-	start_population = 40,
-	start_ships = 20,
+	-- Intelligence ------------------------------------------------------------
+	-- Lanes of vision. A developed border world sees much further than a fleet,
+	-- which is what makes a radar outpost a listening post worth fighting over.
+	base_vision = 1,                 -- baseline (via vision)
+	radar_vision = 1,                -- per radar level
+	fleet_vision = 1,
+
+	-- Regions -----------------------------------------------------------------
+	-- The map is much bigger than anyone will hold, so the objective is the
+	-- region rather than the system count - see galaxy/sim/regions.lua. A held
+	-- region pays a little more, which is what makes finishing one off worth
+	-- doing instead of leaving a stubborn outpost behind.
+	region_output_bonus = 0.15,
+	-- Fraction of all regions that wins the game.
+	victory_region_fraction = 0.5,
+
+	-- Starting position -------------------------------------------------------
+	start_population = 50,
+	start_ships = 25,
+	-- A home must have at least this many colonies within reach, or the game is
+	-- decided at generation rather than played.
+	home_colony_hops = 3,
+	home_colony_minimum = 3,
 }

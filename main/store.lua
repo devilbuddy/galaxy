@@ -46,25 +46,45 @@ M.seen_turn = 0
 -- cannot be trusted to agree with the server's.
 M.now_estimate = 0
 
--- Orders queued locally for the coming turn, as { from =, to =, ships = }.
--- They are only sent when the player submits, so a plan can be revised freely.
+-- Orders staged locally for the coming turn, in the shape the server takes
+-- (see server/modules/game_rpc.lua). They are only sent when the player
+-- submits, so a plan can be revised freely.
+--
+-- **The plan is not cleared by sending it.** `game.orders` replaces the whole
+-- batch server-side, so a client that forgot what it had sent would wipe it the
+-- moment the player added one more order and pressed SEND again - the second
+-- batch, carrying only the new order, would supersede the first. The plan
+-- therefore lives until the turn it was for resolves, and every send transmits
+-- all of it.
 M.orders = {}
--- The system a move is being planned from, if the player has picked one.
-M.order_source = nil
 
--- Standing choices the player has changed but not yet submitted. Nil means
--- "unchanged"; they are folded into the order batch on submit alongside the
--- movement orders, so one SEND covers the whole plan.
+-- The technology the player has picked but not yet sent. Nil means unchanged,
+-- "" means "stop researching".
 M.pending_research = nil
-M.pending_share = nil
 
--- What the next planned move sends: warships, or freighters to open a trade
--- route. The HUD toggles it; plan_orders reads it.
-M.order_mode = "move"
+-- The turn the staged plan is aimed at, and what the server last accepted.
+-- `sent_signature` is compared against the live signature to decide whether
+-- anything is unsent, which is more reliable than a dirty flag every call site
+-- that stages an order has to remember to set.
+M.orders_turn = nil
+M.sent_signature = nil
+M.sent_turn = nil
 
--- The race chosen in the lobby, remembered between screens so creating and
--- joining agree without threading it through Monarch.
-M.race = nil
+-- A turn digest that arrived on a background poll rather than on arrival at the
+-- map. Held rather than shown, because a popup must not land on top of a player
+-- who is in the middle of reading the map; the overview offers it instead.
+M.pending_report = nil
+
+-- Currently selected fleet id, or nil. A fleet and a system can be selected at
+-- once: the system is what the card describes, the fleet is what an order will
+-- move.
+M.selected_fleet = nil
+
+-- What the next tap on the map will do, or nil for "just look":
+--   { kind = "launch", at = <system>, ships = <n> }
+--   { kind = "move",   fleet = <id>,  ships = <n> }
+-- Set by the system sheet, consumed by the next system tap.
+M.aiming = nil
 
 -- Transient status line for the HUD ("connecting...", "requesting galaxy...").
 M.status = nil
@@ -89,6 +109,59 @@ M.hud_zones = {}
 
 -- Bumped whenever a new galaxy is generated, so the HUD can notice.
 M.revision = 0
+
+--- How many orders the plan holds. Research counts as one: it is a directive
+--- like any other and the player is owed an accurate count.
+function M.plan_count()
+	local n = #M.orders
+	if M.pending_research ~= nil then n = n + 1 end
+	return n
+end
+
+--- A stable string for the plan as it stands.
+--
+-- Compared against `sent_signature` to answer "is there anything unsent?". The
+-- array order is the client's own and deterministic, so a plain concatenation
+-- is enough; nothing here has to survive a round trip.
+function M.plan_signature()
+	local parts = {}
+	for i = 1, #M.orders do
+		local o = M.orders[i]
+		local route = ""
+		if type(o.route) == "table" then
+			for k = 1, #o.route do route = route .. "," .. tostring(o.route[k]) end
+		end
+		parts[#parts + 1] = table.concat({
+			tostring(o.kind), tostring(o.at), tostring(o.fleet),
+			tostring(o.ships), tostring(o.building), route,
+		}, ":")
+	end
+	if M.pending_research ~= nil then
+		parts[#parts + 1] = "research:" .. tostring(M.pending_research)
+	end
+	return table.concat(parts, "|")
+end
+
+--- Remember that the server took the plan exactly as it stands.
+function M.plan_sent(turn)
+	M.sent_signature = M.plan_signature()
+	M.sent_turn = turn
+	M.orders_turn = turn
+end
+
+--- Throw the plan away, because the turn it was aimed at has resolved.
+--
+-- Re-sending it would point last turn's move at this turn's map, and the
+-- fleet it named may no longer exist.
+function M.plan_consumed(turn)
+	if not M.orders_turn or turn < M.orders_turn then return false end
+	M.orders = {}
+	M.pending_research = nil
+	M.orders_turn = nil
+	M.sent_signature = nil
+	M.sent_turn = nil
+	return true
+end
 
 --- Convert a touch/mouse position into view space.
 function M.input_point(x, y)
