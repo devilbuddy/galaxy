@@ -906,6 +906,14 @@ asked from turn 0 and got back the whole window the server is willing to send
 minutes earlier replayed a fortnight. It is saved per game, because a player
 with three on the go has read each to a different point.
 
+**The lobby is what that read state is for.** Each of your games shows the turns
+that have resolved since this device last read its digest, so "which one has
+moved" is answerable without opening all three. It needs nothing from the
+server - the row already carries the turn and `seen.lua` already has the rest -
+and it is capped at the forty turns `MAX_DIGEST_TURNS` will actually send,
+because a game left for a month sits on turn 166 and offering "166 new turns"
+promises a read the player cannot have.
+
 **A turn that lands while the map is open is held, not shown.** A popup must not
 drop on top of somebody mid-read, but the digest must not be lost either — and
 advancing `seen_turn` on a background poll is exactly how it was being lost: the
@@ -1099,24 +1107,56 @@ fontTools refuses rather than inventing one.
 
 ### Commander portraits
 
-Forty faces in `main/assets/portraits/`, their own atlas
+Seventy-two faces in `main/assets/portraits/`, their own atlas
 (`main/portraits.atlas`), drawn by `ui.portrait`. **Third-party art, not a build
 artifact** - unlike everything in `main/assets/ui/`, these are not regenerable
 from a script, and `main/assets/portraits/CREDITS.txt` records the artist and
 that the licence has not been established.
 
+**They are grouped by race, twelve each.** The source set of five hundred is not
+labelled, but it is drawn in species, and every race already declares a colour
+that lands on one of those groups almost exactly - so the grouping is *measured*
+from each image's dominant hue rather than classified by hand:
+
+| race | hue | what it looks like |
+|---|---|---|
+| terran | blue | uniformed, armoured humanoids - a navy |
+| vorn | red | devils and revenants |
+| ashai | green | orc and plant folk |
+| kepler | violet | tentacled, scholarly, strange |
+| cartel | gold | ornate and flashy |
+| silicate | cyan | ice and glass |
+
+Two things are traded off inside a band and both matter: **fit**, how much of the
+subject is actually that hue, so a race reads as one species rather than a
+colour-wash; and **variety**, because the source is ordered by character with
+several variants of each in a row, so the best-fitting dozen are otherwise one
+person twelve times. Picks are kept a minimum apart in the source order for that
+reason.
+
+Twelve per race rather than one per surname, because six races would be 240
+images and a player currently raises exactly one officer. Past twelve the index
+wraps.
+
 Portraits are masked to a disc at import and drawn with a ring
 (`ui.portrait`, `ui.ring`), so the ring covers the mask's soft edge instead of
 leaving a pale halo behind it.
 
-`tools/import_portraits.py` records the provenance: which forty of the source
-set were taken, at what size, and in what order. **The order is load-bearing.**
-A portrait is chosen by the same index as the surname
-(`commanders.portrait`), so the nth officer a player raises always has both the
-same name and the same face; reordering the set silently reassigns every
-existing commander's portrait. There is a fallback from surname to index for
-records raised before officers carried a number, without which every one of
-them shared a single face.
+`tools/import_portraits.py` records the provenance. **The order is
+load-bearing.** A portrait is chosen by the player's race plus the same index as
+the surname (`commanders.portrait`), so the nth officer a player of a given race
+raises always has both the same name and the same face; changing the bands, the
+count or the tie-breaks silently reassigns every existing commander's portrait.
+The bands are a *method*, not a record - `MANIFEST.json` alongside the images is
+what says which five hundred became which seventy-two, and is the only way to
+see that a threshold tweak moved everyone's face. There is a fallback from
+surname to index for records raised before officers carried a number, without
+which every one of them shared a single face.
+
+`tools/test_wire.lua` checks that every id the sim can name resolves in the
+atlas. Nothing connects the two but a string, and `ui.portrait` swallows a
+missing one on purpose - so a mismatch would quietly put the whole roster in the
+fallback face rather than erroring.
 
 The importer also makes the baked-in black background transparent, by flooding
 inward from the border. Keying out *every* black pixel is not an option - this
