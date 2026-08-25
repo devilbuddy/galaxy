@@ -26,6 +26,7 @@ local view = require("galaxy.sim.view")
 local races = require("galaxy.sim.races")
 local bots = require("galaxy.sim.bots")
 local rng = require("galaxy.rng")
+local rules = require("galaxy.sim.rules")
 
 local M = {}
 
@@ -686,6 +687,28 @@ local function rpc_orders(context, payload)
 		end
 	end
 
+	-- **The allowance, enforced here because here is authoritative.** The client
+	-- counts against the same table and will not let a player stage past it, so
+	-- an over-budget batch is a bug or a hostile client either way - and this is
+	-- also what stops an unbounded array being cleaned and stored every turn.
+	--
+	-- The first orders in the batch survive, which is the order the client
+	-- staged them in. Dropped ones are reported rather than silently discarded:
+	-- a plan that arrives shorter than it left is something the player has to be
+	-- told about.
+	local spent, dropped = 0, 0
+	local kept = {}
+	for k = 1, #clean do
+		local cost = rules.order_cost[clean[k].kind] or 1
+		if spent + cost <= rules.orders_per_turn then
+			spent = spent + cost
+			kept[#kept + 1] = clean[k]
+		else
+			dropped = dropped + 1
+		end
+	end
+	clean = kept
+
 	local turn = game.turn + 1
 	write_one(ORDERS, game.id .. ":" .. turn, user_id, { turn = turn, orders = clean })
 
@@ -696,6 +719,8 @@ local function rpc_orders(context, payload)
 
 	return nk.json_encode({
 		accepted = #clean,
+		dropped = dropped,
+		allowance = rules.orders_per_turn,
 		for_turn = turn,
 		resolved = resolved,
 		resolves_at = game.next_turn_at,

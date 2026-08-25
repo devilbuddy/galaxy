@@ -378,6 +378,28 @@ function M.orders(galaxy, state, player)
 	return orders
 end
 
+--- What one order costs against the turn's allowance.
+local function order_cost(order)
+	return rules.order_cost[order.kind] or 1
+end
+
+--- Trim a bot's turn to the same allowance a human gets.
+--
+-- **Bots have to be held to the budget too**, or the AI a player faces is one
+-- that gets five decisions a turn to their three - which is not a difficulty
+-- setting, it is a different game. The order they were generated in is the
+-- order they matter in: a purchase first, then captains by id.
+local function within_budget(orders)
+	local out, spent = {}, 0
+	for i = 1, #orders do
+		local cost = order_cost(orders[i])
+		if spent + cost > rules.orders_per_turn then break end
+		spent = spent + cost
+		out[#out + 1] = orders[i]
+	end
+	return out
+end
+
 --- Every bot's orders for this turn, in player order.
 ---
 --- Player order, not table order: `pairs` is unspecified and two runtimes have
@@ -387,7 +409,7 @@ function M.all_orders(galaxy, state)
 	for i = 1, #state.players do
 		local player = state.players[i]
 		if player.bot and player.alive then
-			local orders = M.orders(galaxy, state, i)
+			local orders = within_budget(M.orders(galaxy, state, i))
 			for k = 1, #orders do out[#out + 1] = orders[k] end
 		end
 	end

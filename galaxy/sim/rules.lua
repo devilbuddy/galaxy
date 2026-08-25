@@ -106,6 +106,25 @@ return {
 	unit_strength = 2,
 	unit_cost = 20,
 
+	-- Orders --------------------------------------------------------------------
+	-- **How many decisions a turn is worth.** Not a safety limit - a scarcity.
+	-- With an empire of four captains and a dozen colonies there is always more
+	-- worth doing than this allows, so a turn is a choice about what matters
+	-- most rather than a round of housekeeping.
+	--
+	-- It works at three because **a route is a standing order**: a captain given
+	-- somewhere to go keeps going, across as many turns as it takes, without
+	-- costing anything further. An order is what it costs to *change* a plan,
+	-- not to maintain one, and most turns have only one or two things worth
+	-- changing.
+	orders_per_turn = 3,
+
+	-- What each kind costs, as data rather than a rule buried in the resolver,
+	-- so making one of them free is a single edit. Resupply is deliberately not
+	-- free: a captain that could always top up for nothing would always top up,
+	-- and collecting would be a chore rather than a decision again.
+	order_cost = { move = 1, build = 1, recruit = 1, resupply = 1 },
+
 	-- Buildings ----------------------------------------------------------------
 	-- Two slots against four buildings, so a colony specialises rather than
 	-- accumulating everything. See galaxy/sim/buildings.lua for what each does.

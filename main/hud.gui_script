@@ -501,10 +501,15 @@ local function stage_at(self, order)
 	for i = 1, #store.orders do
 		local o = store.orders[i]
 		if o.kind == order.kind and o.at == order.at then
+			-- Replacing costs nothing: it is the same decision, changed.
 			store.orders[i] = order
 			self.sheet_dirty = true
 			return
 		end
+	end
+	if not store.plan_has_room(order.kind) then
+		self.flash, self.flash_timer = "No orders left this turn", 0
+		return
 	end
 	store.orders[#store.orders + 1] = order
 	self.sheet_dirty = true
@@ -524,6 +529,10 @@ local function stage_resupply(self, captain_id, units)
 			self.sheet_dirty = true
 			return
 		end
+	end
+	if not store.plan_has_room("resupply") then
+		self.flash, self.flash_timer = "No orders left this turn", 0
+		return
 	end
 	store.orders[#store.orders + 1] = {
 		kind = "resupply", captain = captain_id, units = units,
@@ -641,11 +650,35 @@ local function build_bar(self, w, pad, submit)
 	-- whole bar through Druid that often is how the deleted-node traps in
 	-- ui.lua get sprung.
 	self.manifest = {}
+	self.manifest_drop = {}
 	for i = 1, MANIFEST_LINES + 1 do
 		local node = ui.small(pad.left + inner + 10, y, "", ui.TEXT,
-			{ width = width - inner * 2 - 10 })
+			-- Room kept on the right for the button that removes it.
+			{ width = width - inner * 2 - 10 - 56 })
 		gui.set_enabled(node, false)
 		self.manifest[i] = node
+	end
+	-- **Taking an order back is as much a decision as making one**, now that a
+	-- turn only holds a few. Created once and repositioned like the lines
+	-- themselves, because the plan changes on every tap and running the bar
+	-- through Druid that often is how the deleted-node traps in ui.lua get
+	-- sprung.
+	--
+	-- Slot i removes order i: the list is the plan in order, and it is short
+	-- enough that all of it fits.
+	for i = 1, MANIFEST_LINES do
+		local size = 44
+		local handle = ui.icon_button(self.druid,
+			w - pad.right - inner - size, y, size, "icon_close",
+			function()
+				if store.plan_remove(i) then
+					self.manifest_key = nil
+					self.sheet_dirty = true
+				end
+			end, { background = ui.CLEAR, colour = ui.FAINT })
+		gui.set_enabled(handle.fill, false)
+		gui.set_enabled(handle.glyph, false)
+		self.manifest_drop[i] = handle
 	end
 
 	local row_y = y - 52
@@ -707,6 +740,16 @@ local function layout_bar(self, lines)
 	for i = 1, #self.manifest do
 		gui.set_position(self.manifest[i], vmath.vector3(b.x + b.inner + 10,
 			top - MANIFEST_TOP - (i - 1) * MANIFEST_LINE_H, 0))
+	end
+	for i = 1, #(self.manifest_drop or {}) do
+		local drop = self.manifest_drop[i]
+		local line_y = top - MANIFEST_TOP - (i - 1) * MANIFEST_LINE_H
+		-- Centred on its line: a manifest line's y is its middle (PIVOT_W) and
+		-- the button's is its top edge.
+		local at = vmath.vector3(b.x + b.width - b.inner - 44, line_y + 22, 0)
+		gui.set_position(drop.fill, at)
+		gui.set_position(drop.glyph,
+			vmath.vector3(at.x + 12, at.y - 12, 0))
 	end
 
 	self.bar_zone[4] = top
@@ -1725,8 +1768,26 @@ local function resolve_aim(self)
 	if not aim or not selected then return end
 
 	if aim.kind == "move" then
+		-- A captain already carrying a move is re-routed rather than given a
+		-- second one: it is the same decision, changed, and the server
+		-- supersedes on exactly that.
+		local existing = nil
+		for i = 1, #store.orders do
+			local o = store.orders[i]
+			if o.kind == "move" and o.captain == aim.captain then existing = i end
+		end
+		if not existing and not store.plan_has_room("move") then
+			self.flash, self.flash_timer = "No orders left this turn", 0
+			store.aiming = nil
+			store.selected_captain = nil
+			return
+		end
 		local order = { kind = "move", captain = aim.captain, route = { selected } }
-		store.orders[#store.orders + 1] = order
+		if existing then
+			store.orders[existing] = order
+		else
+			store.orders[#store.orders + 1] = order
+		end
 		-- A captain already in a lane must finish it before turning, so the
 		-- path is plotted from the far end - the same rule the resolver applies.
 		local view = store.game_view
@@ -1889,12 +1950,18 @@ local function refresh_manifest(self, lines, sent)
 
 	for i = 1, MANIFEST_LINES do
 		local node = self.manifest[i]
+		local drop = self.manifest_drop[i]
 		if i <= shown then
 			gui.set_enabled(node, true)
 			gui.set_text(node, "- " .. lines[i])
 			gui.set_color(node, colour)
 		else
 			gui.set_enabled(node, false)
+		end
+		if drop then
+			gui.set_enabled(drop.fill, i <= shown)
+			gui.set_enabled(drop.glyph, i <= shown)
+			if drop.component then drop.component:set_enabled(i <= shown) end
 		end
 	end
 
@@ -1976,6 +2043,13 @@ local function refresh_bar(self, g)
 		self.send.set_enabled(enabled)
 		self.send.set_style(style)
 
+		-- What the turn has left. Stated whenever anything is staged, because
+		-- the whole point of a small allowance is that the player is choosing
+		-- against it - a count they have to work out themselves is not one they
+		-- can spend.
+		local allowance = store.plan_allowance()
+		local spent = store.plan_spent()
+
 		local text, tone = self.flash, ui.ACCENT
 		if not text then
 			local aim = store.aiming
@@ -1988,15 +2062,17 @@ local function refresh_bar(self, g)
 			elseif store.turn_ended and count == 0 then
 				text, tone = "Turn ended - waiting on the others", ui.GOOD
 			elseif count > 0 and not unsent then
-				text, tone = string.format("%s in for turn %d",
-					ui.plural(count, "order"), turn), ui.GOOD
+				text, tone = string.format("%s in for turn %d   %d of %d used",
+					ui.plural(count, "order"), turn, spent, allowance), ui.GOOD
 			elseif count > 0 then
-				text, tone = string.format("%s for turn %d, not sent yet",
-					ui.plural(count, "order"), turn), ui.WARN
+				text, tone = string.format("%d of %d orders used, not sent yet",
+					spent, allowance), ui.WARN
 			elseif store.selected then
 				text, tone = "", ui.DIM
 			else
-				text, tone = "Tap a captain to give them orders", ui.DIM
+				text, tone = string.format(
+					"%s this turn - tap a captain to spend one",
+					ui.plural(allowance, "order")), ui.DIM
 			end
 		end
 		gui.set_text(self.status, text)

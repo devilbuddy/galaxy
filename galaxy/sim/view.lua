@@ -262,6 +262,11 @@ function M.project(galaxy, state, player)
 			captains = #state_mod.captains_of(state, player),
 			captain_cap = buildings.captain_cap(state, player),
 			building_slots = rules.building_slots,
+			-- How many decisions this turn is worth, and what each kind of them
+			-- costs against it. Sent rather than assumed so the client counts
+			-- with the same table the server enforces.
+			orders_per_turn = rules.orders_per_turn,
+			order_cost = rules.order_cost,
 			income = (function()
 				local total = 0
 				for id, sys in pairs(state.systems) do

@@ -152,6 +152,47 @@ function M.plan_count()
 	return #M.orders
 end
 
+--- What the plan costs against the turn's allowance.
+--
+-- The costs come from the server (`rates.order_cost`) rather than a copy here,
+-- because the server enforces the same table and a client counting differently
+-- would let a player stage a plan that arrives shorter than it left.
+local function order_cost(order)
+	local rates = (M.game_view and M.game_view.rates) or {}
+	local costs = rates.order_cost or {}
+	return costs[order.kind] or 1
+end
+
+function M.plan_spent()
+	local spent = 0
+	for i = 1, #M.orders do spent = spent + order_cost(M.orders[i]) end
+	return spent
+end
+
+function M.plan_allowance()
+	local rates = (M.game_view and M.game_view.rates) or {}
+	return rates.orders_per_turn or 0
+end
+
+--- Is there room for one more of this kind?
+function M.plan_has_room(kind)
+	local allowance = M.plan_allowance()
+	if allowance <= 0 then return true end
+	local rates = (M.game_view and M.game_view.rates) or {}
+	local cost = (rates.order_cost or {})[kind] or 1
+	return M.plan_spent() + cost <= allowance
+end
+
+--- Drop one staged order. **Before it is sent, and only before**: once a batch
+--- is with the server, removing an order means sending the whole plan again
+--- without it, which `plan_signature` already notices.
+function M.plan_remove(index)
+	if index < 1 or index > #M.orders then return false end
+	table.remove(M.orders, index)
+	if #M.orders == 0 then M.orders_turn = nil end
+	return true
+end
+
 --- A stable string for the plan as it stands.
 --
 -- Compared against `sent_signature` to answer "is there anything unsent?". The

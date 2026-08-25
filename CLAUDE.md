@@ -529,6 +529,36 @@ One order became four. `game.orders` takes `move`, `resupply`, `build` and
 `recruit`; a captain may carry one move and one resupply in a turn, and a colony
 one build.
 
+**A turn is worth only `rules.orders_per_turn` of them.** Not a safety limit - a
+scarcity. With four captains and a dozen colonies there is always more worth
+doing than three orders allow, so a turn is a choice about what matters most
+rather than a round of housekeeping.
+
+It works at three because **a route is a standing order**: a captain given
+somewhere to go keeps going, for as many turns as it takes, at no further cost.
+An order is what it costs to *change* a plan, not to maintain one.
+
+Three things make it a decision rather than a wall:
+
+- **Revising is free.** Superseding runs before the budget, so re-routing a
+  captain or changing which building a colony gets costs nothing extra - it is
+  the same decision, changed.
+- **An order can be taken back** before it is sent (`store.plan_remove`, and the
+  `x` beside each line in the order bar). Taking one back is as much a decision
+  as making one when a turn only holds a few.
+- **The count is stated, not implied.** The bar reads "1 of 3 orders used"; a
+  budget the player has to work out for themselves is not one they can spend.
+
+`rules.order_cost` is a table rather than a rule buried in the resolver, so
+making a kind free is one edit. Resupply is deliberately not free: a captain
+that could always top up for nothing would always top up, and collecting would
+be a chore rather than a decision again.
+
+**Bots are held to the same allowance** (`bots.all_orders` trims to it). An AI
+that got five decisions a turn to a player's three is not a difficulty setting,
+it is a different game. It also tightened pacing rather than hurting it - the
+four-player spread went from 94-315 turns to 85-174.
+
 | rpc | purpose |
 |---|---|
 | `game.create` | new lobby; rolls a seed, sets turn interval, size and the creator's race |
@@ -1524,6 +1554,10 @@ will bite whoever touches them.
 - **There are no unit *types*.** A unit is two strength and nothing else, so an
   army has no shape and a battle stays one comparison. That is the next step,
   and it is what the battle-summary screen needs before it can exist.
+- **The order allowance is fixed at three and nothing raises it.** It is the
+  obvious thing for a fifth building to buy, and the obvious thing to scale with
+  empire size; neither exists, so a large empire and a small one get the same
+  number of decisions.
 - **The system sheet has no scroll.** It is capped at `SHEET_MAX` and content
   past that is drawn over the order bar. A colony of yours with an embarkation,
   four buildings, a captain and a rival in sight is close to the cap already.

@@ -121,6 +121,52 @@ check("and back again", a == store.plan_signature())
 store.orders[1].captain = 2
 check("a different captain signs differently", a ~= store.plan_signature())
 
+
+print("a turn is worth only so many orders")
+do
+	store.orders = {}
+	store.game_view = {
+		rates = {
+			orders_per_turn = 3,
+			order_cost = { move = 1, build = 1, recruit = 1, resupply = 1 },
+		},
+	}
+	check("an empty plan has spent nothing", store.plan_spent() == 0)
+	check("and the allowance comes from the server", store.plan_allowance() == 3)
+	check("there is room at the start", store.plan_has_room("move"))
+
+	store.orders = {
+		{ kind = "move", captain = 1, route = { 2 } },
+		{ kind = "build", at = 5, building = "yards" },
+	}
+	check("each staged order costs one", store.plan_spent() == 2)
+	check("with room for one more", store.plan_has_room("build"))
+
+	store.orders[3] = { kind = "resupply", captain = 1, units = 2 }
+	check("a full turn has spent its allowance", store.plan_spent() == 3)
+	check("and there is no room for a fourth", not store.plan_has_room("move"))
+
+	-- Taking one back is what makes the allowance a decision rather than a wall.
+	check("an order can be taken back", store.plan_remove(2))
+	check("the plan is shorter for it", #store.orders == 2)
+	check("and the one removed is the one that went",
+		store.orders[2].kind == "resupply")
+	check("which frees the allowance again", store.plan_has_room("move"))
+	check("an index nobody staged is refused", not store.plan_remove(9))
+
+	check("emptying the plan lets go of the turn it was for", (function()
+		store.plan_remove(1)
+		store.plan_remove(1)
+		return #store.orders == 0 and store.orders_turn == nil
+	end)())
+
+	-- A client with no view yet must not silently refuse everything.
+	store.game_view = nil
+	check("without a view there is no allowance to spend against",
+		store.plan_has_room("move"))
+	store.orders = {}
+end
+
 if failures > 0 then
 	print(string.format("\n%d PLAN TEST(S) FAILED", failures))
 	os.exit(1)
