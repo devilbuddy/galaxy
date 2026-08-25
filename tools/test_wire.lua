@@ -100,7 +100,7 @@ do
 	check("the projection has every field the client reads", #missing == 0,
 		table.concat(missing, ", "))
 
-	for _, key in ipairs({ "systems", "speed", "speed_scale", "hops", "vision" }) do
+	for _, key in ipairs({ "systems", "steps", "hops", "vision" }) do
 		check("rates." .. key .. " is a number", type(v.rates[key]) == "number")
 	end
 
@@ -117,6 +117,8 @@ do
 	check("your captain travels in full",
 		#v.captains == 1 and v.captains[1].route ~= nil
 			and v.captains[1].rank ~= nil and v.captains[1].portrait ~= nil)
+	check("and reports when it arrives, in turns",
+		type(v.captains[1].eta) == "number" and type(v.captains[1].steps) == "number")
 	check("systems are keyed by string, never sparse integers",
 		next(v.systems) ~= nil and type(next(v.systems)) == "string")
 

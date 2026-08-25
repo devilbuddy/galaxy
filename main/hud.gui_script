@@ -28,7 +28,6 @@ local monarch = require("monarch.monarch")
 local druid = require("druid.druid")
 local config = require("galaxy.config")
 local sim_systems = require("galaxy.sim.systems")
-local sim_path = require("galaxy.sim.path")
 
 local STAR_LABEL_POOL = 70
 local REGION_LABEL_POOL = 12
@@ -261,7 +260,8 @@ local function build_captains(self, w, h, pad)
 		-- The strength under the face, because "which of my four is strong
 		-- enough" is the question a player is usually asking of this row.
 		ui.small(x + CAPTAIN_SIZE * 0.5, top - CAPTAIN_SIZE - 8,
-			moving and ui.plural(f.eta, "lane") or "here",
+			-- Turns, because that is the question: not how far, but when.
+			moving and (f.eta == 1 and "next turn" or (f.eta .. " turns")) or "here",
 			chosen and ui.ACCENT or ui.FAINT, { pivot = gui.PIVOT_CENTER })
 		self.captain_druid:new_button(node, function()
 			-- Selecting a captain *is* the intent to order one - the bar's own
@@ -284,15 +284,7 @@ local function build_captains(self, w, h, pad)
 			local g = store.galaxy
 			local a = g and g.stars[f.at]
 			if not a then return end
-			local wx, wy = a.x, a.y
-			local b = f.next_hop and g.stars[f.next_hop]
-			if b and self.lane_lengths then
-				local leg = sim_path.lane_length(self.lane_lengths, f.at, f.next_hop) or 0
-				local t = leg > 0 and math.min(1, (f.progress or 0) / leg) or 0
-				wx = a.x + (b.x - a.x) * t
-				wy = a.y + (b.y - a.y) * t
-			end
-			msg.post("camera#camera_script", "focus", { x = wx, y = wy })
+			msg.post("camera#camera_script", "focus", { x = a.x, y = a.y })
 		end)
 		x = x + CAPTAIN_SIZE + CAPTAIN_GAP
 	end
@@ -580,7 +572,7 @@ end
 local function update_routes(self, g, cam, w, h)
 	local view = store.game_view
 	local used = 0
-	if not (view and self.lane_lengths) then
+	if not view then
 		for i = 1, ROUTE_POOL do
 			gui.set_enabled(self.route_nodes[i].bar, false)
 			gui.set_enabled(self.route_nodes[i].dot, false)
@@ -655,19 +647,8 @@ local function update_routes(self, g, cam, w, h)
 		local f = view.captains[i]
 		if f.route and #f.route > 0 then
 			local a = g.stars[f.at]
-			if a then
-				local wx, wy = a.x, a.y
-				-- Start from where the fleet actually is, part way along its
-				-- current leg, so the line begins at the marker and not behind it.
-				local b = f.next_hop and g.stars[f.next_hop]
-				if b then
-					local leg = sim_path.lane_length(self.lane_lengths, f.at, f.next_hop) or 0
-					local t = leg > 0 and math.min(1, (f.progress or 0) / leg) or 0
-					wx = a.x + (b.x - a.x) * t
-					wy = a.y + (b.y - a.y) * t
-				end
-				draw(wx, wy, f.route, committed, true)
-			end
+			-- A captain always stands at a system, so the line starts on it.
+			if a then draw(a.x, a.y, f.route, committed, true) end
 		end
 	end
 
@@ -698,24 +679,18 @@ end
 local function update_captains(self, g, cam, w, h)
 	local view = store.game_view
 	local used = 0
-	if view and self.lane_lengths then
-		local lengths = self.lane_lengths
+	if view then
 
-		local function place(at, next_hop, progress, label, colour, mine)
+		local function place(at, next_hop, label, colour, mine)
 			if used >= CAPTAIN_POOL then return end
 			local a = g.stars[at]
 			if not a then return end
-			local wx, wy = a.x, a.y
+			-- On the system, pointed at the one it leaves for next. Movement is
+			-- whole lanes now, so there is no partway position to draw.
 			local angle = nil
 			local b = next_hop and g.stars[next_hop]
-			if b then
-				local leg = sim_path.lane_length(lengths, at, next_hop) or 0
-				local t = leg > 0 and math.min(1, (progress or 0) / leg) or 0
-				wx = a.x + (b.x - a.x) * t
-				wy = a.y + (b.y - a.y) * t
-				angle = math.atan2(b.y - a.y, b.x - a.x)
-			end
-			local sx, sy = project(cam, w, h, wx, wy)
+			if b then angle = math.atan2(b.y - a.y, b.x - a.x) end
+			local sx, sy = project(cam, w, h, a.x, a.y)
 			if sx < -60 or sx > w + 60 or sy < self.floor_y or sy > self.ceiling_y then
 				return
 			end
@@ -770,11 +745,11 @@ local function update_captains(self, g, cam, w, h)
 		local mine_colour = player_colour(view.you)
 		for i = 1, #view.captains do
 			local f = view.captains[i]
-			place(f.at, f.next_hop, f.progress, f.name, mine_colour, true)
+			place(f.at, f.next_hop, f.name, mine_colour, true)
 		end
 		for i = 1, #view.contacts do
 			local c = view.contacts[i]
-			place(c.at, c.next_hop, c.progress, c.rank or "", player_colour(c.owner), false)
+			place(c.at, c.next_hop, c.rank or "", player_colour(c.owner), false)
 		end
 	end
 	for i = used + 1, CAPTAIN_POOL do
@@ -1452,7 +1427,6 @@ function update(self, dt)
 
 	if self.revision ~= store.revision then
 		self.revision = store.revision
-		self.lane_lengths = sim_path.lane_lengths(g)
 		self.label_dirty = true
 		self.sheet_dirty = true
 	end

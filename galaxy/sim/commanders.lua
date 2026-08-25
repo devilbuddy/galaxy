@@ -6,7 +6,7 @@
 --
 -- Everything here derives from `level`, so state carries only a level and an
 -- experience total. **Nothing awards experience yet** - battles will - so the
--- progression below is dormant rather than dead: it is what rank, speed and the
+-- progression below is dormant rather than dead: it is what rank, reach and the
 -- portrait already read from.
 
 local rules = require("galaxy.sim.rules")
@@ -141,16 +141,20 @@ end
 
 -- Derived stats ---------------------------------------------------------------
 
---- World units covered per turn.
+--- Lanes crossed per turn.
 --
--- Deliberately below a typical lane length at level 1, so a green commander
--- spends turns *in transit* and can be caught there. That is the whole reason
--- interception exists, and at the old flat speed nothing was ever slow enough
--- to be caught.
-function M.speed(commander, mods)
+-- A whole number, always. Movement being countable is the whole point: a player
+-- can look at a route, count the systems, and know which turn a captain lands.
+function M.steps(commander, mods)
 	local level = commander.level or 1
-	local base = rules.captain_speed + rules.speed_per_level * (level - 1)
-	return base * ((mods and mods.speed_scale) or 1)
+	local steps = rules.captain_steps
+	for at, bonus in pairs(rules.steps_at_rank) do
+		if level >= at then steps = steps + bonus end
+	end
+	if mods and (mods.step_bonus or 0) > 0 then
+		steps = steps + mods.step_bonus
+	end
+	return steps
 end
 
 --- Everything a client needs to draw one, in one call.
@@ -163,7 +167,7 @@ function M.profile(commander, mods)
 		xp = commander.xp or 0,
 		next_xp = (level < rules.commander_max_level)
 			and M.xp_for_level(level + 1) or nil,
-		speed = M.speed(commander, mods),
+		steps = M.steps(commander, mods),
 	}
 end
 

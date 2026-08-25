@@ -48,10 +48,11 @@ end
 function M.of(player)
 	local e = raw_effects(player)
 	return {
-		-- Movement. A captain's own speed comes from their rank
-		-- (galaxy/sim/commanders.lua); this is the multiplier race applies on
-		-- top, so the two compose rather than one overriding the other.
-		speed_scale = scale(e, "speed"),
+		-- Movement. A captain's reach comes from their rank
+		-- (galaxy/sim/commanders.lua); a race with a real mobility bonus adds a
+		-- whole extra lane a turn. Anything finer would be arithmetic the
+		-- player cannot see, which is what discrete steps exist to avoid.
+		step_bonus = ((e.speed or 0) >= rules.step_race_threshold) and 1 or 0,
 		hops = rules.max_route_hops + (e.hops or 0),
 
 		-- Intelligence. Extra lanes on top of the base.

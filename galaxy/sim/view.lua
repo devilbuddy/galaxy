@@ -140,17 +140,22 @@ function M.project(galaxy, state, player)
 			local profile = commanders.profile(c, mods)
 			captains[#captains + 1] = {
 				id = c.id, name = c.name,
-				at = c.at, next_hop = c.route[1], progress = c.progress,
-				route = c.route, eta = #c.route,
+				at = c.at, next_hop = c.route[1],
+				route = c.route,
+				-- Turns, not lanes: with a whole number of steps a turn this is
+				-- literally when the captain arrives, which is what a player is
+				-- actually asking when they look at it.
+				eta = math.ceil(#c.route / math.max(1, profile.steps)),
+				lanes = #c.route,
 				level = profile.level, rank = profile.rank,
 				portrait = profile.portrait,
 				xp = profile.xp, next_xp = profile.next_xp,
-				speed = profile.speed,
+				steps = profile.steps,
 			}
 		elseif visible[c.at] or (c.route[1] and visible[c.route[1]]) then
 			contacts[#contacts + 1] = {
 				owner = c.owner, at = c.at, next_hop = c.route[1],
-				progress = c.progress, rank = commanders.rank(c.level or 1),
+				rank = commanders.rank(c.level or 1),
 			}
 		end
 	end
@@ -193,8 +198,7 @@ function M.project(galaxy, state, player)
 		-- The numbers the client needs to explain itself.
 		rates = {
 			systems = state_mod.holdings_of(state, player),
-			speed = commanders.speed({ level = 1 }, mods),
-			speed_scale = mods.speed_scale,
+			steps = commanders.steps({ level = 1 }, mods),
 			hops = mods.hops,
 			vision = mods.vision,
 		},

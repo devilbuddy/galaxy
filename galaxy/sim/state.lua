@@ -173,7 +173,6 @@ function M.add_captain(state, owner, at)
 		level = 1,
 		xp = 0,
 		at = at,
-		progress = 0,
 		route = {},
 	}
 	state.next_captain_id = state.next_captain_id + 1
@@ -200,7 +199,7 @@ end
 
 --- Is this captain standing still?
 function M.is_parked(captain)
-	return #captain.route == 0 and captain.progress == 0
+	return #captain.route == 0
 end
 
 --- The system a moving captain is heading for next, or nil.
@@ -284,7 +283,10 @@ function M.normalise(state)
 	for i = 1, #state.captains do
 		local c = state.captains[i]
 		c.route = c.route or {}
-		c.progress = tonumber(c.progress) or 0
+		-- Movement used to be a distance along a lane, and captains stored how
+		-- far down one they were. Nothing reads it now; dropping it keeps
+		-- stored state from describing a rule the game no longer has.
+		c.progress = nil
 		c.level = tonumber(c.level) or 1
 		c.xp = tonumber(c.xp) or 0
 	end

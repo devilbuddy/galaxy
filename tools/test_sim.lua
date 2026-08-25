@@ -178,6 +178,39 @@ do
 		st.holdings_of(s, 1))
 end
 
+print("a captain moves whole lanes")
+do
+	local s = new_game(2)
+	local from = s.captains[1].at
+	local target = system_at_hops(s, from, 3)
+	res.turn(GALAXY, s, {
+		{ player = 1, kind = "move", captain = 1, route = { target } },
+	}, LENGTHS)
+
+	-- One lane a turn at rank one, and never anywhere but at a system.
+	check("it advances exactly one lane", #s.captains[1].route == 2,
+		#s.captains[1].route)
+	check("and stands at a system, never between two",
+		GALAXY.stars[s.captains[1].at] ~= nil)
+
+	res.turn(GALAXY, s, {}, LENGTHS)
+	check("another turn, another lane", #s.captains[1].route == 1)
+	res.turn(GALAXY, s, {}, LENGTHS)
+	check("three lanes, three turns", s.captains[1].at == target,
+		s.captains[1].at)
+
+	-- Rank raises it, and the route is walked faster.
+	local t = new_game(2)
+	t.captains[1].level = 9
+	local tfrom = t.captains[1].at
+	local ttarget = system_at_hops(t, tfrom, 3)
+	res.turn(GALAXY, t, {
+		{ player = 1, kind = "move", captain = 1, route = { ttarget } },
+	}, LENGTHS)
+	check("a Grand Admiral covers three in one turn",
+		t.captains[1].at == ttarget, t.captains[1].at)
+end
+
 print("a border stops a captain")
 do
 	local s = new_game(2)
@@ -234,11 +267,12 @@ print("what a captain is")
 do
 	check("a green officer is a Captain", commanders.rank(1) == "Captain")
 	check("a veteran is not", commanders.rank(10) ~= "Captain")
-	check("rank makes them faster",
-		commanders.speed({ level = 3 }) > commanders.speed({ level = 1 }))
-	check("a captain is slower than a lane is long",
-		commanders.speed({ level = 1 }) < 130,
-		commanders.speed({ level = 1 }))
+	check("a green captain crosses one lane a turn",
+		commanders.steps({ level = 1 }) == 1)
+	check("rank buys reach",
+		commanders.steps({ level = 9 }) > commanders.steps({ level = 1 }))
+	check("and it is always a whole number of lanes",
+		commanders.steps({ level = 9 }) % 1 == 0)
 	check("the same officer always has the same face",
 		commanders.portrait(4) == commanders.portrait(4))
 	check("different officers do not",
@@ -252,7 +286,8 @@ do
 	check("every declared race resolves",
 		races.exists("cartel") and races.exists("silicate"))
 	check("an unknown race falls back", races.by_id("clangers").id == races.DEFAULT)
-	check("the fast race moves further", cartel.speed_scale > base.speed_scale)
+	check("the fast race gets a whole extra lane",
+		cartel.step_bonus == base.step_bonus + 1)
 	check("and can plot further ahead", cartel.hops > base.hops)
 end
 
@@ -407,7 +442,7 @@ do
 			parts[#parts + 1] = tostring(s.systems[id].owner)
 		end
 		for i = 1, #s.captains do
-			parts[#parts + 1] = s.captains[i].at .. ":" .. s.captains[i].progress
+			parts[#parts + 1] = s.captains[i].at .. ":" .. #s.captains[i].route
 		end
 		return table.concat(parts, ",")
 	end

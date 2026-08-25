@@ -279,10 +279,30 @@ an experience total.
 **Nothing awards experience yet.** Battles will. The progression is dormant
 rather than dead: rank, speed and the portrait already read from it.
 
-**Speed is deliberately below a typical lane** (~130 world units against 95). A
-captain that crossed any lane in one turn would make distance meaningless, and
-distance is currently the only thing between a player and the far side of the
-map.
+**Movement is whole lanes, not a distance.** A captain crosses
+`rules.captain_steps` lanes a turn and always ends the turn *at* a system.
+
+It used to be a speed - 95 world units a turn along lanes varying from roughly
+60 to 200 - and the problem was not the arithmetic but that **the number the
+rule depended on was invisible.** Lane length is never drawn, never stated and
+cannot be eyeballed, so "when does Kess arrive?" had no answer a player could
+work out, in a game whose whole point is planning two logins ahead. A step is
+countable off the map: a four-lane route takes four turns.
+
+What this gives up is that lane *length* stops meaning anything - a 200-unit
+lane and a 60-unit one are the same move. If that is missed, the way back is to
+price some lanes at two steps and draw them as such, not to return to a
+continuous speed nobody can see.
+
+**Rank buys reach rather than pace** (`rules.steps_at_rank`): a Commodore covers
+two lanes a turn, a Grand Admiral three, and a race with a mobility bonus adds a
+whole extra one. Fractions of a step would be exactly the invisible arithmetic
+this replaced.
+
+**The pathfinder counts lanes too.** It used to minimise distance, which after
+this change could return a route one lane longer - and therefore a turn slower -
+than the alternative. Length survives only as a tiebreak between routes of equal
+length, so the tighter-looking one wins.
 
 #### Detection is a range
 

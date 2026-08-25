@@ -13,18 +13,28 @@
 
 return {
 	-- Movement ----------------------------------------------------------------
-	-- World units a captain covers per turn.
+	-- Lanes a captain crosses per turn.
 	--
-	-- Deliberately below a typical lane (~130). A captain that crossed any lane
-	-- in one turn would make distance meaningless, and distance is currently the
-	-- only thing standing between a player and the far side of the map.
-	captain_speed = 95,           -- baseline (via speed_scale)
+	-- **Discrete on purpose.** Movement used to be a distance - 95 world units
+	-- a turn along lanes varying from roughly 60 to 200 - which meant "when
+	-- does Kess arrive?" had no answer a player could work out. Lane length is
+	-- not drawn, not stated and cannot be eyeballed, so the number the rule
+	-- depended on was invisible. A step is countable off the map: a four-lane
+	-- route takes four turns.
+	--
+	-- What this gives up is that lane *length* no longer means anything. If it
+	-- is missed, the way back is to price some lanes at two steps and draw them
+	-- as such - not to return to a continuous speed nobody can see.
+	captain_steps = 1,
+	-- Rank buys reach rather than pace, so progression is legible: a Commodore
+	-- moves two systems a turn, a Grand Admiral three.
+	steps_at_rank = { [5] = 1, [9] = 1 },
+	-- A race with a mobility bonus gets a whole extra step. Fractions of a step
+	-- would be exactly the invisible arithmetic this replaced.
+	step_race_threshold = 0.2,
 	-- How far ahead a route may be plotted, in lanes. Standing orders are what
 	-- make a game checked twice a day playable rather than tedious.
 	max_route_hops = 12,          -- baseline (via hops)
-	-- Rank still makes a captain faster, which is the one place progression is
-	-- visible while nothing awards experience.
-	speed_per_level = 7,
 	commander_max_level = 10,
 	commander_xp_base = 75,
 

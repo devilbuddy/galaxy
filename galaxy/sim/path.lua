@@ -41,6 +41,11 @@ end
 --
 -- Dijkstra with a linear scan for the minimum: the frontier stays small at this
 -- graph size, and a heap would cost more bookkeeping than it saves.
+-- Small enough that no accumulation of it can ever outweigh one whole lane:
+-- the longest conceivable route is a few thousand world units, and this scales
+-- that under one.
+local TIEBREAK = 1e-6
+
 function M.find(galaxy, lengths, from, to, max_hops)
 	if from == to then return {} end
 	local n = #galaxy.stars
@@ -62,7 +67,14 @@ function M.find(galaxy, lengths, from, to, max_hops)
 		for k = 1, #neighbours do
 			local v = neighbours[k]
 			if not done[v] then
-				local step = M.lane_length(lengths, u, v) or huge
+				-- **Lanes, not distance.** A captain crosses a whole number of
+				-- lanes a turn, so the cheapest route is the one with the
+				-- fewest of them - the geometrically shortest path can easily
+				-- be one lane longer and therefore a turn slower. Lane length
+				-- is kept as a tiebreak so a route through the same number of
+				-- lanes still prefers the tighter one, which reads better on
+				-- the map.
+				local step = 1 + (M.lane_length(lengths, u, v) or 0) * TIEBREAK
 				local alt = ud + step
 				if alt < dist[v] then
 					dist[v] = alt

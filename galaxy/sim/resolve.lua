@@ -134,57 +134,49 @@ end
 
 --- Move every captain as far as its turn allows, claiming as it goes.
 --
+-- A captain crosses a whole number of lanes and always ends the turn *at* a
+-- system. Movement used to be a distance covered along a lane, which meant a
+-- captain could sit partway down one - a state the player could neither see at
+-- fit zoom nor predict, because lane lengths are never drawn.
+--
 -- Unclaimed systems are taken *in passing* and do not stop the captain, so a
 -- route through a chain of empty systems sweeps them all up. A system somebody
--- else holds does stop it: there is no army to push through with, and pretending
--- otherwise would make borders meaningless.
-local function movement(galaxy, state, mods, lengths, events)
+-- else holds does stop it: there is no army to push through with, and
+-- pretending otherwise would make borders meaningless.
+local function movement(galaxy, state, mods, events)
 	for i = 1, #state.captains do
 		local captain = state.captains[i]
-		if #captain.route > 0 then
-			-- Each captain moves at their own pace: rank is most of it, race
-			-- scales it.
-			local budget = commanders.speed(captain, mods[captain.owner])
-			local blocked = false
+		local steps = commanders.steps(captain, mods[captain.owner])
 
-			while budget > 0 and #captain.route > 0 and not blocked do
-				local next_id = captain.route[1]
-				local leg = path_mod.lane_length(lengths, captain.at, next_id) or 0
-				local remaining = leg - captain.progress
+		while steps > 0 and #captain.route > 0 do
+			local next_id = captain.route[1]
+			local sys = state.systems[next_id]
 
-				local sys = state.systems[next_id]
-				if sys.owner ~= 0 and sys.owner ~= captain.owner then
-					-- Stopped *before* entering: a border you cannot cross is
-					-- one you do not stand in. The captain stays where it is,
-					-- and its route is dropped rather than held, so it never
-					-- sits waiting on something that may never change.
-					captain.route = {}
-					captain.progress = 0
-					blocked = true
-					emit(events, {
-						kind = "captain_blocked", turn = state.turn,
-						player = captain.owner, captain = captain.id,
-						name = captain.name, at = captain.at, blocked_by = next_id,
-						held_by = sys.owner, visible_to = { captain.owner },
-					})
-				elseif budget >= remaining then
-					budget = budget - remaining
-					captain.at = next_id
-					captain.progress = 0
-					table.remove(captain.route, 1)
+			if sys.owner ~= 0 and sys.owner ~= captain.owner then
+				-- Stopped *before* entering: a border you cannot cross is one
+				-- you do not stand in. The route is dropped rather than held,
+				-- so a captain never waits on something that may never change.
+				captain.route = {}
+				emit(events, {
+					kind = "captain_blocked", turn = state.turn,
+					player = captain.owner, captain = captain.id,
+					name = captain.name, at = captain.at, blocked_by = next_id,
+					held_by = sys.owner, visible_to = { captain.owner },
+				})
+				break
+			end
 
-					if sys.owner == 0 then
-						sys.owner = captain.owner
-						emit(events, {
-							kind = "claimed", turn = state.turn,
-							at = next_id, player = captain.owner,
-							captain = captain.id, name = captain.name,
-						})
-					end
-				else
-					captain.progress = captain.progress + budget
-					budget = 0
-				end
+			captain.at = next_id
+			table.remove(captain.route, 1)
+			steps = steps - 1
+
+			if sys.owner == 0 then
+				sys.owner = captain.owner
+				emit(events, {
+					kind = "claimed", turn = state.turn,
+					at = next_id, player = captain.owner,
+					captain = captain.id, name = captain.name,
+				})
 			end
 		end
 	end
@@ -299,7 +291,7 @@ function M.turn(galaxy, state, orders, lengths)
 	end
 
 	captain_orders(galaxy, state, orders, mods, lengths, events)
-	movement(galaxy, state, mods, lengths, events)
+	movement(galaxy, state, mods, events)
 
 	for e = 1, #events do
 		if events[e].kind == "claimed" then
