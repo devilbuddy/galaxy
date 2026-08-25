@@ -761,6 +761,32 @@ avoids rebuilding a vertex buffer whenever a fleet moves. `store.aiming` is the
 one piece of interaction state — set by SEND or by tapping a fleet, consumed by
 the next tap on a system.
 
+**A name is not scenery.** The map is deliberately two hundred stars most of
+which a player never touches, and naming them all turned it into a wall of words
+with the lane graph buried underneath. Labels are chosen by **relevance to the
+player**, rebuilt whenever what makes a system relevant changes - the selection,
+the turn, the captains - and never per frame, because it walks every star and
+sorts them.
+
+| tier | what |
+|---|---|
+| selected | what the sheet is describing |
+| capital | anyone's |
+| captain | where one stands, and everywhere its route goes |
+| held | somewhere someone holds, including you |
+| frontier | unclaimed, but adjacent to something of yours - where a captain can be sent next |
+
+Everything else is never named. Zoom decides which tiers are admitted, pulled
+back rather than pushed out: at a distance you want to know whose space you are
+looking at, not what every rock is called.
+
+The ranking this replaced was static - colony beats outpost beats waypoint, then
+by how brightly the star was drawn, computed once per galaxy. It had no idea
+which systems were yours or where your captain stood, so it faithfully named the
+prettiest forty stars and none of the six that mattered. **Colour carries
+ownership** now, so whose space it is reads without being read, and the label
+budget is a filter (22 at most) rather than the truncation of a much larger set.
+
 **Star size encodes what a system is for.** `kind_scale` in `main/galaxy.script`
 draws a colony half again as large and a waypoint at little over half, which is
 the only cue on the map for the difference. Note it has to be declared *above*

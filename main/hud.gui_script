@@ -44,8 +44,16 @@ local ROUTE_WIDTH = 3
 local ROUTE_NODE = 9
 
 local STAR_LABEL_MIN_ZOOM = 0.30
-local STAR_LABELS_AT_MIN_ZOOM = 12
-local STAR_LABELS_AT_MAX_ZOOM = 70
+-- How many names may be on screen at once. Seventy fitted, in the sense that
+-- seventy nodes were drawn - the map underneath them did not. These are chosen
+-- by relevance now (see rebuild_labels), so a small budget is a filter rather
+-- than a truncation: the ones that survive are the ones worth reading.
+local STAR_LABELS_AT_MIN_ZOOM = 8
+local STAR_LABELS_AT_MAX_ZOOM = 22
+-- Which relevance tiers are admitted, by zoom. Pulled back rather than pushed
+-- out: at a distance you want to know whose space you are looking at, not what
+-- every rock is called.
+local LABEL_TIER_ZOOM = { 0.30, 0.55, 0.95 }
 local REGION_LABEL_MAX_ZOOM = 1.10
 
 -- map.font is baked at 34px; these are the fractions of it the map draws at.
@@ -759,6 +767,107 @@ local function update_captains(self, g, cam, w, h)
 	end
 end
 
+--- Which systems are worth naming, and how loudly.
+--
+-- The map is deliberately scenery: two hundred stars, most of which a player
+-- will never touch. Names are not scenery - a name exists so a place can be
+-- referred to - so naming every star turned the map into a wall of words that
+-- buried the lanes underneath it.
+--
+-- The old ranking was static: colony beats outpost beats waypoint, then by how
+-- bright the star was drawn, computed once per galaxy and never again. It had
+-- no idea which systems were yours, where your captain stood, or what you were
+-- looking at, so it faithfully named the prettiest forty stars on the map and
+-- none of the six that mattered.
+--
+-- Relevance instead, highest first:
+local LABEL_SELECTED = 5   -- what the sheet is describing
+local LABEL_CAPITAL  = 4   -- a capital, anyone's
+local LABEL_CAPTAIN  = 3   -- where a captain stands, and where they are bound
+local LABEL_HELD     = 2   -- somewhere someone holds, including you
+local LABEL_FRONTIER = 1   -- unclaimed, but next to something of yours
+local LABEL_NONE     = 0   -- scenery
+
+--- Rebuild the naming order. Cheap enough to do on a change, far too expensive
+--- to do per frame: it walks every star and sorts them.
+local function rebuild_labels(self, g)
+	local view = store.game_view
+	local you = view and view.you
+	local priority = {}
+	local bound = {}
+
+	for i = 1, #((view and view.captains) or {}) do
+		local c = view.captains[i]
+		bound[c.at] = true
+		if c.route then
+			for k = 1, #c.route do bound[c.route[k]] = true end
+		end
+	end
+
+	for id = 1, #g.stars do
+		local p = LABEL_NONE
+		local seen = view and view.systems[tostring(id)]
+		if seen then
+			if (seen.capital_of or 0) ~= 0 then
+				p = LABEL_CAPITAL
+			elseif (seen.owner or 0) ~= 0 then
+				p = LABEL_HELD
+			end
+		end
+		if bound[id] and p < LABEL_CAPTAIN then p = LABEL_CAPTAIN end
+		if store.selected == id then p = LABEL_SELECTED end
+		priority[id] = p
+	end
+
+	-- The frontier: unclaimed neighbours of what you hold. This is where a
+	-- captain can actually be sent next, so it is the one part of the unowned
+	-- map worth being able to name.
+	if you then
+		for id = 1, #g.stars do
+			local seen = view.systems[tostring(id)]
+			if seen and seen.owner == you then
+				local neighbours = g.adjacency[id]
+				for k = 1, #neighbours do
+					local n = neighbours[k]
+					if priority[n] == LABEL_NONE then
+						priority[n] = LABEL_FRONTIER
+					end
+				end
+			end
+		end
+	end
+
+	local order = {}
+	for id = 1, #g.stars do
+		if priority[id] > LABEL_NONE then order[#order + 1] = id end
+	end
+	table.sort(order, function(a, b)
+		if priority[a] ~= priority[b] then return priority[a] > priority[b] end
+		return a < b
+	end)
+
+	self.label_order = order
+	self.label_priority = priority
+	self.label_dirty = false
+end
+
+--- What a name should be rendered in, so ownership reads without being read.
+local function label_colour(self, view, id)
+	if store.selected == id then return SELECTED_COLOUR end
+	local p = self.label_priority and self.label_priority[id] or LABEL_NONE
+	local seen = view and view.systems[tostring(id)]
+	local owner = seen and seen.owner or 0
+	if owner ~= 0 then
+		local c = player_colour(owner)
+		local mine = view and owner == view.you
+		return vmath.vector4(c.x, c.y, c.z, mine and 1.0 or 0.85)
+	end
+	if p == LABEL_FRONTIER then
+		return vmath.vector4(STAR_COLOUR.x, STAR_COLOUR.y, STAR_COLOUR.z, 0.6)
+	end
+	return vmath.vector4(STAR_COLOUR.x, STAR_COLOUR.y, STAR_COLOUR.z, 0.4)
+end
+
 local function update_labels(self, g, cam, w, h)
 	local zoom = cam.zoom
 	local pad = self.pad
@@ -811,11 +920,19 @@ local function update_labels(self, g, cam, w, h)
 	local t = math.max(0, math.min(1, (zoom - STAR_LABEL_MIN_ZOOM) / span))
 	local budget = math.floor(STAR_LABELS_AT_MIN_ZOOM
 		+ (STAR_LABELS_AT_MAX_ZOOM - STAR_LABELS_AT_MIN_ZOOM) * t + 0.5)
-	if zoom >= STAR_LABEL_MIN_ZOOM then
+	-- Everything below this tier is scenery at the current zoom.
+	local floor_tier = LABEL_CAPTAIN
+	if zoom >= LABEL_TIER_ZOOM[2] then floor_tier = LABEL_HELD end
+	if zoom >= LABEL_TIER_ZOOM[3] then floor_tier = LABEL_FRONTIER end
+
+	if zoom >= STAR_LABEL_MIN_ZOOM and self.label_order then
+		local view = store.game_view
 		local order = self.label_order
 		for oi = 1, #order do
 			if used_stars >= budget then break end
-			local s = g.stars[order[oi]]
+			local id = order[oi]
+			if (self.label_priority[id] or 0) < floor_tier then break end
+			local s = g.stars[id]
 			local sx, sy = project(cam, w, h, s.x, s.y)
 			if sy - 16 > floor_y and sy + 16 < ceiling_y then
 				local tw = ui.measure("map", s.name, STAR_FONT_SCALE)
@@ -824,7 +941,10 @@ local function update_labels(self, g, cam, w, h)
 				local right_limit = w - pad.right
 				if (x0 + tw) > right_limit then x0 = sx - gap - tw end
 				local clash = x0 < pad.left or (x0 + tw) > right_limit
-				local box = { x0, sy - 15, x0 + tw, sy + 15 }
+				-- Claimed with room around it. Boxes that merely avoid
+				-- overlapping still produce touching text, which is most of
+				-- what "messy" looked like.
+				local box = { x0 - 10, sy - 22, x0 + tw + 10, sy + 22 }
 				if not clash then
 					for p = 1, #placed do
 						local q = placed[p]
@@ -841,8 +961,7 @@ local function update_labels(self, g, cam, w, h)
 					gui.set_enabled(node, true)
 					gui.set_text(node, s.name)
 					gui.set_position(node, vmath.vector3(x0, sy, 0))
-					gui.set_color(node,
-						store.selected == s.id and SELECTED_COLOUR or STAR_COLOUR)
+					gui.set_color(node, label_colour(self, view, s.id))
 					placed[#placed + 1] = box
 				end
 			end
@@ -900,7 +1019,6 @@ local function resolve_aim(self)
 	self.last_selected = selected
 	self.sheet_dirty = true
 	-- A launch count belongs to the world it was chosen at.
-	self.launch_ships = nil
 	self.focus_pending = selected
 
 	local aim = store.aiming
@@ -1156,7 +1274,7 @@ local function refresh_bar(self, g)
 			elseif store.selected then
 				text, tone = "", ui.DIM
 			else
-				text, tone = "Tap one of your systems to move ships", ui.DIM
+				text, tone = "Tap a captain to give them orders", ui.DIM
 			end
 		end
 		gui.set_text(self.status, text)
@@ -1264,30 +1382,30 @@ function update(self, dt)
 	automation.update(dt)
 
 	local g = store.galaxy
+
+	-- The naming order depends on who holds what, where the captains are and
+	-- what is selected, so it is rebuilt when any of those move rather than
+	-- every frame: it walks every star and sorts them.
+	if g then
+		local view = store.game_view
+		local key = table.concat({
+			tostring(store.selected), tostring(view and view.turn),
+			tostring(view and #view.captains), tostring(store.revision),
+		}, ":")
+		if self.label_dirty or key ~= self.label_key then
+			self.label_key = key
+			rebuild_labels(self, g)
+		end
+	end
+
 	refresh_overview(self)
 	refresh_bar(self, g)
 	if not g then return end
 
 	if self.revision ~= store.revision then
 		self.revision = store.revision
-		-- Lane lengths for placing fleet markers, and a label ranking: the
-		-- places that matter get named first, so a colony beats a barren
-		-- waypoint however bright its star.
 		self.lane_lengths = sim_path.lane_lengths(g)
-		local rank = { colony = 2, outpost = 1, waypoint = 0 }
-		local order = {}
-		for i = 1, #g.stars do order[i] = i end
-		table.sort(order, function(a, b)
-			local ka = rank[sim_systems.kind(g, a)] or 0
-			local kb = rank[sim_systems.kind(g, b)] or 0
-			if ka ~= kb then return ka > kb end
-			local sa, sb = g.stars[a], g.stars[b]
-			local wa = sa.radius * sa.glow
-			local wb = sb.radius * sb.glow
-			if wa ~= wb then return wa > wb end
-			return a < b
-		end)
-		self.label_order = order
+		self.label_dirty = true
 		self.sheet_dirty = true
 	end
 
