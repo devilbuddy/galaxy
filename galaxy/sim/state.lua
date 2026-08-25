@@ -134,7 +134,7 @@ function M.new(galaxy, players)
 		-- `stock` is units a colony holds ready. Only colonies ever accumulate
 		-- it, but every system carries the field so a JSON round trip does not
 		-- have to distinguish "no stock" from "cannot have stock".
-		state.systems[i] = { owner = 0, capital_of = 0, stock = 0 }
+		state.systems[i] = { owner = 0, capital_of = 0, stock = 0, buildings = {} }
 	end
 
 	for i = 1, #players do
@@ -300,6 +300,18 @@ function M.normalise(state)
 			sys.owner = tonumber(sys.owner) or 0
 			sys.capital_of = tonumber(sys.capital_of) or 0
 			sys.stock = tonumber(sys.stock) or 0
+			-- A dense array of strings, so it survives JSON intact - but an
+			-- empty one encodes as an object on some encoders and comes back as
+			-- a table with no length, which `#` then reads as zero anyway. The
+			-- rebuild keeps only what is actually a known id.
+			local built = {}
+			if type(sys.buildings) == "table" then
+				for b = 1, #sys.buildings do
+					local id = sys.buildings[b]
+					if type(id) == "string" then built[#built + 1] = id end
+				end
+			end
+			sys.buildings = built
 			systems_out[key] = sys
 		end
 	end

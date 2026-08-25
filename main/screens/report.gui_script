@@ -80,6 +80,21 @@ local function describe(event, me)
 				system_name(event.at), event.cost or 0, event.strength or 0),
 		}
 
+	elseif kind == "built" then
+		return {
+			icon = "icon_industry", tone = ui.GOOD,
+			title = (event.name or "A building") .. " at " .. system_name(event.at),
+			subtitle = string.format("%d supply", event.cost or 0),
+		}
+
+	elseif kind == "recruited" then
+		return {
+			icon = "icon_warship", tone = ui.GOOD,
+			title = (event.name or "An officer") .. " took up a commission",
+			subtitle = string.format("Raised at %s for %d supply",
+				system_name(event.at), event.cost or 0),
+		}
+
 	elseif kind == "captain_moved" or kind == "contact_moved" then
 		-- On the wire, deliberately not in this list. Movement is one row per
 		-- captain per turn and the digest spans up to forty turns, so listing it

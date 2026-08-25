@@ -373,6 +373,39 @@ The numbers were measured, not guessed (`tools/play.lua`):
 Making stock accrue every turn is worse than either: a front where both sides
 refit as fast as they can spend never moves.
 
+#### Buildings: two slots, four things, and they do not stack
+
+A colony **specialises**, so the decision is spatial rather than numeric: this
+one is where units come from, that one is where officers do, the one on the
+frontier is a fortress.
+
+| | | |
+|---|---|---|
+| **Yards** | 140 | holds more units ready |
+| **Works** | 160 | one ready every turn instead of every other |
+| **Bastion** | 100 | flat resistance, and arms nobody |
+| **Admiralty** | 220 | another captain allowed, and the place to raise them |
+
+**Buildings need no captain present.** Raising one is an empire's decision, not
+an errand, and requiring an officer to stand there would make the whole economy
+hostage to one captain's touring speed. It is also the sink that absorbs a large
+empire's surplus, which units alone never could - colonies produce at a fixed
+rate however rich you are, so before buildings a hundred-system empire banked
+tens of thousands it could not spend.
+
+**A Bastion is the only way a world gets harder to take.** Production used to
+defend the colony holding it, which meant a world nobody had visited fortified
+itself for free; fortifying is now something a player chooses and pays for.
+
+**Captains: one, plus one per Admiralty, to a ceiling of four.** The ceiling is a
+rule rather than a layout accident - the commander strip is a row of faces, not
+a list, and stops being readable past four. A second captain is the answer to the
+touring problem: parallel collection, parallel fronts.
+
+Buildings and recruitment settle in the **logistics** phase, after movement, so a
+colony taken this turn can be built on this turn - and a build on a colony *lost*
+this turn is refused rather than quietly enriching whoever took it.
+
 #### Capitals
 
 `pick_capitals` places every player on a colony with at least
@@ -492,8 +525,9 @@ orders between them, and the map is public while state is fogged.
 
 RPCs in `server/modules/game_rpc.lua`:
 
-One order was two. `game.orders` now takes `move` and `resupply`, and a captain
-may carry one of each in a turn.
+One order became four. `game.orders` takes `move`, `resupply`, `build` and
+`recruit`; a captain may carry one move and one resupply in a turn, and a colony
+one build.
 
 | rpc | purpose |
 |---|---|
@@ -1487,14 +1521,12 @@ The game is a foundation being built back up, so most of what is missing is
 missing on purpose. These are the things that are *not* on that plan, or that
 will bite whoever touches them.
 
-- **There are no buildings yet.** Colonies produce at a fixed rate to a fixed
-  cap; nothing raises either, nothing fortifies, and nothing raises a second
-  captain. Supply therefore has exactly one sink and a large empire's purse runs
-  away from it - a leader with a hundred systems banks tens of thousands it
-  cannot spend. Buildings (Yards / Works / Bastion / Admiralty) are the next
-  step and are what absorb it.
 - **There are no unit *types*.** A unit is two strength and nothing else, so an
-  army has no shape and a battle stays one comparison.
+  army has no shape and a battle stays one comparison. That is the next step,
+  and it is what the battle-summary screen needs before it can exist.
+- **The system sheet has no scroll.** It is capped at `SHEET_MAX` and content
+  past that is drawn over the order bar. A colony of yours with an embarkation,
+  four buildings, a captain and a rival in sight is close to the cap already.
 - **A boxed-in player has no way back.** Combat means a border can be pushed and
   a fallen empire's ground falls open again, which is most of the old version of
   this problem - but nothing rubber-bands, and income is still linear in

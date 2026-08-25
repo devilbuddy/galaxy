@@ -141,6 +141,20 @@ do
 		type(v.captains[1].base_strength) == "number"
 			and v.captains[1].max_strength > v.captains[1].base_strength)
 
+	check("the building catalogue is on the wire",
+		type(v.buildings) == "table" and #v.buildings >= 4, v.buildings and #v.buildings)
+	check("and every entry says what it is and what it costs", (function()
+		for i = 1, #v.buildings do
+			local b = v.buildings[i]
+			if type(b.id) ~= "string" or type(b.name) ~= "string"
+				or type(b.cost) ~= "number" then return false end
+		end
+		return true
+	end)())
+	check("a colony says what is standing on it", type(mine.buildings) == "table")
+	check("and how many captains are allowed",
+		type(v.rates.captain_cap) == "number" and v.rates.captain_cap >= 1)
+
 	check("a system somebody holds says what it defends at",
 		type(mine.defence) == "number", mine.defence)
 	check("and unclaimed ground says nothing, because there is nothing to take",

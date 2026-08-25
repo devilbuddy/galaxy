@@ -106,6 +106,19 @@ return {
 	unit_strength = 2,
 	unit_cost = 20,
 
+	-- Buildings ----------------------------------------------------------------
+	-- Two slots against four buildings, so a colony specialises rather than
+	-- accumulating everything. See galaxy/sim/buildings.lua for what each does.
+	building_slots = 2,
+	yards_stock = 4,          -- Yards: units held ready, on top of the base
+	bastion_defence = 8,      -- Bastion: flat resistance
+
+	-- Captains. One to begin with, one more per Admiralty, and a hard ceiling
+	-- because the commander strip is a row of faces rather than a list.
+	captain_cap = 1,
+	captain_cap_max = 4,
+	captain_cost = 180,
+
 	commander_max_level = 10,
 	-- Experience is the strength a captain has overcome, so a colony is worth
 	-- more than a waypoint without anything having to say so. Low enough that a

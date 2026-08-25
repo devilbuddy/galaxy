@@ -19,6 +19,8 @@ local races = require("galaxy.sim.races")
 local regions = require("galaxy.sim.regions")
 local systems = require("galaxy.sim.systems")
 local commanders = require("galaxy.sim.commanders")
+local buildings = require("galaxy.sim.buildings")
+local state = require("galaxy.sim.state")
 local modifiers = require("galaxy.sim.modifiers")
 local rules = require("galaxy.sim.rules")
 
@@ -450,6 +452,109 @@ do
 			== "nothing in stock")
 	check("and not on an empty purse",
 		attempt(function(s) s.players[1].supply = 0 end) == "not enough supply")
+end
+
+print("what a colony can be made into")
+do
+	local s = new_game(2)
+	local capital = s.players[1].capital
+	local sys = s.systems[capital]
+	s.players[1].supply = 5000
+
+	local function build(id, at)
+		local ev = res.turn(GALAXY, s, {
+			{ player = 1, kind = "build", at = at or capital, building = id },
+		}, LENGTHS)
+		for i = 1, #ev do
+			if ev[i].kind == "built" then return "built", ev[i] end
+			if ev[i].kind == "order_rejected" then return ev[i].reason end
+		end
+		return "nothing"
+	end
+
+	local was_cap = buildings.stock_cap(sys)
+	check("a colony can be built on", build("yards") == "built")
+	check("and it does what it says",
+		buildings.stock_cap(sys) > was_cap, buildings.stock_cap(sys))
+	check("the same thing twice is refused", build("yards") == "already built")
+
+	check("a second building fills the slots", build("works") == "built")
+	check("and a third has nowhere to go",
+		build("bastion") == "no room for another building")
+	check("slots are what the rules say",
+		buildings.count(sys) == rules.building_slots, buildings.count(sys))
+
+	-- Somewhere that is not a colony, and somewhere that is not yours.
+	local elsewhere
+	for id = 1, #GALAXY.stars do
+		if not systems.is_colony(GALAXY, id) then elsewhere = id break end
+	end
+	s.systems[elsewhere].owner = 1
+	check("only a colony can be built on",
+		build("yards", elsewhere) == "only a colony can be built on")
+	check("and only one that is yours",
+		build("yards", s.players[2].capital) == "not yours to build on")
+
+	-- A Bastion is the only way a world gets harder to take.
+	local t = new_game(2)
+	local other = t.players[2].capital
+	local bare = systems.defence(GALAXY, other, true, modifiers.of(t.players[2]))
+	t.systems[other].buildings = { "bastion" }
+	check("a bastion is worth what the rules say",
+		buildings.defence_bonus(t.systems[other]) == rules.bastion_defence)
+	check("and nothing else raises a system's defence",
+		buildings.defence_bonus({ buildings = { "yards", "works" } }) == 0)
+	check("the bare world is unchanged by it",
+		systems.defence(GALAXY, other, true, modifiers.of(t.players[2])) == bare)
+end
+
+print("raising a second captain")
+do
+	local s = new_game(2)
+	local capital = s.players[1].capital
+	s.players[1].supply = 5000
+
+	local function recruit()
+		local ev = res.turn(GALAXY, s, {
+			{ player = 1, kind = "recruit", at = capital },
+		}, LENGTHS)
+		for i = 1, #ev do
+			if ev[i].kind == "recruited" then return "raised", ev[i] end
+			if ev[i].kind == "order_rejected" then return ev[i].reason end
+		end
+		return "nothing"
+	end
+
+	check("one captain to begin with",
+		#state.captains_of(s, 1) == 1)
+	check("and nowhere to raise another", recruit() == "no admiralty there")
+
+	s.systems[capital].buildings = { "admiralty" }
+	local how, event = recruit()
+	check("an admiralty is where they come from", how == "raised", how)
+	check("there are two of them now", #state.captains_of(s, 1) == 2)
+	check("the second has a name of their own", (function()
+		local all = state.captains_of(s, 1)
+		return all[1].name ~= all[2].name
+	end)())
+	check("and it cost the purse", event and event.cost == rules.captain_cost)
+
+	check("but only as many as there is room for",
+		recruit() == "no room for another captain")
+
+	-- The cap is one plus an admiralty each, to a ceiling.
+	check("the cap grows with them",
+		buildings.captain_cap(s, 1) == rules.captain_cap + 1,
+		buildings.captain_cap(s, 1))
+	check("and never past the ceiling", (function()
+		for id = 1, #GALAXY.stars do
+			if systems.is_colony(GALAXY, id) then
+				s.systems[id].owner = 1
+				s.systems[id].buildings = { "admiralty" }
+			end
+		end
+		return buildings.captain_cap(s, 1) == rules.captain_cap_max
+	end)(), buildings.captain_cap(s, 1))
 end
 
 print("a capital needs an army")

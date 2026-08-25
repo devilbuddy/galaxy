@@ -213,6 +213,8 @@ local function catch_up(game, game_version)
 						captain = tonumber(o.captain),
 						route = route,
 						units = tonumber(o.units),
+						at = tonumber(o.at),
+						building = o.building,
 					}
 				end
 			end
@@ -574,6 +576,9 @@ end
 --
 -- There is one order:
 --   { kind = "move", captain, route }   send a captain along a list of waypoints
+--   { kind = "resupply", captain, units } load units where the captain ends up
+--   { kind = "build", at, building }      raise a building on one of your colonies
+--   { kind = "recruit", at }              raise a captain at an Admiralty
 --
 -- An empty batch is meaningful: it is how a player says "I am done this turn",
 -- which is what lets the turn resolve early once everyone has said it.
@@ -638,6 +643,26 @@ local function rpc_orders(context, payload)
 				replace(function(c)
 					return c.kind == "move" and c.captain == entry.captain
 				end)
+				clean[#clean + 1] = entry
+			end
+
+		elseif o.kind == "build" then
+			local at = tonumber(o.at)
+			if at and type(o.building) == "string" then
+				local entry = {
+					kind = "build", at = math.floor(at), building = o.building,
+				}
+				-- One build per colony per turn: two orders for the same place
+				-- would race for the same slot.
+				replace(function(c) return c.kind == "build" and c.at == entry.at end)
+				clean[#clean + 1] = entry
+			end
+
+		elseif o.kind == "recruit" then
+			local at = tonumber(o.at)
+			if at then
+				local entry = { kind = "recruit", at = math.floor(at) }
+				replace(function(c) return c.kind == "recruit" and c.at == entry.at end)
 				clean[#clean + 1] = entry
 			end
 

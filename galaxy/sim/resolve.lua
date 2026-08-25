@@ -31,6 +31,7 @@ local commanders = require("galaxy.sim.commanders")
 local regions_mod = require("galaxy.sim.regions")
 local modifiers = require("galaxy.sim.modifiers")
 local systems_mod = require("galaxy.sim.systems")
+local buildings = require("galaxy.sim.buildings")
 
 local floor = math.floor
 local min = math.min
@@ -80,7 +81,7 @@ local expand_route = M.expand_route
 -- client can say what happened. Whether an order is *legal* depends on state
 -- that has moved on since the player issued it, which is why the check is here
 -- and not in the RPC.
-local function captain_orders(galaxy, state, orders, mods, lengths, events)
+local function captain_orders(galaxy, state, orders, mods, lengths, events, pending)
 	for i = 1, #orders do
 		local order = orders[i]
 		local who = order.player
@@ -97,7 +98,28 @@ local function captain_orders(galaxy, state, orders, mods, lengths, events)
 			emit(events, e)
 		end
 
-		if order.kind == "resupply" then
+		if order.kind == "build" then
+			-- Recorded, not acted on. Everything it depends on - who holds the
+			-- system, what is already there, whether the purse can pay - may
+			-- move between now and the logistics phase, so the check is there.
+			local at = order.at and floor(order.at)
+			if at and buildings.exists(order.building) then
+				pending[#pending + 1] = {
+					player = who, at = at, building = order.building,
+				}
+			else
+				reject("no such building", { building = order.building })
+			end
+
+		elseif order.kind == "recruit" then
+			local at = order.at and floor(order.at)
+			if at then
+				pending[#pending + 1] = { player = who, at = at, recruit = true }
+			else
+				reject("nowhere to raise them")
+			end
+
+		elseif order.kind == "resupply" then
 			local captain = state_mod.captain_by_id(state, order.captain)
 			if not captain or captain.owner ~= who then
 				reject("no such captain", { captain = order.captain })
@@ -161,6 +183,7 @@ local function resistance(galaxy, state, mods, id)
 	local sys = state.systems[id]
 	local owner = sys.owner
 	local world = systems_mod.defence(galaxy, id, sys.capital_of == owner, mods[owner])
+		+ buildings.defence_bonus(sys)
 	local total = world
 	local garrison = {}
 	for i = 1, #state.captains do
@@ -324,6 +347,80 @@ local function movement(galaxy, state, mods, events)
 	end
 end
 
+--- Raise buildings and officers, in the order they were asked for.
+--
+-- **After movement, like everything else in logistics**, so a colony taken this
+-- turn can be built on this turn - and so a build on a colony *lost* this turn
+-- is refused rather than quietly enriching whoever took it.
+--
+-- Everything is checked here rather than in the RPC, because every condition it
+-- turns on can move between the order being written and the turn resolving:
+-- somebody else may hold the colony by then, the slots may be full, and the
+-- purse has been spent on units in the meantime.
+local function construction(galaxy, state, pending, events)
+	for i = 1, #pending do
+		local order = pending[i]
+		local player = state.players[order.player]
+		local sys = state.systems[order.at]
+
+		local function reject(reason)
+			emit(events, {
+				kind = "order_rejected", turn = state.turn,
+				player = order.player, at = order.at, reason = reason,
+				visible_to = { order.player },
+			})
+		end
+
+		if not sys or sys.owner ~= order.player then
+			reject("not yours to build on")
+
+		elseif order.recruit then
+			local here = buildings.has(sys, "admiralty")
+			local room = #state_mod.captains_of(state, order.player)
+				< buildings.captain_cap(state, order.player)
+			if not here then
+				reject("no admiralty there")
+			elseif not room then
+				reject("no room for another captain")
+			elseif (player.supply or 0) < rules.captain_cost then
+				reject("not enough supply")
+			else
+				player.supply = player.supply - rules.captain_cost
+				local captain = state_mod.add_captain(state, order.player, order.at)
+				emit(events, {
+					kind = "recruited", turn = state.turn,
+					player = order.player, at = order.at,
+					captain = captain.id, name = captain.name,
+					cost = rules.captain_cost,
+					visible_to = { order.player },
+				})
+			end
+
+		else
+			local spec = buildings.by_id(order.building)
+			if not systems_mod.is_colony(galaxy, order.at) then
+				reject("only a colony can be built on")
+			elseif buildings.has(sys, order.building) then
+				reject("already built")
+			elseif not buildings.room(sys) then
+				reject("no room for another building")
+			elseif (player.supply or 0) < spec.cost then
+				reject("not enough supply")
+			else
+				player.supply = player.supply - spec.cost
+				sys.buildings[#sys.buildings + 1] = order.building
+				emit(events, {
+					kind = "built", turn = state.turn,
+					player = order.player, at = order.at,
+					building = order.building, name = spec.name,
+					cost = spec.cost,
+					visible_to = { order.player },
+				})
+			end
+		end
+	end
+end
+
 --- Buy the units a captain asked for, wherever it ended up.
 --
 -- **Where it ends the turn, not where it started.** A captain that marches onto
@@ -389,14 +486,16 @@ end
 -- world. It accumulates whether or not anyone visits and does not decay: a
 -- distant colony is not wasted production, it is a reason to march.
 local function economy(galaxy, state, summaries)
-	local ready = (state.turn % rules.colony_stock_turns) == 0
 	local earned = {}
 	for id, sys in pairs(state.systems) do
 		if sys.owner ~= 0 then
 			earned[sys.owner] = (earned[sys.owner] or 0)
 				+ systems_mod.yield(galaxy, id)
-			if ready and systems_mod.is_colony(galaxy, id)
-				and (sys.stock or 0) < rules.colony_stock_cap then
+			-- Cadence and cap are the colony's own, not the rules': Works makes
+			-- one ready every turn and Yards holds more of them.
+			if systems_mod.is_colony(galaxy, id)
+				and (state.turn % buildings.stock_turns(sys)) == 0
+				and (sys.stock or 0) < buildings.stock_cap(sys) then
 				sys.stock = (sys.stock or 0) + 1
 			end
 		end
@@ -633,9 +732,13 @@ function M.turn(galaxy, state, orders, lengths)
 		mods[i] = modifiers.of(state.players[i])
 	end
 
-	captain_orders(galaxy, state, orders, mods, lengths, events)
+	-- Orders that spend rather than move are gathered here and settled in the
+	-- logistics phase, so they see the map as it ends the turn.
+	local pending = {}
+	captain_orders(galaxy, state, orders, mods, lengths, events, pending)
 	movement(galaxy, state, mods, events)
 	-- After movement, because a captain buys where it *ends* the turn.
+	construction(galaxy, state, pending, events)
 	logistics(galaxy, state, mods, events)
 	economy(galaxy, state, summaries)
 

@@ -146,8 +146,8 @@ M.hud_zones = {}
 -- Bumped whenever a new galaxy is generated, so the HUD can notice.
 M.revision = 0
 
---- How many orders the plan holds. Research counts as one: it is a directive
---- like any other and the player is owed an accurate count.
+--- How many orders the plan holds. A build or a recruit counts as one: they are
+--- directives like any other and the player is owed an accurate count.
 function M.plan_count()
 	return #M.orders
 end
@@ -167,7 +167,8 @@ function M.plan_signature()
 		end
 		parts[#parts + 1] = table.concat({
 			tostring(o.kind), tostring(o.captain), route,
-			tostring(o.units or ""),
+			tostring(o.units or ""), tostring(o.at or ""),
+			tostring(o.building or ""),
 		}, ":")
 	end
 	return table.concat(parts, "|")

@@ -99,7 +99,13 @@ local MANIFEST_TOP = 60
 local STATUS_ROW_H = 30
 -- The sheet is as tall as its content, between these.
 local SHEET_MIN = 200
-local SHEET_MAX = 640
+-- Raised for the buildings section. A colony of yours with an embarkation, four
+-- things it could be built into, a captain standing on it and a rival in sight
+-- is comfortably past 640, and the sheet has no scroll - content past the cap is
+-- simply drawn over the order bar. The camera clamps against `store.hud_band`
+-- rather than the window, so a taller sheet costs visible map but never traps
+-- the selected system behind itself.
+local SHEET_MAX = 880
 
 -- Playback. The transport sits where the order bar does, because it replaces
 -- it: while a digest is playing there is nothing to order.
@@ -478,8 +484,30 @@ local function describe_order(o)
 		return string.format("%s to %s", who, star_name(dest))
 	elseif o.kind == "resupply" then
 		return string.format("%s embarks %s", who, ui.plural(o.units or 0, "unit"))
+	elseif o.kind == "build" then
+		return string.format("%s at %s", tostring(o.label or o.building),
+			star_name(o.at))
+	elseif o.kind == "recruit" then
+		return "New captain at " .. star_name(o.at)
 	end
 	return tostring(o.kind)
+end
+
+--- Stage a build or a recruit at a colony.
+--
+-- Keyed on the place rather than the captain: two orders for the same colony
+-- would race for the same slot, and the RPC supersedes on exactly that.
+local function stage_at(self, order)
+	for i = 1, #store.orders do
+		local o = store.orders[i]
+		if o.kind == order.kind and o.at == order.at then
+			store.orders[i] = order
+			self.sheet_dirty = true
+			return
+		end
+	end
+	store.orders[#store.orders + 1] = order
+	self.sheet_dirty = true
 end
 
 --- Stage a purchase for a captain standing on one of your colonies.
@@ -862,6 +890,87 @@ local function build_sheet(self, w, pad)
 				end
 			end
 			y = y - 12
+		end
+
+		-- **What this colony can be made into.** Two slots against four
+		-- buildings, so the row is a choice rather than a shopping list - and
+		-- the cost sits on every one of them, because supply is the thing the
+		-- player is deciding between spending and saving.
+		if mine and view and sim_systems.is_colony(g, id) then
+			local rates = view.rates or {}
+			local built = info.buildings or {}
+			local slots = rates.building_slots or 2
+			local purse = view.supply or 0
+
+			y = y - 40
+			ui.caps(inner, y, string.format("built  %d of %d", #built, slots))
+
+			for b = 1, #built do
+				local spec
+				for k = 1, #(view.buildings or {}) do
+					if view.buildings[k].id == built[b] then spec = view.buildings[k] end
+				end
+				y = y - 30
+				ui.icon(inner, y + 8, 22, "icon_check", ui.GOOD)
+				ui.small(inner + 30, y, (spec and spec.name) or built[b], ui.TEXT)
+			end
+
+			if #built < slots then
+				for k = 1, #(view.buildings or {}) do
+					local spec = view.buildings[k]
+					local have = false
+					for b = 1, #built do
+						if built[b] == spec.id then have = true end
+					end
+					if not have then
+						local afford = purse >= (spec.cost or 0)
+						y = y - 60
+						local row = ui.panel(inner, y + 52, text_w, 54, ui.CARD_ALT)
+						ui.body(inner + 14, y + 30, spec.name,
+							afford and ui.TEXT or ui.FAINT)
+						ui.small(inner + 14, y + 8, spec.blurb or "", ui.FAINT)
+						ui.small(inner + text_w - 14, y + 26,
+							tostring(spec.cost or 0),
+							afford and ui.GOOD or ui.WARN,
+							{ pivot = gui.PIVOT_E, bold = true })
+						if afford then
+							self.sheet_druid:new_button(row, function()
+								stage_at(self, {
+									kind = "build", at = id,
+									building = spec.id, label = spec.name,
+								})
+							end)
+						end
+					end
+				end
+			end
+
+			-- Raising an officer, where there is somewhere to raise them.
+			local admiralty = false
+			for b = 1, #built do
+				if built[b] == "admiralty" then admiralty = true end
+			end
+			if admiralty then
+				local room = (rates.captains or 0) < (rates.captain_cap or 1)
+				local cost = rates.captain_cost or 0
+				local afford = purse >= cost
+				y = y - 60
+				local handle = ui.button(self.sheet_druid, inner, y + 52,
+					text_w, ui.CONTROL,
+					string.format("RAISE A CAPTAIN   %d", cost),
+					function()
+						stage_at(self, { kind = "recruit", at = id })
+					end, { style = "primary", size = ui.CAPS })
+				if not room or not afford then
+					handle.set_enabled(false)
+					y = y - 26
+					ui.small(inner, y + 44,
+						not room and string.format("%d of %d captains already",
+							rates.captains or 0, rates.captain_cap or 1)
+							or "Not enough supply", ui.WARN)
+				end
+			end
+			y = y - 14
 		end
 
 		-- Captains standing here, and what can be asked of them.

@@ -19,6 +19,7 @@ local systems = require("galaxy.sim.systems")
 local state_mod = require("galaxy.sim.state")
 local commanders = require("galaxy.sim.commanders")
 local regions_mod = require("galaxy.sim.regions")
+local buildings = require("galaxy.sim.buildings")
 
 local M = {}
 
@@ -129,13 +130,20 @@ function M.project(galaxy, state, player)
 			seen = state.turn,
 			live = true,
 			-- Nil for unowned ground: there is nothing to take it off.
-			defence = sys.owner ~= 0 and systems.defence(galaxy, id,
-				sys.capital_of == sys.owner, defence_mods[sys.owner]) or nil,
+			defence = sys.owner ~= 0 and (systems.defence(galaxy, id,
+				sys.capital_of == sys.owner, defence_mods[sys.owner])
+				+ buildings.defence_bonus(sys)) or nil,
+			-- What is standing there. Public where the system is visible: the
+			-- borders show it, and an attacker who cannot see a Bastion coming
+			-- is being asked to guess at the one number that decides the fight.
+			buildings = sys.buildings,
 			-- What a system pays its owner, and what a colony has ready. Both
 			-- public where you can see the system: the yield is derived from
 			-- the star, and stock is already visible in the defence above.
 			yield = systems.yield(galaxy, id),
 			stock = systems.is_colony(galaxy, id) and (sys.stock or 0) or nil,
+			stock_cap = systems.is_colony(galaxy, id)
+				and buildings.stock_cap(sys) or nil,
 		}
 	end
 	for id, seen in pairs(memory) do
@@ -232,6 +240,9 @@ function M.project(galaxy, state, player)
 		regions = region_view,
 		region_weights = regions_mod.weights(galaxy),
 		regions_needed = regions_mod.needed(galaxy),
+		-- The catalogue, so the client lists what can be built and what it
+		-- costs without carrying a second copy of the table.
+		buildings = buildings.CATALOGUE,
 		regions_held = regions_mod.tally(galaxy, state, held)[player] or 0,
 		-- The numbers the client needs to explain itself.
 		-- The purse. Fungible across the map, and the one number a player has to
@@ -247,6 +258,10 @@ function M.project(galaxy, state, player)
 			unit_cost = rules.unit_cost,
 			unit_strength = rules.unit_strength,
 			stock_cap = rules.colony_stock_cap,
+			captain_cost = rules.captain_cost,
+			captains = #state_mod.captains_of(state, player),
+			captain_cap = buildings.captain_cap(state, player),
+			building_slots = rules.building_slots,
 			income = (function()
 				local total = 0
 				for id, sys in pairs(state.systems) do
