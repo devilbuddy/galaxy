@@ -67,6 +67,13 @@ local function describe(event, me)
 			subtitle = (event.name or "A captain") .. " passed through",
 		}
 
+	elseif kind == "captain_moved" or kind == "contact_moved" then
+		-- On the wire, deliberately not in this list. Movement is one row per
+		-- captain per turn and the digest spans up to forty turns, so listing it
+		-- would bury everything that actually happened. It is carried for the
+		-- playback to animate; see the note in galaxy/sim/resolve.lua.
+		return nil
+
 	elseif kind == "captain_ordered" then
 		return {
 			icon = "icon_speed", tone = ui.ACCENT,

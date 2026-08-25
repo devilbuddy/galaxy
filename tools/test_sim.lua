@@ -406,6 +406,87 @@ do
 		{ level = rules.commander_max_level }, modifiers.of(s.players[1])) >= defence)
 end
 
+print("what a rival saw of your march")
+do
+	local s = new_game(2)
+	local captain = s.captains[1]
+	-- Three lanes a turn, so a march has a path long enough to be clipped.
+	captain.level = rules.commander_max_level
+	local target = system_at_hops(s, captain.at, 3)
+
+	-- Give player 2 eyes on part of the way, but not all of it. A system they
+	-- hold sees `base_vision` lanes around it, so watching two *consecutive*
+	-- legs takes a listening post beside each - and neither may sit on the
+	-- route itself, or the march becomes a battle instead of a sighting.
+	local route = res.expand_route(GALAXY, LENGTHS, captain.at, nil, { target }, 12)
+	local on_route = { [captain.at] = true }
+	for k = 1, #route do on_route[route[k]] = true end
+	for _, p in ipairs(s.players) do on_route[p.capital] = true end
+
+	local posts = 0
+	for leg = 1, 2 do
+		for _, n in ipairs(GALAXY.adjacency[route[leg]]) do
+			if not on_route[n] and s.systems[n].owner == 0 then
+				s.systems[n].owner = 2
+				on_route[n] = true
+				posts = posts + 1
+				break
+			end
+		end
+	end
+	-- One post is often enough: a listening post beside a lane junction sees
+	-- both ends of it. What matters is that *some* of the march is watched and
+	-- some is not, which the checks below verify against the fog itself.
+	check("the board has somewhere to watch from", posts > 0, posts)
+
+	local ev = res.turn(GALAXY, s, {
+		{ player = 1, kind = "move", captain = 1, route = { target } },
+	}, LENGTHS)
+
+	local mine, sighting
+	for i = 1, #ev do
+		if ev[i].kind == "captain_moved" then mine = ev[i] end
+		if ev[i].kind == "contact_moved" then sighting = ev[i] end
+	end
+
+	check("your own march is recorded in full",
+		mine ~= nil and #mine.path > 1, mine and #mine.path)
+	check("and it is yours alone",
+		mine and #mine.visible_to == 1 and mine.visible_to[1] == 1)
+
+	-- The sighting is a property of the fog, so check it against the fog rather
+	-- than against a hand-worked answer: every system in it must be somewhere
+	-- the observer can actually see.
+	if sighting then
+		local seen = view.visible_systems(GALAXY, s, 2)
+		local outside = nil
+		if not seen[sighting.from] then outside = sighting.from end
+		for k = 1, #sighting.path do
+			if not seen[sighting.path[k]] then outside = sighting.path[k] end
+		end
+		check("a rival sees only the part that was in range", outside == nil, outside)
+		check("shorter than the march itself", #sighting.path < #mine.path,
+			#sighting.path .. " of " .. #mine.path)
+		check("and it names a rank, never the officer",
+			sighting.rank ~= nil and sighting.name == nil)
+		check("reported to the watcher and nobody else",
+			#sighting.visible_to == 1 and sighting.visible_to[1] == 2)
+	else
+		check("a rival sees the part that was in range", false, "no sighting")
+	end
+
+	-- Nobody watching, nothing seen.
+	local t = new_game(2)
+	t.captains[1].level = rules.commander_max_level
+	local ev2 = res.turn(GALAXY, t, {
+		{ player = 1, kind = "move", captain = 1,
+		  route = { system_at_hops(t, t.captains[1].at, 3) } },
+	}, LENGTHS)
+	local any = false
+	for i = 1, #ev2 do if ev2[i].kind == "contact_moved" then any = true end end
+	check("a march nobody could see is not reported at all", not any)
+end
+
 print("fog of war")
 do
 	local s = new_game(2)

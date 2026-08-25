@@ -296,6 +296,7 @@ local function movement(galaxy, state, mods, events)
 				kind = "captain_moved", turn = state.turn,
 				player = captain.owner, captain = captain.id,
 				name = captain.name, from = from, at = captain.at,
+				rank = commanders.rank(captain.level or 1),
 				path = walked, bound_for = captain.route[#captain.route],
 				visible_to = { captain.owner },
 			})
@@ -434,6 +435,68 @@ local function apply_visibility(galaxy, state, events)
 			event.visible_to = who
 		end
 	end
+	return visible
+end
+
+--- What each player saw of somebody else's movement.
+--
+-- `captain_moved` is the owner's own record and stays private, because it names
+-- the officer and runs the whole way. A rival's movement is a **sighting**: as
+-- much of the journey as fell inside your detection range and no more, so a
+-- fleet crosses your border, is watched for a lane or two, and is lost again in
+-- the dark. Anything else would either hide an invasion that was in plain sight
+-- or hand over a campaign nobody could see.
+--
+-- Two simplifications, both deliberate:
+--
+--   * **End-of-turn visibility**, the same set every other event is filtered
+--     against. Recomputing detection after each step would be more exact and
+--     would disagree with every other event in the same digest.
+--   * **The first contiguous run only.** A captain crosses at most three lanes
+--     in a turn, so leaving and re-entering the same player's range inside one
+--     turn needs a geometry that barely occurs; splitting a sighting into two
+--     would cost an event to describe something nobody would notice.
+--
+-- A single visible point is not a sighting - that is a contact standing still,
+-- and `view.project` already reports where rival captains are.
+local function sighted_movement(state, events, visible)
+	local sightings = {}
+	for e = 1, #events do
+		local ev = events[e]
+		if ev.kind == "captain_moved" then
+			local journey = { ev.from }
+			for k = 1, #ev.path do journey[#journey + 1] = ev.path[k] end
+
+			for p = 1, #state.players do
+				if p ~= ev.player then
+					local seen = visible[p]
+					local first, last = nil, nil
+					for k = 1, #journey do
+						if seen[journey[k]] then
+							if not first then first = k end
+							last = k
+						elseif first then
+							break
+						end
+					end
+					if first and last > first then
+						local path = {}
+						for k = first + 1, last do path[#path + 1] = journey[k] end
+						sightings[#sightings + 1] = {
+							kind = "contact_moved", turn = ev.turn,
+							-- `player` is who it belongs to, as everywhere else;
+							-- `visible_to` is the single player who saw it.
+							player = ev.player, captain = ev.captain,
+							rank = ev.rank, from = journey[first],
+							path = path, at = journey[last],
+							visible_to = { p },
+						}
+					end
+				end
+			end
+		end
+	end
+	for i = 1, #sightings do events[#events + 1] = sightings[i] end
 end
 
 -- The turn ----------------------------------------------------------------------
@@ -470,7 +533,8 @@ function M.turn(galaxy, state, orders, lengths)
 	end
 
 	aftermath(galaxy, state, mods, events, summaries)
-	apply_visibility(galaxy, state, events)
+	local visible = apply_visibility(galaxy, state, events)
+	sighted_movement(state, events, visible)
 
 	return events
 end
