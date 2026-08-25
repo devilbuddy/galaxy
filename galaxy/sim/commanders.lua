@@ -9,6 +9,7 @@
 -- currently left in the field.
 
 local rules = require("galaxy.sim.rules")
+local races = require("galaxy.sim.races")
 
 local floor = math.floor
 
@@ -50,16 +51,27 @@ local SURNAMES = {
 	"Eriksen", "Zamora",
 }
 
---- The portrait that goes with an officer's number.
+-- Portraits per race in main/portraits.atlas. The set is grouped by species -
+-- see tools/import_portraits.py - so a Vorn officer is a crimson devil and an
+-- Ashai one is green, which is most of what makes a race feel like a people
+-- rather than a modifier bundle.
+--
+-- Twelve rather than one per surname: six races would be 240 images, and a
+-- player currently raises exactly one officer. It is enough that a full table
+-- never repeats a face; past it the index wraps.
+local PORTRAITS_PER_RACE = 12
+
+--- The portrait that goes with an officer's number and their empire's race.
 --
 -- Indexed by the same counter as the surname, so Kess always has Kess's face -
 -- and, because the counter is per player and never re-used, two officers in one
 -- empire never look alike until it wraps. The client resolves this to an image
 -- in main/portraits.atlas; the simulation only ever deals in the id.
 --
--- The atlas holds exactly as many portraits as there are surnames. If that ever
--- stops being true this still returns something valid, but the pairing drifts.
-function M.portrait(number, name)
+-- An unknown race falls back to the default rather than returning nil: a state
+-- written before a race existed, or a client sending a typo, must not leave an
+-- officer with no face.
+function M.portrait(number, name, race)
 	local n = tonumber(number)
 	if not n and name then
 		-- A commander raised before officers carried a number - or any record
@@ -71,7 +83,8 @@ function M.portrait(number, name)
 		end
 	end
 	n = math.max(1, math.floor(n or 1))
-	return string.format("portrait_%02d", ((n - 1) % #SURNAMES) + 1)
+	return string.format("portrait_%s_%02d",
+		races.by_id(race).id, ((n - 1) % PORTRAITS_PER_RACE) + 1)
 end
 
 --- A commander's name, drawn deterministically from the player's own counter.
@@ -188,12 +201,12 @@ function M.strength(commander, mods)
 end
 
 --- Everything a client needs to draw one, in one call.
-function M.profile(commander, mods)
+function M.profile(commander, mods, race)
 	local level = commander.level or 1
 	return {
 		level = level,
 		rank = M.rank(level),
-		portrait = M.portrait(commander.number, commander.name),
+		portrait = M.portrait(commander.number, commander.name, race),
 		xp = commander.xp or 0,
 		next_xp = (level < rules.commander_max_level)
 			and M.xp_for_level(level + 1) or nil,

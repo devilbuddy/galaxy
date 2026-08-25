@@ -208,8 +208,11 @@ function M.portrait(x, y, size, id, opts)
 		vmath.vector3(size, size, 0)))
 	gui.set_pivot(node, gui.PIVOT_NW)
 	gui.set_texture(node, M.PORTRAIT_ATLAS)
-	local ok = pcall(gui.play_flipbook, node, id or "portrait_01")
-	if not ok then pcall(gui.play_flipbook, node, "portrait_01") end
+	-- Portraits are grouped by race (tools/import_portraits.py), so there is no
+	-- generic first portrait to fall back to - the default race's is the
+	-- stand-in, the same one galaxy/sim/commanders.lua falls back to.
+	local ok = pcall(gui.play_flipbook, node, id or "portrait_terran_01")
+	if not ok then pcall(gui.play_flipbook, node, "portrait_terran_01") end
 	-- The ring goes on top, so it covers the mask's soft edge rather than
 	-- sitting behind it and leaving a pale halo.
 	if opts.ring ~= false then

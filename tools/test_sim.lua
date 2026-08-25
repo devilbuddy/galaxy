@@ -522,9 +522,32 @@ do
 	check("and it is always a whole number of lanes",
 		commanders.steps({ level = 9 }) % 1 == 0)
 	check("the same officer always has the same face",
-		commanders.portrait(4) == commanders.portrait(4))
+		commanders.portrait(4, nil, "terran") == commanders.portrait(4, nil, "terran"))
 	check("different officers do not",
-		commanders.portrait(4) ~= commanders.portrait(5))
+		commanders.portrait(4, nil, "terran") ~= commanders.portrait(5, nil, "terran"))
+	-- Portraits are grouped by species, which is most of what makes a race feel
+	-- like a people rather than a bundle of modifiers.
+	check("and the same officer of another race is a different species",
+		commanders.portrait(4, nil, "terran") ~= commanders.portrait(4, nil, "vorn"))
+	check("every race has a face for every officer", (function()
+		local ids = races.ids()
+		local seen = {}
+		for i = 1, #ids do
+			for n = 1, 40 do
+				local id = commanders.portrait(n, nil, ids[i])
+				if not id:find(ids[i], 1, true) then return false end
+				seen[id] = true
+			end
+		end
+		local count = 0
+		for _ in pairs(seen) do count = count + 1 end
+		-- Wraps rather than running out, so forty officers of six races draw
+		-- from a fixed set.
+		return count == #ids * 12
+	end)())
+	check("an unknown race still gets one",
+		commanders.portrait(1, nil, "clangers")
+			== commanders.portrait(1, nil, races.DEFAULT))
 end
 
 print("races differ on the axes that exist")

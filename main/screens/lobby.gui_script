@@ -10,6 +10,7 @@
 
 local druid = require("druid.druid")
 local monarch = require("monarch.monarch")
+local seen = require("main.seen")
 local backend = require("main.backend")
 local store = require("main.store")
 local ui = require("main.ui")
@@ -17,6 +18,10 @@ local safearea = require("main.safearea")
 local races = require("galaxy.sim.races")
 
 local PAD = 26
+-- How many turns of digest the server is willing to send back, from
+-- MAX_DIGEST_TURNS in server/modules/game_rpc.lua. Kept in step by hand; it
+-- only bounds a label.
+local MAX_DIGEST_TURNS = 40
 local REFRESH_SECONDS = 5
 
 -- Two columns rather than three: a race name needs the width to stay on one
@@ -83,11 +88,38 @@ local function render_games(self)
 		keep(ui.panel(0, y, w, h, ui.CARD))
 		keep(ui.panel_line(0, y, w, h, ui.ACCENT_SOFT))
 
+		-- Turns that have resolved since this device last read the digest. The
+		-- lobby is the first thing a player sees, and with several games on the
+		-- go the question it has to answer is "which one has moved" - which was
+		-- previously only findable by opening each in turn.
+		--
+		-- Computed entirely on the client: `main/seen.lua` already persists how
+		-- far each game has been read, and the row already carries the turn, so
+		-- the server has nothing to say about it.
+		local unread = 0
+		if g.status ~= "lobby" then
+			unread = math.max(0, (tonumber(g.turn) or 0) - seen.get(g.id))
+		end
+
 		keep(ui.caps(PAD, y - 18, m == 1 and "your games" or ""))
 		keep(ui.title(PAD, y - 62, g.name))
 		keep(ui.small(PAD, y - 98, roster_line(g), ui.DIM))
 		keep(ui.small(PAD, y - 128, g.status == "lobby"
-			and "Waiting to start" or ("Turn " .. tostring(g.turn)), ui.DIM))
+			and "Waiting to start" or ("Turn " .. tostring(g.turn)),
+			unread > 0 and ui.ACCENT or ui.DIM))
+
+		if unread > 0 then
+			-- Capped at what the server will actually send. A game left for a
+			-- month is on turn 166 and offers "166 new turns", of which the
+			-- digest window holds forty - so the uncapped number promises a
+			-- read the player cannot have.
+			keep(ui.small(w - PAD, y - 18,
+				unread == 1 and "1 new turn"
+					or (unread > MAX_DIGEST_TURNS
+						and (MAX_DIGEST_TURNS .. "+ new turns")
+						or (unread .. " new turns")),
+				ui.ACCENT, { pivot = gui.PIVOT_NE }))
+		end
 
 		local can_start = g.status == "lobby" and #g.players >= 2
 		local running = g.status ~= "lobby"

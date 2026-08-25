@@ -150,7 +150,7 @@ function M.project(galaxy, state, player)
 	for i = 1, #state.captains do
 		local c = state.captains[i]
 		if c.owner == player then
-			local profile = commanders.profile(c, mods)
+			local profile = commanders.profile(c, mods, me.race)
 			captains[#captains + 1] = {
 				id = c.id, name = c.name,
 				at = c.at, next_hop = c.route[1],
@@ -173,11 +173,16 @@ function M.project(galaxy, state, player)
 			-- hiding half of it would turn every attack into a guess - which is
 			-- the one thing a game checked twice a day cannot afford. What stays
 			-- hidden is where they are *going*: you can see a fleet, not a plan.
-			local their_mods = modifiers.of(state.players[c.owner])
+			local them = state.players[c.owner]
+			local their_mods = modifiers.of(them)
 			contacts[#contacts + 1] = {
 				owner = c.owner, at = c.at, next_hop = c.route[1],
 				rank = commanders.rank(c.level or 1),
 				strength = commanders.strength(c, their_mods),
+				-- Their face, not their name. Portraits are grouped by race, so
+				-- this is how a player learns whose fleet is on their border
+				-- without being handed the officer's identity.
+				portrait = commanders.portrait(c.number, nil, them.race),
 			}
 		end
 	end

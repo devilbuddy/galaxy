@@ -1,161 +1,289 @@
 images {
-  image: "/main/assets/portraits/portrait_01.png"
+  image: "/main/assets/portraits/portrait_terran_01.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_02.png"
+  image: "/main/assets/portraits/portrait_terran_02.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_03.png"
+  image: "/main/assets/portraits/portrait_terran_03.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_04.png"
+  image: "/main/assets/portraits/portrait_terran_04.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_05.png"
+  image: "/main/assets/portraits/portrait_terran_05.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_06.png"
+  image: "/main/assets/portraits/portrait_terran_06.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_07.png"
+  image: "/main/assets/portraits/portrait_terran_07.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_08.png"
+  image: "/main/assets/portraits/portrait_terran_08.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_09.png"
+  image: "/main/assets/portraits/portrait_terran_09.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_10.png"
+  image: "/main/assets/portraits/portrait_terran_10.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_11.png"
+  image: "/main/assets/portraits/portrait_terran_11.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_12.png"
+  image: "/main/assets/portraits/portrait_terran_12.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_13.png"
+  image: "/main/assets/portraits/portrait_vorn_01.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_14.png"
+  image: "/main/assets/portraits/portrait_vorn_02.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_15.png"
+  image: "/main/assets/portraits/portrait_vorn_03.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_16.png"
+  image: "/main/assets/portraits/portrait_vorn_04.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_17.png"
+  image: "/main/assets/portraits/portrait_vorn_05.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_18.png"
+  image: "/main/assets/portraits/portrait_vorn_06.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_19.png"
+  image: "/main/assets/portraits/portrait_vorn_07.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_20.png"
+  image: "/main/assets/portraits/portrait_vorn_08.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_21.png"
+  image: "/main/assets/portraits/portrait_vorn_09.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_22.png"
+  image: "/main/assets/portraits/portrait_vorn_10.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_23.png"
+  image: "/main/assets/portraits/portrait_vorn_11.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_24.png"
+  image: "/main/assets/portraits/portrait_vorn_12.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_25.png"
+  image: "/main/assets/portraits/portrait_ashai_01.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_26.png"
+  image: "/main/assets/portraits/portrait_ashai_02.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_27.png"
+  image: "/main/assets/portraits/portrait_ashai_03.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_28.png"
+  image: "/main/assets/portraits/portrait_ashai_04.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_29.png"
+  image: "/main/assets/portraits/portrait_ashai_05.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_30.png"
+  image: "/main/assets/portraits/portrait_ashai_06.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_31.png"
+  image: "/main/assets/portraits/portrait_ashai_07.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_32.png"
+  image: "/main/assets/portraits/portrait_ashai_08.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_33.png"
+  image: "/main/assets/portraits/portrait_ashai_09.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_34.png"
+  image: "/main/assets/portraits/portrait_ashai_10.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_35.png"
+  image: "/main/assets/portraits/portrait_ashai_11.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_36.png"
+  image: "/main/assets/portraits/portrait_ashai_12.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_37.png"
+  image: "/main/assets/portraits/portrait_kepler_01.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_38.png"
+  image: "/main/assets/portraits/portrait_kepler_02.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_39.png"
+  image: "/main/assets/portraits/portrait_kepler_03.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/portraits/portrait_40.png"
+  image: "/main/assets/portraits/portrait_kepler_04.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_kepler_05.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_kepler_06.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_kepler_07.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_kepler_08.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_kepler_09.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_kepler_10.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_kepler_11.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_kepler_12.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_01.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_02.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_03.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_04.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_05.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_06.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_07.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_08.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_09.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_10.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_11.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_cartel_12.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_01.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_02.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_03.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_04.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_05.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_06.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_07.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_08.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_09.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_10.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_11.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/portraits/portrait_silicate_12.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 margin: 0

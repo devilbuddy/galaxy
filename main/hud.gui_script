@@ -652,13 +652,16 @@ local function build_sheet(self, w, pad)
 			for c = 1, #view.contacts do
 				local rival = view.contacts[c]
 				if rival.at == id then
-					y = y - 34
-					ui.icon(inner, y + 10, 22, "icon_warship",
-						player_colour(rival.owner))
-					ui.small(inner + 30, y,
-						(rival.rank or "A rival captain")
-							.. "   " .. tostring(rival.strength or 0),
+					-- A face, not a bullet point. Portraits are grouped by race
+					-- so this is also how you read *whose* fleet it is without
+					-- being handed the officer's name.
+					y = y - 46
+					ui.portrait(inner, y + 40, 36, rival.portrait,
+						{ ring_colour = player_colour(rival.owner) })
+					ui.small(inner + 46, y + 24, rival.rank or "A rival captain",
 						ui.BAD)
+					ui.small(inner + 46, y + 4, tostring(rival.strength or 0)
+						.. " strength", ui.FAINT)
 				end
 			end
 		end

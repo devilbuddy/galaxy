@@ -3,11 +3,15 @@ Commander portraits
 
 Art by **Batareya**, from a set distributed as "PORTRAITS (by Batareya)".
 
-Forty of the five hundred images in that set were imported, resized to 128x128;
-see tools/import_portraits.py for exactly which and why the order matters.
+Seventy-two of the five hundred images in that set were imported, resized to
+128x128 and grouped into twelve per playable race. The source is not labelled,
+but it is drawn in species, and the six races already declare colours that land
+on those groups - so the grouping is measured from each image's dominant hue
+rather than classified by hand. See tools/import_portraits.py for the method and
+MANIFEST.json for exactly which images the current set is.
 
 LICENCE: NOT ESTABLISHED. The source archive carried no licence file. These are
 in the repository so the game builds and can be looked at, but the terms for
 using them in a released build have not been checked. Confirm the licence with
-the artist before shipping, or replace the set - swapping the forty files keeps
-every commander's portrait mapping intact.
+the artist before shipping, or replace the set - swapping the seventy-two files
+keeps every commander's portrait mapping intact.

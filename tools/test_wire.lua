@@ -74,6 +74,8 @@ do
 	local resolve = require("galaxy.sim.resolve")
 	local view = require("galaxy.sim.view")
 	local sim_path = require("galaxy.sim.path")
+	local races = require("galaxy.sim.races")
+	local commanders = require("galaxy.sim.commanders")
 
 	local galaxy = gen.build(424242, { star_count = 160 })
 	local lengths = sim_path.lane_lengths(galaxy)
@@ -148,6 +150,29 @@ do
 	local systems_mod = require("galaxy.sim.systems")
 	local kinds = {}
 	for id = 1, #galaxy.stars do kinds[systems_mod.kind(galaxy, id)] = true end
+	-- The sim names a portrait; the client resolves it against
+	-- main/portraits.atlas. Nothing connects the two but the string, and a
+	-- mismatch is invisible offline - `ui.portrait` swallows a missing id on
+	-- purpose, so the whole roster would quietly wear the fallback face.
+	check("every portrait the sim can name exists in the atlas", (function()
+		local atlas = io.open("main/portraits.atlas")
+		if not atlas then return false, "no atlas" end
+		local have = {}
+		for line in atlas:lines() do
+			local name = line:match('image:%s*"[^"]*/([^"/]+)%.png"')
+			if name then have[name] = true end
+		end
+		atlas:close()
+		local ids = races.ids()
+		for i = 1, #ids do
+			for n = 1, 40 do
+				local id = commanders.portrait(n, nil, ids[i])
+				if not have[id] then return false, id end
+			end
+		end
+		return true
+	end)())
+
 	check("system kinds are derivable client-side from the wire galaxy",
 		kinds.colony and kinds.outpost and kinds.waypoint)
 end
