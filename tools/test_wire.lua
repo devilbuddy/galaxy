@@ -126,6 +126,21 @@ do
 	check("and what it can spend, against what it could spend at full",
 		type(v.captains[1].strength) == "number"
 			and type(v.captains[1].max_strength) == "number")
+	-- The economy has to reach the client whole, or the sheet cannot price an
+	-- embarkation without re-implementing the rules.
+	check("the purse is on the wire", type(v.supply) == "number", v.supply)
+	check("and what it earns each turn",
+		type(v.rates.income) == "number" and v.rates.income > 0, v.rates.income)
+	check("what a unit costs and what it is worth",
+		type(v.rates.unit_cost) == "number" and type(v.rates.unit_strength) == "number")
+	check("a system says what it pays its owner",
+		type(mine.yield) == "number" and mine.yield > 0, mine.yield)
+	check("and a colony says how many units it has ready",
+		type(mine.stock) == "number", mine.stock)
+	check("a captain says what it can carry as well as what it has",
+		type(v.captains[1].base_strength) == "number"
+			and v.captains[1].max_strength > v.captains[1].base_strength)
+
 	check("a system somebody holds says what it defends at",
 		type(mine.defence) == "number", mine.defence)
 	check("and unclaimed ground says nothing, because there is nothing to take",

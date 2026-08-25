@@ -131,7 +131,10 @@ function M.new(galaxy, players)
 	}
 
 	for i = 1, #galaxy.stars do
-		state.systems[i] = { owner = 0, capital_of = 0 }
+		-- `stock` is units a colony holds ready. Only colonies ever accumulate
+		-- it, but every system carries the field so a JSON round trip does not
+		-- have to distinguish "no stock" from "cannot have stock".
+		state.systems[i] = { owner = 0, capital_of = 0, stock = 0 }
 	end
 
 	for i = 1, #players do
@@ -147,6 +150,10 @@ function M.new(galaxy, players)
 			capital = capital,
 			alive = true,
 			next_commander_number = 1,
+			-- The empire purse. Fungible across the whole map, which is what
+			-- makes it different from stock: supply can be earned in one arm
+			-- and spent in another, units cannot.
+			supply = 0,
 		}
 		state.systems[capital].owner = i
 		state.systems[capital].capital_of = i
@@ -177,6 +184,10 @@ function M.add_captain(state, owner, at)
 		-- depends on the player's race and this is called from places that do
 		-- not have their modifiers; `commanders.strength` reads a missing value
 		-- as full, which is what a newly raised officer is.
+		--
+		-- It no longer comes back on its own. A captain that has spent itself
+		-- has to reach a colony with units in stock and an empire that can pay
+		-- for them, which is what turns an economy into a map problem.
 		strength = nil,
 		at = at,
 		route = {},
@@ -288,6 +299,7 @@ function M.normalise(state)
 		if key then
 			sys.owner = tonumber(sys.owner) or 0
 			sys.capital_of = tonumber(sys.capital_of) or 0
+			sys.stock = tonumber(sys.stock) or 0
 			systems_out[key] = sys
 		end
 	end
@@ -343,6 +355,17 @@ function M.normalise(state)
 		-- a full complement, which is what every captain in a game that
 		-- predates strength should come back as.
 		c.strength = tonumber(c.strength)
+		-- Transient: set when an order is read and consumed the same turn in
+		-- the logistics phase. A value that survived a round trip would have a
+		-- captain buying again on a turn nobody asked it to.
+		c.buying = nil
+	end
+
+	for i = 1, #state.players do
+		local player = state.players[i]
+		-- Nil rather than zero for a game that predates the purse would read as
+		-- "no supply for ever": nothing else ever writes it.
+		player.supply = tonumber(player.supply) or 0
 	end
 
 	state.turn = tonumber(state.turn) or 0

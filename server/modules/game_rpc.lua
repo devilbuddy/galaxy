@@ -201,11 +201,18 @@ local function catch_up(game, game_version)
 							if id then route[#route + 1] = math.floor(id) end
 						end
 					end
+					-- **Every field an order kind carries has to be named here.**
+					-- This rebuild exists to put numbers back after a JSON
+					-- round trip, and it silently drops anything it does not
+					-- mention - which is how a resupply arrived at the resolver
+					-- asking for nil units and quietly bought nothing. The same
+					-- shape ate the old `fleet` field once already.
 					orders[#orders + 1] = {
 						player = i,
 						kind = o.kind,
 						captain = tonumber(o.captain),
 						route = route,
+						units = tonumber(o.units),
 					}
 				end
 			end
@@ -606,9 +613,13 @@ local function rpc_orders(context, payload)
 
 	local clean = {}
 
-	--- Drop earlier orders this one supersedes. A captain takes one order a
-	--- turn, so the array's position never carries meaning a client would have
-	--- to know about.
+	--- Drop earlier orders this one supersedes. A captain takes one order of
+	--- each kind a turn, so the array's position never carries meaning a client
+	--- would have to know about.
+	---
+	--- Matched on kind as well as captain: a captain may march onto one of its
+	--- own colonies *and* resupply there in the same turn, and a resupply that
+	--- superseded the march would leave it buying where it already stood.
 	local function replace(match)
 		for k = #clean, 1, -1 do
 			if match(clean[k]) then table.remove(clean, k) end
@@ -624,7 +635,27 @@ local function rpc_orders(context, payload)
 					kind = "move", captain = math.floor(captain),
 					route = clean_route(o.route) or {},
 				}
-				replace(function(c) return c.captain == entry.captain end)
+				replace(function(c)
+					return c.kind == "move" and c.captain == entry.captain
+				end)
+				clean[#clean + 1] = entry
+			end
+
+		elseif o.kind == "resupply" then
+			local captain = tonumber(o.captain)
+			if captain then
+				-- Shape only. Whether the colony has the units, whether the
+				-- purse can pay and whether the captain is even standing there
+				-- all depend on state that has moved on by resolution, so the
+				-- resolver clamps and reports.
+				local units = math.floor(tonumber(o.units) or 0)
+				if units < 0 then units = 0 end
+				local entry = {
+					kind = "resupply", captain = math.floor(captain), units = units,
+				}
+				replace(function(c)
+					return c.kind == "resupply" and c.captain == entry.captain
+				end)
 				clean[#clean + 1] = entry
 			end
 		end

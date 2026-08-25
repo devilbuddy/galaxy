@@ -167,6 +167,7 @@ function M.plan_signature()
 		end
 		parts[#parts + 1] = table.concat({
 			tostring(o.kind), tostring(o.captain), route,
+			tostring(o.units or ""),
 		}, ":")
 	end
 	return table.concat(parts, "|")

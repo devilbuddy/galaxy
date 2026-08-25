@@ -170,31 +170,52 @@ function M.steps(commander, mods)
 	return steps
 end
 
---- The most strength a captain can hold.
+--- What the officer is worth on their own, with nothing bought.
 --
--- Rank buys weight as well as reach, which is what makes a veteran able to
--- crack a capital when a fresh officer cannot: `rules.capital_defence` is set
--- above a level-one captain's whole ceiling on purpose.
---
--- A whole number, for the same reason `steps` is - the player is expected to do
--- this arithmetic themselves before committing to an attack, and half a point
--- of strength is not something anyone can hold in their head.
-function M.max_strength(commander, mods)
+-- Where a captain starts, and where a broken one reforms. Rank raises it, which
+-- is why a veteran is worth having before a single unit is loaded aboard.
+function M.base_strength(commander, mods)
 	local level = commander.level or 1
 	local base = rules.captain_strength
 		+ rules.strength_per_level * (level - 1)
 	return floor(base * ((mods and mods.attack) or 1) + 0.5)
 end
 
---- Strength in hand right now, never above the ceiling.
+--- How many bought units they can lead on top of that.
+function M.max_units(commander, mods)
+	local level = commander.level or 1
+	local units = rules.captain_units + rules.units_per_level * (level - 1)
+	if mods and (mods.attack or 1) > 1 then units = units + 1 end
+	return units
+end
+
+--- The most strength a captain can hold: their own, plus a full complement.
+--
+-- **Rank does not cap what a captain carries.** It used to - the ceiling was
+-- the rank base alone - and that walled the game shut: a fresh captain could
+-- not cover a defended colony, so could not win the battle that would have
+-- promoted them, so never got any stronger. Every game stalled with two players
+-- on three of the four regions they needed and full purses they could not
+-- spend.
+--
+-- A whole number, for the same reason `steps` is - the player is expected to do
+-- this arithmetic themselves before committing to an attack, and half a point
+-- of strength is not something anyone can hold in their head.
+function M.max_strength(commander, mods)
+	return M.base_strength(commander, mods)
+		+ M.max_units(commander, mods) * rules.unit_strength
+end
+
+--- Strength in hand right now, between the officer's own and a full hold.
 --
 -- Clamped on read rather than on write: the ceiling moves when a captain is
 -- promoted or demoted, and a value stored under the old one would otherwise
--- read as full when it is not, or sit above full forever.
+-- read as full when it is not, or sit above full forever. A missing value is a
+-- newly raised officer, who has their own command and nothing bought.
 function M.strength(commander, mods)
 	local cap = M.max_strength(commander, mods)
 	local have = tonumber(commander.strength)
-	if not have then return cap end
+	if not have then return M.base_strength(commander, mods) end
 	if have > cap then return cap end
 	if have < 0 then return 0 end
 	return have
@@ -213,6 +234,8 @@ function M.profile(commander, mods, race)
 		steps = M.steps(commander, mods),
 		strength = M.strength(commander, mods),
 		max_strength = M.max_strength(commander, mods),
+		base_strength = M.base_strength(commander, mods),
+		max_units = M.max_units(commander, mods),
 	}
 end
 

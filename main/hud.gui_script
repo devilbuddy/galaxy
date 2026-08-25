@@ -194,6 +194,9 @@ local function step_caption(step, you, name_of, place_of)
 		elseif e.kind == "battle" then
 			offer(2, (e.player == you and (e.name or "You") or name_of(e.player))
 				.. " took " .. place_of(e.at))
+		elseif e.kind == "resupplied" then
+			offer(2, (e.name or "A captain") .. " embarked "
+				.. tostring(e.units or 0) .. " at " .. place_of(e.at))
 		elseif e.kind == "claimed" then
 			offer(1, (e.player == you and "You claimed " or (name_of(e.player)
 				.. " claimed ")) .. place_of(e.at))
@@ -318,7 +321,7 @@ local function build_overview(self, w, h, pad)
 		function() monarch.show(hash("menu")) end,
 		{ background = ui.CARD_ALT, colour = ui.DIM })
 	local x = pad.left + 14
-	local column = ((w - pad.right - 28 - menu_size) - x) / 3
+	local column = ((w - pad.right - 28 - menu_size) - x) / 4
 	local function slot(i, icon, colour)
 		local cx = x + column * (i - 1)
 		return {
@@ -332,7 +335,11 @@ local function build_overview(self, w, h, pad)
 	-- game is has to be readable without opening anything.
 	self.overview.holdings = slot(1, "icon_star", ui.TEXT)
 	self.overview.regions = slot(2, "icon_flag", ui.ACCENT)
-	self.overview.clock = slot(3, "icon_clock", ui.DIM)
+	-- The purse. It is the one number a player has to watch between turns -
+	-- everything else on the map is a consequence of it - so it belongs here
+	-- rather than a tap away.
+	self.overview.supply = slot(3, "icon_industry", ui.GOOD)
+	self.overview.clock = slot(4, "icon_clock", ui.DIM)
 
 	-- A turn resolving while the map is open must not throw a popup over
 	-- somebody mid-read, so the digest is held rather than shown (see
@@ -340,7 +347,7 @@ local function build_overview(self, w, h, pad)
 	-- its own transparent node because the slot is three separate nodes and the
 	-- whole of it should be the target; picking here is an axis-aligned test
 	-- against position and size, so an invisible node is still pickable.
-	local clock_x = x + column * 2
+	local clock_x = x + column * 3
 	self.report_hit = ui.panel(clock_x - 8, y - 12, column, 74, ui.CLEAR)
 	self.report_button = self.druid:new_button(self.report_hit, function()
 		local digest = store.pending_report
@@ -463,14 +470,37 @@ end
 -- the server is holding, so the thing that has to be right is the list, and the
 -- only way to check a list is to read it.
 local function describe_order(o)
+	local captain = captain_by_id(o.captain)
+	local who = (captain and captain.name) or ("Captain " .. tostring(o.captain))
 	if o.kind == "move" then
-		local captain = captain_by_id(o.captain)
-		local who = (captain and captain.name) or ("Captain " .. tostring(o.captain))
 		local dest = o.route and o.route[#o.route]
 		if not dest then return who .. " holds position" end
 		return string.format("%s to %s", who, star_name(dest))
+	elseif o.kind == "resupply" then
+		return string.format("%s embarks %s", who, ui.plural(o.units or 0, "unit"))
 	end
 	return tostring(o.kind)
+end
+
+--- Stage a purchase for a captain standing on one of your colonies.
+--
+-- Its own order rather than a flag on the move, because the two are
+-- independent: a captain can march onto a colony and load there in the same
+-- turn, and the server supersedes per kind for exactly that reason.
+local function stage_resupply(self, captain_id, units)
+	if not captain_id or (units or 0) <= 0 then return end
+	for i = 1, #store.orders do
+		local o = store.orders[i]
+		if o.kind == "resupply" and o.captain == captain_id then
+			o.units = units
+			self.sheet_dirty = true
+			return
+		end
+	end
+	store.orders[#store.orders + 1] = {
+		kind = "resupply", captain = captain_id, units = units,
+	}
+	self.sheet_dirty = true
 end
 
 --- The plan as lines.
@@ -778,6 +808,60 @@ local function build_sheet(self, w, pad)
 			y = y - 44
 			ui.icon(inner, y + 14, 26, "icon_defence", ui.DIM)
 			ui.body(inner + 34, y, "Defends at " .. cost, ui.DIM)
+		end
+
+		-- **Buying, where the units are.** A colony of yours with anything ready
+		-- and a captain standing on it is the only place strength comes back,
+		-- so the whole transaction is stated here: what is in stock, what it
+		-- costs, and what the purse holds.
+		if mine and (info.stock or 0) > 0 and view then
+			local rates = view.rates or {}
+			local cost = rates.unit_cost or 0
+			local worth = rates.unit_strength or 0
+			y = y - 40
+			ui.caps(inner, y, "ready to embark")
+			y = y - 30
+			ui.body(inner, y, string.format("%d units   %d supply each",
+				info.stock, cost), ui.TEXT)
+
+			-- A captain of yours standing here, and what it could take on.
+			local aboard
+			for i = 1, #(view.captains or {}) do
+				local c = view.captains[i]
+				if c.at == id and (c.eta or 0) == 0 then aboard = c break end
+			end
+			local afford = cost > 0 and math.floor((view.supply or 0) / cost) or 0
+			local room = aboard and worth > 0
+				and math.floor(((aboard.max_strength or 0) - (aboard.strength or 0)) / worth)
+				or 0
+			local take = math.min(info.stock, afford, room)
+
+			y = y - 56
+			if not aboard then
+				ui.small(inner, y + 28, "A captain has to be here to load them",
+					ui.FAINT)
+			else
+				-- The count is on the button, not hidden behind it. Launching
+				-- used to send half a garrison silently and that is exactly the
+				-- shape this must not take.
+				local label = take > 0
+					and string.format("EMBARK %d   %d", take, take * cost)
+					or "EMBARK"
+				local handle = ui.button(self.sheet_druid, inner, y + 44,
+					text_w, ui.CONTROL, label,
+					function()
+						stage_resupply(self, aboard.id, take)
+					end, { style = "primary", size = ui.CAPS })
+				if take <= 0 then
+					handle.set_enabled(false)
+					ui.small(inner, y - 6,
+						afford <= 0 and "Not enough supply"
+							or (room <= 0 and "No room aboard" or "Nothing ready"),
+						ui.WARN)
+					y = y - 26
+				end
+			end
+			y = y - 12
 		end
 
 		-- Captains standing here, and what can be asked of them.
@@ -1647,7 +1731,7 @@ local function refresh_overview(self)
 
 	gui.set_enabled(o.card, on)
 	gui.set_enabled(o.border, on)
-	local slots = { o.holdings, o.regions, o.clock }
+	local slots = { o.holdings, o.regions, o.supply, o.clock }
 	for i = 1, #slots do
 		gui.set_enabled(slots[i].icon, on)
 		gui.set_enabled(slots[i].value, on)
@@ -1665,6 +1749,12 @@ local function refresh_overview(self)
 	gui.set_text(o.regions.value, string.format("%d/%d", held, needed))
 	gui.set_text(o.regions.note, held >= needed and "victory" or "regions")
 	gui.set_color(o.regions.value, held >= needed and ui.GOOD or ui.TEXT)
+
+	gui.set_text(o.supply.value, ui.number(view.supply or 0))
+	-- What it earns, not just what it holds: the rate is what a player plans
+	-- against, and it is the only thing on this bar that says whether taking
+	-- more ground is paying for itself.
+	gui.set_text(o.supply.note, "+" .. tostring(rates.income or 0) .. " supply")
 
 	gui.set_text(o.clock.value, "Turn " .. tostring(view.turn or 0))
 	local report = store.pending_report

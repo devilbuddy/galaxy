@@ -279,10 +279,9 @@ do
 	check("a battle is reported", battle ~= nil and battle.at == target)
 	check("it cost exactly the resistance",
 		battle and battle.resistance == cost, battle and battle.resistance)
-	-- Recovery runs in the aftermath of the same turn, so the strength left is
-	-- what was spent plus one turn's resupply on ground that is now ours.
+	-- Nothing comes back on its own, so this is exactly what was spent.
 	check("strength was spent taking it",
-		commanders.strength(captain, mods) <= before - cost + rules.strength_recovery,
+		commanders.strength(captain, mods) == before - cost,
 		commanders.strength(captain, mods))
 	check("and the fight was worth experience", (captain.xp or 0) == cost,
 		captain.xp)
@@ -343,67 +342,128 @@ do
 	check("their route is gone with them", #s.captains[2].route == 0)
 end
 
-print("strength comes back, but only on your own ground")
+print("an empire pays, and colonies make ready")
+do
+	local s = new_game(2)
+	local capital = s.players[1].capital
+	res.turn(GALAXY, s, {}, LENGTHS)
+	local after_one = s.players[1].supply
+	check("holding ground pays every turn", after_one > 0, after_one)
+	check("and it is what the systems are worth",
+		after_one == systems.yield(GALAXY, capital), after_one)
+
+	-- A colony makes a unit ready on the cadence, whether or not anyone visits.
+	local was = s.systems[capital].stock
+	for _ = 1, rules.colony_stock_turns * 2 do res.turn(GALAXY, s, {}, LENGTHS) end
+	check("a colony holds units ready without being visited",
+		s.systems[capital].stock > was, s.systems[capital].stock)
+
+	for _ = 1, rules.colony_stock_cap * rules.colony_stock_turns * 2 do
+		res.turn(GALAXY, s, {}, LENGTHS)
+	end
+	check("but never more than the cap",
+		s.systems[capital].stock == rules.colony_stock_cap,
+		s.systems[capital].stock)
+
+	-- A waypoint is terrain that pays a little; a colony pays best. Every kind
+	-- is worth taking, for a different reason.
+	local kinds = { colony = nil, outpost = nil, waypoint = nil }
+	for id = 1, #GALAXY.stars do
+		local k = systems.kind(GALAXY, id)
+		if kinds[k] == nil then kinds[k] = systems.yield(GALAXY, id) end
+	end
+	check("every kind of place pays something",
+		(kinds.waypoint or 0) > 0 and (kinds.outpost or 0) > 0
+			and (kinds.colony or 0) > 0)
+end
+
+print("strength is bought, not waited for")
 do
 	local s = new_game(2)
 	local captain = s.captains[1]
 	local mods = modifiers.of(s.players[1])
-	local full = commanders.max_strength(captain, mods)
+	local capital = s.players[1].capital
+	local base = commanders.base_strength(captain, mods)
 
-	-- At the capital: the fastest recovery there is.
-	captain.strength = 0
+	-- Nothing comes back on its own any more.
+	captain.strength = 1
 	res.turn(GALAXY, s, {}, LENGTHS)
-	check("a captain refits fastest at their capital",
-		commanders.strength(captain, mods) == math.min(full, rules.capital_recovery),
+	check("a spent captain does not refill by standing still",
+		commanders.strength(captain, mods) == 1,
 		commanders.strength(captain, mods))
 
-	-- On ordinary ground the player holds: slower.
-	local own = GALAXY.adjacency[captain.at][1]
-	s.systems[own].owner = 1
-	captain.at = own
-	captain.strength = 0
-	res.turn(GALAXY, s, {}, LENGTHS)
-	check("slower on ordinary ground they hold",
-		commanders.strength(captain, mods) == rules.strength_recovery,
+	-- Stock it, fund it, and buy.
+	s.systems[capital].stock = rules.colony_stock_cap
+	s.players[1].supply = rules.unit_cost * rules.colony_stock_cap
+	local before_stock = s.systems[capital].stock
+	local ev = res.turn(GALAXY, s, {
+		{ player = 1, kind = "resupply", captain = captain.id, units = 3 },
+	}, LENGTHS)
+	local bought
+	for i = 1, #ev do if ev[i].kind == "resupplied" then bought = ev[i] end end
+	check("a captain on its own colony buys what it asked for",
+		bought and bought.units == 3, bought and bought.units)
+	check("strength goes up by what a unit is worth",
+		commanders.strength(captain, mods) == 1 + 3 * rules.unit_strength,
 		commanders.strength(captain, mods))
+	-- Buying and making ready both happen this turn, in that order, so a colony
+	-- on the cadence hands over three and has one back before the turn ends.
+	local accrued = ((s.turn % rules.colony_stock_turns) == 0) and 1 or 0
+	check("the colony has that many fewer ready",
+		s.systems[capital].stock == before_stock - 3 + accrued,
+		s.systems[capital].stock)
+	check("and the purse paid for them", bought.cost == 3 * rules.unit_cost)
 
-	-- In space nobody holds: not at all. An army out of supply is what stops a
-	-- deep raid running for ever.
-	local neutral
-	for _, id in ipairs(GALAXY.adjacency[own]) do
-		if s.systems[id].owner == 0 then neutral = id break end
-	end
-	if neutral then
-		s.systems[neutral].owner = 0
-		captain.at = neutral
-		captain.strength = 0
-		-- Resupply reads where the captain stands; claiming happens in
-		-- movement, so a parked captain on neutral ground stays out of supply.
-		res.turn(GALAXY, s, {}, LENGTHS)
-		check("and not at all out of supply",
-			commanders.strength(captain, mods) == 0,
-			commanders.strength(captain, mods))
-	end
-
-	check("never above the ceiling", (function()
-		captain.at = s.players[1].capital
-		s.systems[captain.at].owner = 1
-		captain.strength = full
-		res.turn(GALAXY, s, {}, LENGTHS)
-		return commanders.strength(captain, mods) == full
-	end)())
+	-- Rank does not cap what a captain carries; it sets where they start.
+	check("a fresh captain starts on their own command alone",
+		commanders.strength({ level = 1 }, mods) == base, base)
+	check("and can lead far more than that once bought",
+		commanders.max_strength({ level = 1 }, mods) > base * 1.5,
+		commanders.max_strength({ level = 1 }, mods))
 end
 
-print("a capital needs a veteran")
+print("what a resupply cannot do")
+do
+	local function attempt(prepare)
+		local s = new_game(2)
+		local captain = s.captains[1]
+		local capital = s.players[1].capital
+		s.systems[capital].stock = rules.colony_stock_cap
+		s.players[1].supply = 999
+		captain.strength = 1
+		prepare(s, captain)
+		local ev = res.turn(GALAXY, s, {
+			{ player = 1, kind = "resupply", captain = captain.id, units = 4 },
+		}, LENGTHS)
+		for i = 1, #ev do
+			if ev[i].kind == "resupplied" then return "bought", ev[i] end
+			if ev[i].kind == "order_rejected" then return ev[i].reason end
+		end
+		return "nothing"
+	end
+
+	check("not somewhere you do not hold",
+		attempt(function(s, c) c.at = GALAXY.adjacency[c.at][1] end)
+			== "not your colony")
+	check("not from a colony with nothing ready",
+		attempt(function(s) s.systems[s.players[1].capital].stock = 0 end)
+			== "nothing in stock")
+	check("and not on an empty purse",
+		attempt(function(s) s.players[1].supply = 0 end) == "not enough supply")
+end
+
+print("a capital needs an army")
 do
 	local s = new_game(2)
 	local capital = s.players[2].capital
 	local defence = systems.defence(GALAXY, capital, true, modifiers.of(s.players[2]))
-	local green = commanders.max_strength({ level = 1 }, modifiers.of(s.players[1]))
-	check("a fresh captain cannot crack one at full strength", green < defence,
-		green .. " vs " .. defence)
-	check("but a promoted one can", commanders.max_strength(
-		{ level = rules.commander_max_level }, modifiers.of(s.players[1])) >= defence)
+	local mine = modifiers.of(s.players[1])
+	check("a fresh captain cannot crack one on their own command",
+		commanders.base_strength({ level = 1 }, mine) < defence,
+		commanders.base_strength({ level = 1 }, mine) .. " vs " .. defence)
+	check("but can once they have bought enough",
+		commanders.max_strength({ level = 1 }, mine) >= defence,
+		commanders.max_strength({ level = 1 }, mine))
 end
 
 print("what a rival saw of your march")

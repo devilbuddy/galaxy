@@ -86,9 +86,13 @@ local needed = regions.needed(galaxy)
 
 print()
 for i = 1, #state.players do
-	print(string.format("  %-19s %-9s regions %2d/%-2d  systems %3d  captain at %4d",
+	-- An eliminated player has no captains at all: their empire falls open and
+	-- their officers leave the board with it.
+	local captain = st.captains_of(state, i)[1]
+	print(string.format("  %-19s %-9s regions %2d/%-2d  systems %3d  captain %s",
 		state.players[i].name, state.players[i].race, tally[i] or 0, needed,
-		st.holdings_of(state, i), st.captains_of(state, i)[1].at))
+		st.holdings_of(state, i),
+		captain and ("at " .. captain.at) or "-- out --"))
 end
 
 local claimed = 0

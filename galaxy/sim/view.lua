@@ -131,6 +131,11 @@ function M.project(galaxy, state, player)
 			-- Nil for unowned ground: there is nothing to take it off.
 			defence = sys.owner ~= 0 and systems.defence(galaxy, id,
 				sys.capital_of == sys.owner, defence_mods[sys.owner]) or nil,
+			-- What a system pays its owner, and what a colony has ready. Both
+			-- public where you can see the system: the yield is derived from
+			-- the star, and stock is already visible in the defence above.
+			yield = systems.yield(galaxy, id),
+			stock = systems.is_colony(galaxy, id) and (sys.stock or 0) or nil,
 		}
 	end
 	for id, seen in pairs(memory) do
@@ -166,6 +171,12 @@ function M.project(galaxy, state, player)
 				steps = profile.steps,
 				strength = profile.strength,
 				max_strength = profile.max_strength,
+				-- What the officer is worth alone, and how many bought units
+				-- they can lead on top. The sheet prices an embarkation from
+				-- the gap between strength and max_strength; these say *why*
+				-- the gap is that size.
+				base_strength = profile.base_strength,
+				max_units = profile.max_units,
 			}
 		elseif visible[c.at] or (c.route[1] and visible[c.route[1]]) then
 			-- **A rival's strength is shown, not just their rank.** Combat is a
@@ -223,13 +234,28 @@ function M.project(galaxy, state, player)
 		regions_needed = regions_mod.needed(galaxy),
 		regions_held = regions_mod.tally(galaxy, state, held)[player] or 0,
 		-- The numbers the client needs to explain itself.
+		-- The purse. Fungible across the map, and the one number a player has to
+		-- watch between turns.
+		supply = me.supply or 0,
 		rates = {
 			systems = state_mod.holdings_of(state, player),
 			steps = commanders.steps({ level = 1 }, mods),
 			hops = mods.hops,
 			vision = mods.vision,
-			recovery = rules.strength_recovery,
-			capital_recovery = rules.capital_recovery,
+			-- What a unit costs and what it is worth, so the client can price a
+			-- resupply without re-implementing the rule.
+			unit_cost = rules.unit_cost,
+			unit_strength = rules.unit_strength,
+			stock_cap = rules.colony_stock_cap,
+			income = (function()
+				local total = 0
+				for id, sys in pairs(state.systems) do
+					if sys.owner == player then
+						total = total + systems.yield(galaxy, id)
+					end
+				end
+				return total
+			end)(),
 		},
 	}
 end

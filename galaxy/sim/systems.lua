@@ -131,6 +131,22 @@ function M.defence(galaxy, id, capital, mods)
 	return math.floor(base * scale + 0.5)
 end
 
+--- Supply a system pays its owner each turn.
+--
+-- The star's own `industry` finally reads for something. It has been derived
+-- from the class and feature since the generator was written and used by
+-- nothing, which is why it survived the rebuild: it is exactly the number a
+-- system's worth should be priced against.
+--
+-- A whole number, and never less than one, so every system a player holds is
+-- worth holding and the sheet can state it without a decimal.
+function M.yield(galaxy, id)
+	local profile = M.profile(galaxy, id)
+	local base = rules.supply_yield[profile.kind] or 0
+	if base <= 0 then return 0 end
+	return math.max(1, math.floor(base * profile.industry + 0.5))
+end
+
 function M.is_colony(galaxy, id)
 	return M.profile(galaxy, id).kind == M.COLONY
 end

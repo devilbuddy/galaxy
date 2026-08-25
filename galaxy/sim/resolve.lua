@@ -8,7 +8,7 @@
 -- The game is being rebuilt from the ground up. A turn is currently four
 -- phases, not nine:
 --
---   **orders → movement → aftermath → visibility**
+--   **orders → movement → logistics → aftermath → visibility**
 --
 -- Production, research and buildings have all been taken out; combat has been
 -- built back, as one comparison. Captains move along lanes, claim what they
@@ -97,7 +97,18 @@ local function captain_orders(galaxy, state, orders, mods, lengths, events)
 			emit(events, e)
 		end
 
-		if order.kind == "move" then
+		if order.kind == "resupply" then
+			local captain = state_mod.captain_by_id(state, order.captain)
+			if not captain or captain.owner ~= who then
+				reject("no such captain", { captain = order.captain })
+			else
+				-- Recorded rather than acted on: a captain buys where it *ends*
+				-- the turn, so an order can move onto a colony and resupply
+				-- there in one go. Movement has not run yet.
+				captain.buying = math.max(0, floor(tonumber(order.units) or 0))
+			end
+
+		elseif order.kind == "move" then
 			local captain = state_mod.captain_by_id(state, order.captain)
 			if not captain or captain.owner ~= who then
 				reject("no such captain", { captain = order.captain })
@@ -177,7 +188,11 @@ local function break_defenders(state, mods, id, owner, events)
 		if c.owner == owner and c.at == id then
 			local home = state_mod.refuge(state, c)
 			c.route = {}
-			c.strength = 0
+			-- Nil, not zero: the officer survived and reforms with their own
+			-- command. Everything they were carrying is gone, which is cost
+			-- enough - leaving them at nothing would make a single lost battle
+			-- unrecoverable for a player who cannot afford to re-arm.
+			c.strength = nil
 			commanders.demote(c)
 			c.at = home
 			emit(events, {
@@ -251,6 +266,11 @@ local function movement(galaxy, state, mods, events)
 				-- their capital - which matters when the capital *is* the
 				-- system falling.
 				break_defenders(state, mods, next_id, defender, events)
+				-- The stock scatters rather than changing hands: units raised
+				-- for one empire do not serve the next, and a colony that
+				-- handed its conqueror an instant army would make taking one
+				-- pay for itself twice over.
+				sys.stock = 0
 				captain.strength = have - cost
 				-- Promotion is reported when the *title* changes, not when the
 				-- level does. Ranks span two levels each, so awarding a level
@@ -304,22 +324,90 @@ local function movement(galaxy, state, mods, events)
 	end
 end
 
---- Strength comes back, but only on ground you hold.
+--- Buy the units a captain asked for, wherever it ended up.
 --
--- An army in somebody else's space is an army out of supply: it is what stops a
--- deep raid running forever, and what makes the trip home mean something. The
--- capital is much faster, because it is the one place that will later be able
--- to build.
-local function resupply(state, mods)
+-- **Where it ends the turn, not where it started.** A captain that marches onto
+-- one of its own colonies resupplies the same turn, which is what makes a trip
+-- home a single order rather than two turns of waiting. Movement is discrete
+-- and the route is drawn before it is sent, so the player knows exactly where
+-- the captain will be standing.
+--
+-- Everything is clamped rather than refused: what the colony has, what the
+-- purse can pay for, and what the captain can still carry. A player asking for
+-- six and getting four has been given the four, which is what they wanted; the
+-- event says what actually happened.
+local function logistics(galaxy, state, mods, events)
 	for i = 1, #state.captains do
 		local captain = state.captains[i]
-		local sys = state.systems[captain.at]
-		if sys and sys.owner == captain.owner then
+		local want = captain.buying
+		captain.buying = nil
+		if want and want > 0 then
+			local player = state.players[captain.owner]
+			local sys = state.systems[captain.at]
 			local my_mods = mods[captain.owner]
-			local gain = (sys.capital_of == captain.owner)
-				and rules.capital_recovery or rules.strength_recovery
-			local cap = commanders.max_strength(captain, my_mods)
-			captain.strength = min(cap, commanders.strength(captain, my_mods) + gain)
+			local have = commanders.strength(captain, my_mods)
+			local room = commanders.max_strength(captain, my_mods) - have
+			local afford = floor((player.supply or 0) / rules.unit_cost)
+			local take = min(want, sys.stock or 0, afford,
+				floor(room / rules.unit_strength))
+
+			if sys.owner ~= captain.owner then
+				emit(events, {
+					kind = "order_rejected", turn = state.turn,
+					player = captain.owner, captain = captain.id,
+					reason = "not your colony", visible_to = { captain.owner },
+				})
+			elseif take <= 0 then
+				emit(events, {
+					kind = "order_rejected", turn = state.turn,
+					player = captain.owner, captain = captain.id,
+					reason = (sys.stock or 0) == 0 and "nothing in stock"
+						or (afford <= 0 and "not enough supply" or "no room aboard"),
+					visible_to = { captain.owner },
+				})
+			else
+				sys.stock = sys.stock - take
+				player.supply = player.supply - take * rules.unit_cost
+				captain.strength = have + take * rules.unit_strength
+				emit(events, {
+					kind = "resupplied", turn = state.turn,
+					player = captain.owner, captain = captain.id,
+					name = captain.name, at = captain.at,
+					units = take, cost = take * rules.unit_cost,
+					strength = captain.strength,
+					visible_to = { captain.owner },
+				})
+			end
+		end
+	end
+end
+
+--- What every system paid its owner, and what every colony made ready.
+--
+-- Stock accrues on a fixed cadence rather than per colony, so a player can read
+-- "another unit every other turn" off the rules instead of tracking a timer per
+-- world. It accumulates whether or not anyone visits and does not decay: a
+-- distant colony is not wasted production, it is a reason to march.
+local function economy(galaxy, state, summaries)
+	local ready = (state.turn % rules.colony_stock_turns) == 0
+	local earned = {}
+	for id, sys in pairs(state.systems) do
+		if sys.owner ~= 0 then
+			earned[sys.owner] = (earned[sys.owner] or 0)
+				+ systems_mod.yield(galaxy, id)
+			if ready and systems_mod.is_colony(galaxy, id)
+				and (sys.stock or 0) < rules.colony_stock_cap then
+				sys.stock = (sys.stock or 0) + 1
+			end
+		end
+	end
+	for i = 1, #state.players do
+		local gained = earned[i] or 0
+		state.players[i].supply = (state.players[i].supply or 0) + gained
+		local s = summaries[i]
+		if s then
+			s.supply = state.players[i].supply
+			s.earned = gained
 		end
 	end
 end
@@ -327,13 +415,38 @@ end
 -- 3. Aftermath ------------------------------------------------------------------
 
 local function aftermath(galaxy, state, mods, events, summaries)
-	resupply(state, mods)
-
 	for i = 1, #state.players do
 		local player = state.players[i]
 		if player.alive and not state_mod.is_alive(state, i) then
 			player.alive = false
-			emit(events, { kind = "eliminated", turn = state.turn, player = i })
+			-- **Their empire collapses with them.** A dead player used to keep
+			-- every system they held, for ever: they never took another turn,
+			-- but their borders still stood and their regions still counted, so
+			-- everyone else was permanently locked out of a quarter of the map
+			-- and no game could reach the victory threshold again. Every long
+			-- game froze exactly this way.
+			--
+			-- The ground goes back to unclaimed rather than to the conqueror,
+			-- because it was never taken - and an empire falling open is what
+			-- gives the survivors somewhere to go next.
+			local released = 0
+			for _, sys in pairs(state.systems) do
+				if sys.owner == i then
+					sys.owner = 0
+					sys.stock = 0
+					sys.capital_of = 0
+					released = released + 1
+				end
+			end
+			for k = #state.captains, 1, -1 do
+				if state.captains[k].owner == i then
+					table.remove(state.captains, k)
+				end
+			end
+			emit(events, {
+				kind = "eliminated", turn = state.turn, player = i,
+				released = released,
+			})
 		end
 	end
 
@@ -516,12 +629,15 @@ function M.turn(galaxy, state, orders, lengths)
 	local summaries = {}
 	local mods = {}
 	for i = 1, #state.players do
-		summaries[i] = { claimed = 0, taken = 0 }
+		summaries[i] = { claimed = 0, taken = 0, supply = 0, earned = 0 }
 		mods[i] = modifiers.of(state.players[i])
 	end
 
 	captain_orders(galaxy, state, orders, mods, lengths, events)
 	movement(galaxy, state, mods, events)
+	-- After movement, because a captain buys where it *ends* the turn.
+	logistics(galaxy, state, mods, events)
+	economy(galaxy, state, summaries)
 
 	for e = 1, #events do
 		local kind = events[e].kind

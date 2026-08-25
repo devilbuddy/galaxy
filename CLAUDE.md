@@ -226,7 +226,7 @@ game is reconstructable from `(seed, order history)`.
 | `resolve.lua` | the four phases of a turn |
 | `view.lua` | fog of war: detection range, remembered state, per-player projection |
 
-Turn order is **orders → movement → aftermath → visibility**. It was nine
+Turn order is **orders → movement → logistics → aftermath → visibility**. It was nine
 phases; five of them belonged to production and went with it. Combat lives
 inside movement rather than in a phase of its own, because it is what happens
 when a captain tries to enter a system - not a separate step.
@@ -274,16 +274,16 @@ The per-turn RNG stream is still derived. Nothing rolls it.
 |---|---|
 | `rules.defence` | `waypoint 2, outpost 5, colony 9`, plus `capital_defence 12` |
 | `rules.captain_strength` | 12 at level one, `+3` a level |
-| `rules.strength_recovery` | `3` a turn on ground you hold, `8` at your capital |
+| `rules.unit_cost` / `unit_strength` | `20` supply for `2` strength |
 
 Two consequences worth keeping:
 
 - **A capital needs a veteran.** `capital_defence` puts a capital above a fresh
   captain's entire ceiling, so eliminating a player takes an officer who has been
   winning - not an opening rush.
-- **Strength comes back only on ground you hold**, which is what stops a deep
-  raid running for ever and what makes the trip home mean something. It is also
-  the placeholder a city producing unit types will replace.
+- **Strength does not come back on its own.** It is bought - see the economy
+  below - which is what stops a deep raid running for ever and what makes the
+  trip home mean something.
 
 **A defeated captain is broken, not killed** (`commanders.demote`): thrown back
 to its capital at zero strength and stripped of a rank. With one captain each, an
@@ -318,6 +318,60 @@ game - the same setting produced 13 colonies on one seed and 26 on another. The
 count is topped up deterministically, most habitable classes first with ties
 broken by index, so every seed is fair while *which* worlds are habitable stays
 driven by the roll.
+
+#### The economy: one currency, and one thing it cannot buy
+
+**Supply is fungible; units are not.** Every system you hold pays supply each
+turn, scaled by the star's own `industry` — a number the generator has computed
+since it was written and nothing read until now. Units accumulate *only* at
+colonies, up to `colony_stock_cap`, and become strength *only* where a captain
+is standing. So wealth alone never wins a front: it converts to force at a
+colony, and somebody has to walk there.
+
+| | pays | builds |
+|---|---|---|
+| waypoint | a little | — |
+| outpost | more, by `industry` | — |
+| colony | most | units, to a cap |
+
+That is the first time the three kinds of place mean three different things.
+
+**Availability accumulates whether or not you visit, and does not decay.** A
+distant colony is not wasted production - it is a reason to march. That is
+lifted straight from Heroes of Might and Magic, along with the shape that makes
+it a decision at all: **you have to pay for what is available.** Without the
+cost, collecting is a chore rather than a choice, and you always take
+everything.
+
+**Rank sets where a captain starts, not what they can carry.** `base_strength`
+is the officer's own command and where a broken one reforms; `max_units` is what
+they can lead on top of it, and it is generous. Capping the *total* at the rank
+base walled the game shut - a fresh captain could not cover a defended colony,
+so could never win the battle that would have promoted them, so never got any
+stronger. Every game froze with two players on three of the four regions they
+needed and full purses they could not spend.
+
+**Stock deliberately does not defend the colony holding it.** It did, and it
+nearly doubled what a colony cost to take, which re-froze the map that combat
+had just unfrozen: defence accumulated for free while an attacker had to carry
+theirs across the galaxy. Fortifying will be a choice a player makes, not
+something that happens to a world nobody visited.
+
+**A captain buys where it *ends* the turn**, so a march onto one of your own
+colonies and an embarkation there are one turn's work. The RPC supersedes per
+*kind* for that reason - a resupply that superseded the march would leave the
+captain buying where it already stood.
+
+The numbers were measured, not guessed (`tools/play.lua`):
+
+| | median 4-player game |
+|---|---|
+| stock cap 4, every 2 turns | 283 turns |
+| **stock cap 6, every 2 turns** | **190 turns** |
+| stock cap 4 or 6, *every* turn | never decides |
+
+Making stock accrue every turn is worse than either: a front where both sides
+refit as fast as they can spend never moves.
 
 #### Capitals
 
@@ -437,6 +491,9 @@ early finishes with a tenth of the map and no way back.
 orders between them, and the map is public while state is fogged.
 
 RPCs in `server/modules/game_rpc.lua`:
+
+One order was two. `game.orders` now takes `move` and `resupply`, and a captain
+may carry one of each in a turn.
 
 | rpc | purpose |
 |---|---|
@@ -1430,13 +1487,18 @@ The game is a foundation being built back up, so most of what is missing is
 missing on purpose. These are the things that are *not* on that plan, or that
 will bite whoever touches them.
 
-- **There is nothing to build.** No production, no upgrades, no unit types. The
-  only thing strength is spent on is taking ground, and the only place it comes
-  from is a rule rather than a city. Pacing and balance are therefore still
-  measuring a skeleton.
-- **A boxed-in player has no way back.** Combat means a border can now be pushed,
-  which is most of the old version of this problem - but nothing rubber-bands,
-  and a player ground down to their capital has no way to rebuild a captain.
+- **There are no buildings yet.** Colonies produce at a fixed rate to a fixed
+  cap; nothing raises either, nothing fortifies, and nothing raises a second
+  captain. Supply therefore has exactly one sink and a large empire's purse runs
+  away from it - a leader with a hundred systems banks tens of thousands it
+  cannot spend. Buildings (Yards / Works / Bastion / Admiralty) are the next
+  step and are what absorb it.
+- **There are no unit *types*.** A unit is two strength and nothing else, so an
+  army has no shape and a battle stays one comparison.
+- **A boxed-in player has no way back.** Combat means a border can be pushed and
+  a fallen empire's ground falls open again, which is most of the old version of
+  this problem - but nothing rubber-bands, and income is still linear in
+  territory.
 - **Half of each race is still inert.** `modifiers.of` now folds speed, hops,
   vision, attack and defence, so races differ meaningfully - but growth,
   industry, research, capacity and the cost keys are read by nothing until

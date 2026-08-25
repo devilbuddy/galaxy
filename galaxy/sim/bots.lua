@@ -24,6 +24,7 @@
 -- things it can pay for.
 
 local rng = require("galaxy.rng")
+local rules = require("galaxy.sim.rules")
 local state_mod = require("galaxy.sim.state")
 local systems = require("galaxy.sim.systems")
 local commanders = require("galaxy.sim.commanders")
@@ -59,6 +60,34 @@ local function cost_of(galaxy, state, mods, id)
 	return total
 end
 
+--- Walk back up the search tree to the route that reaches `id`.
+--
+-- **The route matters, not just the destination.** A bot picks its target by
+-- walking only through ground it already holds - but an order carries a
+-- destination, and `resolve.expand_route` pathfinds it across the *whole*
+-- graph, which will happily route through somebody else's space and be turned
+-- back at the border. Naming every step as a waypoint is what makes the order
+-- take the path the bot actually reasoned about.
+--
+-- Truncated to what a captain is allowed to plot, so a depot on the far side of
+-- an empire produces a march in its direction rather than "no route" - which is
+-- what a hundred and twenty of these were.
+local function route_to(parent, id, limit)
+	local reversed = {}
+	local at = id
+	while at do
+		reversed[#reversed + 1] = at
+		at = parent[at]
+	end
+	local route = {}
+	-- Drop the start, which the captain is already standing on.
+	for i = #reversed - 1, 1, -1 do
+		route[#route + 1] = reversed[i]
+		if #route >= limit then break end
+	end
+	return route
+end
+
 --- The nearest systems worth going to, reachable without crossing a border.
 --
 -- Breadth-first out from `from`, walking only through space this player already
@@ -71,6 +100,7 @@ end
 -- captain back at the border and the trip would be wasted.
 local function reachable_targets(galaxy, state, mods, player, from, strength, limit)
 	local dist = { [from] = 0 }
+	local parent = {}
 	local queue, head = { from }, 1
 	local found = {}
 
@@ -82,6 +112,7 @@ local function reachable_targets(galaxy, state, mods, player, from, strength, li
 			local n = neighbours[k]
 			if not dist[n] then
 				dist[n] = dist[id] + 1
+				parent[n] = id
 				local owner = state.systems[n].owner
 				if owner == 0 then
 					found[#found + 1] = { id = n, hops = dist[n], cost = 0 }
@@ -97,7 +128,40 @@ local function reachable_targets(galaxy, state, mods, player, from, strength, li
 			end
 		end
 	end
+	-- Every candidate carries the road the search took to reach it, because the
+	-- destination alone is not enough - see route_to.
+	for i = 1, #found do
+		found[i].route = route_to(parent, found[i].id, rules.max_route_hops)
+	end
 	return found
+end
+
+--- The nearest colony of this player's that has anything worth collecting.
+--
+-- Same walk as `reachable_targets`, through their own ground only - a captain
+-- that has to fight its way to a depot arrives with nothing to put in it.
+local function nearest_depot(galaxy, state, player, from)
+	local parent = {}
+	local seen = { [from] = true }
+	local queue, head = { from }, 1
+	while head <= #queue do
+		local id = queue[head]
+		head = head + 1
+		local sys = state.systems[id]
+		if sys.owner == player and (sys.stock or 0) > 0 and id ~= from then
+			return id, route_to(parent, id, rules.max_route_hops)
+		end
+		local neighbours = galaxy.adjacency[id]
+		for k = 1, #neighbours do
+			local n = neighbours[k]
+			if not seen[n] and state.systems[n].owner == player then
+				seen[n] = true
+				parent[n] = id
+				queue[#queue + 1] = n
+			end
+		end
+	end
+	return nil
 end
 
 --- Score a candidate. Near beats far, and something worth holding beats rock.
@@ -130,8 +194,42 @@ function M.orders(galaxy, state, player)
 		-- usually still the best one.
 		if state_mod.is_parked(captain) then
 			local strength = commanders.strength(captain, mods[player])
-			local targets = reachable_targets(galaxy, state, mods, player,
-				captain.at, strength, 12)
+			local full = commanders.max_strength(captain, mods[player])
+			local purse = state.players[player].supply or 0
+			local here = state.systems[captain.at]
+
+			-- **Refit, then go - never both in one turn.** A captain buys where
+			-- it *ends* the turn, so issuing a purchase and a march together
+			-- means the colony is behind it by the time logistics runs and the
+			-- order is refused. That was the whole economy doing nothing: bots
+			-- asked to resupply eight times in a hundred turns and bought
+			-- exactly nothing.
+			local busy = false
+			if here.owner == player and (here.stock or 0) > 0
+				and purse >= rules.unit_cost and strength < full then
+				orders[#orders + 1] = {
+					player = player, kind = "resupply", captain = captain.id,
+					units = math.floor((full - strength) / rules.unit_strength),
+				}
+				busy = true
+			end
+
+			-- Too spent to take anything worth taking, and somewhere to refit:
+			-- go there. Expansion can wait - a captain at half strength is one
+			-- that will be turned back at the first thing worth attacking.
+			if not busy and strength * 2 <= full and purse >= rules.unit_cost then
+				local depot, road = nearest_depot(galaxy, state, player, captain.at)
+				if depot and road and #road > 0 then
+					orders[#orders + 1] = {
+						player = player, kind = "move",
+						captain = captain.id, route = road,
+					}
+					busy = true
+				end
+			end
+
+			local targets = busy and {} or reachable_targets(galaxy, state,
+				mods, player, captain.at, strength, 12)
 			local best, best_score = nil, nil
 			for t = 1, #targets do
 				-- A little noise so two bots in the same position do not make
@@ -142,10 +240,10 @@ function M.orders(galaxy, state, player)
 					best, best_score = targets[t], s
 				end
 			end
-			if best then
+			if best and #best.route > 0 then
 				orders[#orders + 1] = {
 					player = player, kind = "move",
-					captain = captain.id, route = { best.id },
+					captain = captain.id, route = best.route,
 				}
 			end
 			-- No affordable target means standing still, which is the right

@@ -54,6 +54,10 @@ local function describe(event, me)
 		if (event.taken or 0) > 0 then
 			bits[#bits + 1] = "+" .. ui.plural(event.taken, "taken")
 		end
+		if (event.earned or 0) > 0 then
+			bits[#bits + 1] = string.format("%d supply (+%d)",
+				event.supply or 0, event.earned)
+		end
 		return {
 			heading = true,
 			title = "Turn " .. tostring(event.turn),
@@ -65,6 +69,15 @@ local function describe(event, me)
 			icon = "icon_flag", tone = event.player == me and ui.GOOD or ui.DIM,
 			title = (event.player == me and "Claimed " or "Lost ") .. system_name(event.at),
 			subtitle = (event.name or "A captain") .. " passed through",
+		}
+
+	elseif kind == "resupplied" then
+		return {
+			icon = "icon_industry", tone = ui.GOOD,
+			title = (event.name or "A captain") .. " embarked "
+				.. ui.plural(event.units or 0, "unit"),
+			subtitle = string.format("%s for %d supply, now at %d strength",
+				system_name(event.at), event.cost or 0, event.strength or 0),
 		}
 
 	elseif kind == "captain_moved" or kind == "contact_moved" then

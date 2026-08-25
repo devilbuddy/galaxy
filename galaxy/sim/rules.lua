@@ -44,27 +44,67 @@ return {
 	-- exactly as it did before combat existed. So there are no failed assaults,
 	-- no dice, and nothing to misjudge - which is the only way an attack can be
 	-- a decision rather than a gamble in a game checked twice a day.
+	-- What the officer brings on their own, before anything is bought. It is
+	-- never spent below - a broken captain reforms with their own command and
+	-- nothing else.
 	captain_strength = 12,
 	strength_per_level = 3,
+
+	-- And how many bought units they can lead on top of that. **Rank must not
+	-- cap what a captain can carry**, only what they start with: capping the
+	-- total at the rank base walled the game shut, because a fresh captain
+	-- could never cover a defended colony and could never win the battle that
+	-- would have promoted them. Capacity is generous and grows with rank, so
+	-- experience buys reach rather than gating the economy.
+	captain_units = 6,
+	units_per_level = 1,
 
 	-- What it costs to take a system, by what kind of place it is. Public map
 	-- data (galaxy/sim/systems.lua derives kind from the star), so a player can
 	-- price a conquest from the other side of the galaxy.
 	--
 	-- A waypoint is terrain and barely resists; a colony costs most of a fresh
-	-- captain. With recovery at `strength_recovery` a turn, a chain of waypoints
-	-- is effectively free to walk and a colony is a real decision - which is the
-	-- distinction the map is drawn around.
+	-- captain. That is the distinction the map is drawn around.
 	defence = { waypoint = 2, outpost = 5, colony = 9 },
 	-- On top of the kind. A capital is the losing condition, so taking one
 	-- should need a captain who has been winning, not a fresh one.
 	capital_defence = 12,
 
-	-- Regained per turn, but only on ground you hold: an army in somebody
-	-- else's space is an army out of supply. It is what stops a deep raid from
-	-- continuing indefinitely, and what makes going home mean something.
-	strength_recovery = 3,
-	capital_recovery = 8,
+
+	-- Supply and units ---------------------------------------------------------
+	-- **One currency, two things it cannot be in at once.** Supply accrues from
+	-- everything you hold and is fungible across the map; units accumulate only
+	-- at colonies, only up to a cap, and only become strength where a captain is
+	-- standing. So wealth alone never wins a front - it converts to force at a
+	-- colony, and a captain has to walk there.
+	--
+	-- Per system per turn, scaled by the star's own `industry` and rounded to a
+	-- whole number, so every kind of place is worth taking for a different
+	-- reason: a waypoint is terrain that pays a little, an outpost pays better,
+	-- a colony pays best *and* builds.
+	supply_yield = { waypoint = 1, outpost = 2, colony = 3 },
+
+	-- What a colony holds ready, and how often another becomes available.
+	-- Availability accumulates whether or not anyone visits and does not decay,
+	-- so a distant colony is not wasted production - it is a reason to march.
+	-- Measured, not guessed. At a cap of 4 the median four-player game took 283
+	-- turns; at 6 it takes 190, which is where pacing sat before there was an
+	-- economy at all. Making stock accrue *every* turn instead of every other
+	-- is worse than either - every seed tried then ran past 1500 turns without
+	-- deciding, because a front where both sides refit as fast as they can
+	-- spend never moves.
+	colony_stock_cap = 6,
+	colony_stock_turns = 2,
+
+	-- What a unit is worth in the field, and what it costs to take one on.
+	--
+	-- Stock deliberately does **not** defend the colony holding it. It did, and
+	-- it nearly doubled what a colony cost to take - which re-froze the map that
+	-- combat had just unfrozen, because defence accumulated for free while an
+	-- attacker had to carry theirs across the galaxy. Fortifying is a choice a
+	-- player makes, not something that happens to a world nobody visited.
+	unit_strength = 2,
+	unit_cost = 20,
 
 	commander_max_level = 10,
 	-- Experience is the strength a captain has overcome, so a colony is worth
