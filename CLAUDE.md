@@ -180,260 +180,147 @@ luajit -e 'package.path="./?.lua;"..package.path
 
 ### Simulation (`galaxy/sim/`, engine-free)
 
-A server-authoritative, asynchronous 4X for 2-10 players: discrete turns resolve
-on a schedule (typically twice a day), players issue orders between them, and the
-star map is public while everything about *state* is fogged.
+**The game is being rebuilt from the ground up.** What runs today is the
+foundation, not a reduced version of something finished:
+
+- every player has a **capital** and a single **captain**;
+- captains move along the lane graph, and whatever they pass through becomes
+  theirs;
+- a border they cannot cross is what stops them, because there is no army to
+  push with;
+- holding enough regions wins; losing your capital loses.
+
+There is no production, no research, no buildings and no combat. Those were all
+built once and deliberately taken out, because the loop underneath them was
+never the thing being tested. They come back in this order: **city upgrades
+producing unit types → armies with a shape → battles → a battle you can watch.**
 
 `resolve.turn(galaxy, state, orders)` advances exactly one turn and returns the
 events it produced. It is a pure function of its inputs plus a per-turn seeded
 RNG (`rng.stream(seed, "turn:" .. n)`), so a turn replays identically and a whole
-game is reconstructable from `(seed, order history)`. That is what lets a
-300-turn game be simulated in under a second under LuaJIT while the same code
-runs on Nakama's much slower interpreter in production.
+game is reconstructable from `(seed, order history)`.
 
 | module | role |
 |---|---|
 | `rules.lua` | every balance constant, so tuning never means reading logic |
-| `systems.lua` | what kind of place a system is, and what it can do |
-| `buildings.lua` | the three installations, as levels rather than queue items |
+| `systems.lua` | what kind of place a system is, derived from its star |
 | `races.lua` | the six playable races, as pure modifier bundles |
-| `tech.lua` | the twelve-technology research tree |
-| `modifiers.lua` | folds race + researched tech into the numbers the resolver reads |
-| `commanders.lua` | the officer leading a force: rank, experience, what it is worth |
+| `modifiers.lua` | folds race into the numbers the resolver reads |
+| `commanders.lua` | the named officer: rank, portrait, speed |
+| `state.lua` | opening state, captains, and JSON-round-trip repair |
+| `path.lua` | Dijkstra along lanes; captains never move in straight lines |
 | `regions.lua` | who holds a stretch of the galaxy, and who wins because of it |
-| `state.lua` | opening state, fleets, the officer reserve, and JSON-round-trip repair |
-| `path.lua` | Dijkstra along lanes; fleets never move in straight lines |
-| `resolve.lua` | the nine phases of a turn |
+| `resolve.lua` | the four phases of a turn |
 | `view.lua` | fog of war: detection range, remembered state, per-player projection |
 
-Turn order is **directives → growth → industry → research → fleet orders →
-resupply → movement → interception → battles → aftermath**.
+Turn order is **orders → movement → aftermath → visibility**. It was nine
+phases; five of them belonged to production and combat and went with them.
+
+#### One captain, one verb
+
+There is exactly one order:
+
+```lua
+{ kind = "move", captain = <id>, route = { <system>, ... } }
+```
+
+A route is a list of **waypoints**, expanded lane-by-lane by the pathfinder.
+With two logins a day, standing orders are what make this playable rather than
+tedious. Unclaimed systems are taken *in passing* and do not stop the captain,
+so a route through a chain of empty systems sweeps them all up.
+
+**A captain stops *before* a border, not on it.** Entering and then being
+repelled would mean standing in a system you do not hold; the route is dropped
+rather than held, so a captain never waits on something that may never change.
+
+**An empty batch is meaningful.** It is how a player says "I am done this turn",
+which is what lets a turn resolve early once everyone has said it.
 
 #### Three kinds of place
 
-Every system already carried a star class, a feature and a habitability flag, all
-public map data. `systems.lua` turns those into three *kinds* of place rather
-than one kind with different multipliers, which is what gives the map objectives
-and terrain instead of two hundred interchangeable things to own:
+Every system carries a star class, a feature and a habitability flag, all public
+map data. `systems.lua` turns those into three kinds of place:
 
-| kind | derived from | population | buildings | output |
-|---|---|---|---|---|
-| **colony** | `habitable` | grows to a ceiling | all three | scales with population |
-| **outpost** | a productive feature or an energetic class | none | military only | a flat trickle |
-| **waypoint** | everything else | none | none | none |
-
-A waypoint producing nothing is the point, not a gap: fleets stop at the first
-hostile system, so a barren lane junction is a blockade point worth taking.
-
-**The generator guarantees a colony floor** (`config.colony_fraction`). Habitability
-is a per-star roll and on a small map its variance decides the game - the same
-120-star setting produced 13 colonies on one seed and 26 on another, and 13 is
-not a playable four-player map. The count is topped up deterministically, most
-habitable classes first with ties broken by index, so every seed is fair while
-*which* worlds are habitable stays driven by the roll. `pick_homes` then places
-every player on a colony with at least `home_colony_minimum` more within
-`home_colony_hops` lanes, because a player who spawns in a barren arm has lost at
-generation rather than in play.
-
-#### Commanders
-
-**A force is an officer and the ships they lead, in one record.** They are named
-for the officer ("Admiral Kess", not "3rd Fleet"), carry a level and an
-experience total, and everything else about them - rank, what they can lead, how
-fast they move, what they are worth in a fight - is derived from those two
-numbers, so state stores nothing it can compute (`galaxy/sim/commanders.lua`).
-
-**The cap is the shape of the game, not a balance knob.** A player may field
-`rules.commander_cap` of them, so "which fronts am I fighting on" is a decision.
-Without it a 400-turn run ends with one empire holding a hundred and sixty
-forces and a list nobody can read.
-
-| | |
+| kind | derived from |
 |---|---|
-| rank | promotion is how a level reads on a map. A number is something a player looks up; Captain against Grand Admiral is legible at a glance, and it is the same information |
-| command | ships this officer can lead; the rest stays in the garrison, so a veteran is worth more than the sum of their ships |
-| speed | **deliberately below a typical lane at level 1**, which is what puts forces in transit where they can be caught |
-| tactics | what the *senior* officer present multiplies their side by. A garrison with nobody in command gets nothing, which is what makes stationing one worth doing |
+| **colony** | `habitable` |
+| **outpost** | a productive feature or an energetic class |
+| **waypoint** | everything else |
 
-Experience is enemy ships destroyed - a number already on the battle report -
-split across the winners by what each brought, so stacking every commander into
-one battle promotes the group no faster than fighting it alone.
+None of them currently produce anything - the distinction is what capitals are
+placed on, what counts towards a region, and what city upgrades will be priced
+against. `profile.industry` and `profile.science` are carried for the same
+reason: they are derived from the star itself and cost nothing to keep.
 
-**A beaten commander is scattered, not killed**: they fall back to a world you
-still hold, one rank lighter, and their army is gone. Losing an officer outright
-would make one bad battle unrecoverable in a game checked twice a day and would
-teach players never to commit. Only a player with nowhere left to fall back to
-actually loses them.
+**The generator guarantees a colony floor** (`config.colony_fraction`).
+Habitability is a per-star roll and on a small map its variance decides the
+game - the same setting produced 13 colonies on one seed and 26 on another. The
+count is topped up deterministically, most habitable classes first with ties
+broken by index, so every seed is fair while *which* worlds are habitable stays
+driven by the roll.
 
-**Standing down retires an officer to a reserve**, keeping their rank, and a
-launch recalls the most experienced reservist before raising anyone new. A
-player choosing which of four fronts to give up must not also lose the rank that
-officer spent forty turns earning, or the cap stops being a decision and becomes
-a trap.
+#### Capitals
 
-**A parked commander draws from the garrison they are sitting on** (`resupply`),
-up to what they can lead. This is how production reaches the front: parking one
-somewhere is the standing instruction "send what you build here", which is the
-right shape of decision at two logins a day. It is also what makes a scattered
-officer recoverable - without it a beaten commander sat at a refuge with no ships
-forever, holding one of the four slots and unable to use it, which froze the game
-outright once every player had lost four battles.
+`pick_capitals` places every player on a colony with at least
+`rules.capital_neighbours` more within `rules.capital_hops` lanes, then spreads
+them by farthest-point sampling. A player who spawns in a barren arm, or next
+door to a rival, has lost at generation rather than in play.
 
-**Co-located forces are not consolidated.** They used to be, to keep the list
-readable; under a cap the list cannot get long enough to need it, and merging
-would quietly destroy an officer for parking next to a colleague.
+A capital is currently only a spawn and a losing condition - **hold it or you
+are out** - and is the one place a player will build once upgrades exist.
 
-#### Fleets
+#### Captains
 
-**Ships live in one of two places, and the split is the whole point.** A system's
-**garrison** is where production accumulates; it defends alongside the world's own
-guns and never moves. A **fleet** is a named, persistent force that sits at a
-system or partway along a lane, carries a route, and survives arriving somewhere.
+A captain is a named officer with a rank, a face and a speed. The name and the
+portrait are most of the point: a piece a player is attached to is worth more
+than a token. Everything derives from `level`, so state carries only a level and
+an experience total.
 
-Fleets-only was tried first and does not work: production has to land somewhere,
-so it creates a fleet wherever there is not one, and a 400-turn run ended with one
-empire holding **a hundred and sixty** of them. Making the player create a fleet
-deliberately bounds the list to forces they care about, and turns "strip a border
-world to mount an attack" into a decision rather than an accident.
+**Nothing awards experience yet.** Battles will. The progression is dormant
+rather than dead: rank, speed and the portrait already read from it.
 
-Three verbs, because that is what the two gestures on the map need:
-
-| order | effect |
-|---|---|
-| `launch { at, ships?, route }` | form a fleet out of a garrison and send it |
-| `move { fleet, ships?, route }` | redirect one, or detach part of it |
-| `garrison { fleet }` | stand a fleet down where it is |
-
-There is no split verb - `move` carries an optional count instead, since
-splitting is only ever something done *in order to* send part of a force
-somewhere. And **co-located parked fleets consolidate at the end of every turn**,
-oldest name surviving: without it the map silts up with arrivals and the list
-becomes unusable. The consequence is that two fleets cannot be held apart at one
-system, which is why the count rides on the move.
-
-A route is a list of **waypoints**, expanded lane-by-lane by the pathfinder. With
-two logins a day, standing orders are what makes this playable rather than
-tedious. Unclaimed systems are taken *in passing* and do not stop the fleet, so a
-route through a chain of barren waypoints sweeps them all up.
-
-#### Regions are the objective
-
-The map is deliberately far bigger than any one player will touch. With a handful
-of commanders and two hundred systems most of the galaxy is scenery, and that is
-the intent - which makes "systems owned" a poor objective, since it counts the
-empty road a commander walked down alongside the world they fought for.
-
-So the unit of contest is the **region** the generator already carves
-(`galaxy/graph.lua`): a named, contiguous stretch of a dozen or so systems, of
-which only the colonies and outposts count. Waypoints are road.
-
-- A player holds a region by holding **more than half** of what counts in it. A
-  plurality would hand a region to the first player through it while two others
-  were still fighting over the worlds that matter; a majority means a region
-  changing hands is news.
-- A held region **produces more** (`rules.region_output_bonus`), which is what
-  makes going back for the last stubborn outpost worth doing instead of leaving
-  half-taken regions all over the map.
-- Holding `victory_region_fraction` of all regions **wins the game**. Before
-  this there was no victory condition at all - players could be eliminated, but
-  nothing ever declared a winner.
-
-Nothing about control is stored. It is a pure function of who owns what, so it is
-recomputed, and `regions.weights` is memoised on the galaxy the way system
-profiles are.
-
-#### One economy axis
-
-A system produces **build points**, which become ships or pay for a building, and
-**research**, which is the only thing that pools empire-wide. No second currency,
-no upkeep, no logistics: what makes an empire strong is how much ground it holds.
-Everything stored is an integer - output and research are fractional once class,
-race and technology have scaled them, so each is summed as a float and floored
-exactly once per system per turn, which is what lets state survive a JSON round
-trip through Nakama storage without a replay drifting.
-
-#### Buildings as levels
-
-A per-system build *queue* would turn this into a chore list: twenty worlds, two
-logins a day, every session spent re-checking timers. So a building is a level
-raised once and never thought about again - one tap, paid out of that system's own
-output over however many turns it takes, then done forever.
-
-| installation | effect | may go on |
-|---|---|---|
-| **Radar Array** | +1 lane of vision per level, from this system | colony, outpost |
-| **Fortress** | +40 static defence per level | colony, outpost |
-| **Shipyard** | +35% output per level | colony only |
-
-**People-buildings need a colony; installations do not.** Radar wants to be on the
-*frontier*, and a frontier is mostly not colonies - with outposts able to host it
-there is almost always somewhere to put a listening post where one is needed.
-
-Buildings **survive capture** intact. Taking a fortified chokepoint is meant to be
-a prize, and it then defends its new owner. That self-balances against blitzing,
-because capture costs population and both output and defence scale with it: a
-freshly taken fortress world is hard to retake and produces almost nothing until
-it repopulates.
+**Speed is deliberately below a typical lane** (~130 world units against 95). A
+captain that crossed any lane in one turn would make distance meaningless, and
+distance is currently the only thing between a player and the far side of the
+map.
 
 #### Detection is a range
 
-Each *source* sees a distance of its own: an owned system reaches
-`base + radar levels + technology`, a fleet barely past itself. The visible set is
-the union, computed as a relaxation rather than a plain breadth-first walk because
-the widest source has to win wherever two overlap.
+Each *source* sees a distance of its own: a system you hold reaches
+`base + race`, a captain barely past itself. The visible set is the union,
+computed as a relaxation rather than a plain breadth-first walk, because the
+widest source has to win wherever two overlap.
 
-**Enemy fleets are visible where you have eyes.** Their strength and heading show,
-their orders do not. A conquest game where an invasion cannot be seen coming is
-one where worlds are lost overnight with no way to answer, and a developed border
-outpost being worth fighting over is the whole reason radar exists.
+**Rival captains are visible where you have eyes.** Their rank and heading show;
+their orders do not.
 
-#### Combat
+#### Regions are the objective
 
-A Lanchester-style exchange: the loser is destroyed and the winner keeps the
-fraction its margin implies, so a narrow win is expensive and an overwhelming one
-nearly free. A defender fights with garrison + stationed fleets + the world's own
-guns, and casualties fall on the garrison first, then a stationed fleet - never on
-the planet's guns, which are not something that can be shot down. That means
-keeping a fleet on a world is worth doing.
+The map is deliberately far bigger than any one player will touch. With one
+captain each and two hundred systems, most of the galaxy is scenery - and that
+is the intent. What it means is that "systems owned" is a poor objective: it
+counts the empty road a captain walked down alongside the world they fought for.
 
-**Hostile fleets that end a turn in the same lane fight there.** A deliberate
-abstraction: a lane is a narrow corridor, so two hostile forces inside one engage
-regardless of where along it they are or which way they point. Modelling the exact
-crossing point would need the whole path each fleet swept.
+So the unit of contest is the **region** the generator already carves: a named,
+contiguous stretch of a dozen or so systems, of which only the colonies and
+outposts count. A player holds a region by holding **more than half** of what is
+worth holding in it, and the game is won by holding
+`rules.victory_region_fraction` of all regions.
+
+Nothing about control is stored. It is a pure function of who owns what, so it
+is recomputed rather than tracked.
 
 #### Pacing
 
-Still not tuned, and still for the same reason. `tools/play.lua` plays a full game
-with a greedy AI; results run from a fortnight to never, and that spread is
-dominated by the AI - which never defends, retreats, or concentrates beyond one
-frontier - rather than by the rules. Tuning against it would be fitting to noise.
-`rules.tech_cost_scale` and `rules.building_cost_scale` are the two pace knobs.
+`tools/play.lua` plays a full game with a captain-per-player AI that walks at the
+nearest unowned system. On the default map four players carve it up and one wins
+around turn 130 - about two months at two turns a day. That is a skeleton
+pacing, not a tuned one: with nothing to build and nothing to fight with, the
+only thing a player can do is walk.
 
-### Generation pipeline (`galaxy/`, engine-free)
+It is also where the losing-player problem is already visible: an AI boxed in
+early finishes with a tenth of the map and no way back.
 
-`generate.build(seed)` runs these in order; each stage exists to fix a specific
-failure of the simpler thing:
-
-1. **`shape`** — a density field: radial bulge + disc, logarithmic spiral arms,
-   fBm irregularity. Normalised so every seed peaks at 1.0, otherwise any
-   threshold expressed in density units means something different per seed.
-2. **`poisson` / `points`** — variable-radius Poisson-disc sampling. Spacing
-   goes as `1/sqrt(density)`, which is what makes the core dense and the rim
-   thin; density is applied to *spacing*, and only a soft cutoff is applied as
-   rejection. `points.generate` solves for the spacing that hits a requested
-   star count, so `star_count` in `config.lua` is a real target.
-3. **`delaunay`** — Bowyer-Watson triangulation. The reason for Delaunay is
-   planarity: no two edges cross, so *any* subset stays non-crossing and the
-   pruning below can never produce visually intersecting lanes.
-4. **`graph`** — keeps the MST unconditionally (guarantees every star is
-   reachable), then adds short-biased extra edges up to a target mean degree.
-   Regions grow along the lane graph with **balanced** multi-source expansion:
-   plain Dijkstra gives one region 70% of the map, so at each step the smallest
-   region takes the cheapest star on its frontier. Region colours come from
-   Welsh-Powell graph colouring, so no two bordering regions share a tint.
-5. **`names` / `starclass`** — weighted templates over invented and borrowed
-   vocabulary, with global uniqueness; classes biased towards exotics near the
-   galactic core.
 
 ### The game (server-authoritative, asynchronous)
 
@@ -451,31 +338,37 @@ RPCs in `server/modules/game_rpc.lua`:
 | `game.route` | what path an order would take, for the client to draw |
 | `game.orders` | submit (and freely revise) orders for the coming turn |
 
-An order is one of five shapes, and `game.orders` replaces the whole batch:
+There is one order, and `game.orders` replaces the whole batch:
 
-| order | effect |
-|---|---|
-| `{ kind = "launch",   at, ships?, route }` | form a fleet from a garrison and send it |
-| `{ kind = "move",     fleet, ships?, route }` | redirect a fleet, or detach part of it |
-| `{ kind = "garrison", fleet }` | stand a fleet down where it is |
-| `{ kind = "build",    at, building }` | raise a level (`""` cancels) |
-| `{ kind = "research", tech }` | set the research target (`""` clears it) |
+```lua
+{ kind = "move", captain, route }
+```
 
 The RPC checks *shape* only, and supersedes rather than appends: a second order
-for the same fleet, the same world, or a second research directive replaces the
-first, so the array's order never carries meaning a client would have to know
-about. Whether an order is *legal* depends on state that will have moved on by
-the time it resolves, so the resolver decides that and emits an `order_rejected`
-event carrying a reason the client can show. Because the batch is replaced
-wholesale, the client sends fleet orders, buildings and research together; two
-calls would mean the second wiped the first.
+for the same captain replaces the first, so the array's position never carries
+meaning a client would have to know about. Whether an order is *legal* depends
+on state that will have moved on by the time it resolves, so the resolver
+decides that and emits an `order_rejected` event carrying a reason the client
+can show.
 
-**Turns resolve lazily.** There is no scheduler: every RPC first asks whether
-turns are due and resolves however many were missed. For a game checked twice a
-day that is exactly right, needs neither cron nor Nakama's Go runtime, and
-cannot drift. The consequence is that an untouched game does not advance until
-somebody touches it. Concurrent resolution is prevented by version-guarded
-storage writes — the loser of the race discards its work and re-reads.
+**A turn resolves as soon as every player has submitted**, and otherwise on the
+clock. Submitting is what ends a player's turn, so once the last one is in there
+is nothing left to wait for - and waiting out a twelve-hour timer anyway is the
+worst thing an asynchronous game can do to four people who are all paying
+attention at the same time. An empty batch is how a player with nothing to do
+says they are done, which is what makes this reachable at all.
+
+Two details keep it honest: `early` unlocks only the *first* turn of a call, so
+once it resolves nobody has submitted for the next one and the loop falls back
+to the clock; and an early resolution restarts the clock from *now*, or four
+prompt players would find the next turn already half over.
+
+**Otherwise turns resolve lazily.** There is no scheduler: every RPC first asks
+whether turns are due and resolves however many were missed. That needs neither
+cron nor Nakama's Go runtime and cannot drift. The consequence is that an
+untouched game does not advance until somebody touches it. Concurrent resolution
+is prevented by version-guarded storage writes - the loser of the race discards
+its work and re-reads.
 
 Storage layout (Nakama storage; the Lua runtime has **no SQL access**):
 
@@ -489,7 +382,7 @@ game_orders/ <id>:<turn>   per-user       that player's orders
 Everything is system-owned except orders, so a player cannot read another
 player's pending moves straight from storage.
 
-**Sim state is repaired on read** (`normalise_state`). It round-trips as JSON,
+**Sim state is repaired on read** (`state.normalise`). It round-trips as JSON,
 and while dense arrays survive, `knowledge[player]` is keyed by star id and
 *sparse*, so it returns with string keys. Indexing it with a number would then
 silently miss and every player's fog memory would look empty after each turn.
@@ -659,7 +552,9 @@ the vertex colour to match.
 ### Client screens (Monarch) and UI (Druid)
 
 `main/main.collection` is a bootstrap holding `main/app.script` plus one Monarch
-screen proxy per screen. The proxies are **embedded instances** with their
+screen proxy per screen. **The empire screen was removed** in the rebuild: with
+no production and no research there was nothing on it the map does not already
+show, and the captain strip is the roster. The proxies are **embedded instances** with their
 `screen_id` set inline, matching Monarch's own example — a `screen_id` override
 placed in a separate `.go` file did not take effect, and every screen silently
 registered under Monarch's default id (`UNIQUE ID HERE`), so `monarch.show`
@@ -670,7 +565,6 @@ found nothing.
 | `lobby` | `main/screens/lobby.collection` | list/create/join/start games |
 | `map` | `main/screens/map.collection` | the galaxy view (was the old bootstrap) |
 | `report` | `main/screens/report.collection` | turn digest; a **popup** over the map |
-| `empire` | `main/screens/empire.collection` | stockpile, research tree, build policy; also a popup |
 
 **The map screen sets `screen_keeps_input_focus_when_below_popup`.** Monarch
 defaults that to *false*, so showing a popup posts `release_input_focus` to the
@@ -692,9 +586,8 @@ turn events, a research tree — so most of it would be script-created anyway.
 
 ### The plan
 
-Choices are **staged in `store`, not sent** — `store.orders` holds fleet and
-building orders in the exact shape the RPC takes, and `store.pending_research`
-holds the technology pick. They all travel with the next SEND, which is what
+Choices are **staged in `store`, not sent** — `store.orders` holds
+movement orders in the exact shape the RPC takes. They travel with the next SEND, which is what
 keeps the one-batch-replaces-everything rule above safe and lets the player
 revise the whole turn freely until it resolves.
 
@@ -832,19 +725,6 @@ ever. The digest is now parked in `store.pending_report` with `seen_turn` left
 alone, the turn card in the overview goes accent and reads "new — tap to read",
 and **opening it is what marks it read**. Nothing is lost if the player never
 taps: the poll keeps returning the same window.
-
-**The empire screen has no tab bar.** It had two, a hundred units apart and
-styled identically - Forces/Research above, and the technology branches below -
-so knowing where you were meant holding two positions in mind. Research is a
-move now rather than a mode: a row on the empire page carrying the banked figure
-(which is the question that sends anyone there), and a back chevron in the
-research card. `show_tab` is forward-declared because the two bodies navigate to
-each other and a Lua local is not visible to a function defined before it.
-
-**EMPIRE lives at the top right of the overview bar, not the bottom one.** That
-card is what a player reads every turn anyway, and the bottom row belongs to
-SEND — the action with consequences — plus CANCEL, which only exists while
-something is being aimed, so SEND keeps the far right whether or not it is there.
 
 **The chrome gets out of the way of the thing it describes.** Three rules, each
 of which was learned by watching the interface fail at them:
@@ -1220,40 +1100,42 @@ Defold source files (`.collection`, `.go`, `.atlas`, `.gui`, `.sprite`, `.input_
 
 ## Known gaps
 
-- **A real two-finger pinch has never been performed.** The recogniser is unit
-  tested, and the touch stream is confirmed live on device (`action.touch`
-  arrives populated), but Android blocks synthetic multi-touch so the actual
-  gesture has only been verified by proxy.
-- **There is no way to zoom on a device.** Zoom is pinch-only, and pinch cannot
-  be injected, so every device screenshot so far is at the fit zoom where
-  panning is clamped to nothing. That also means **panning has never been
-  observed working on a device** — the recogniser is unit tested, the tap path
-  and every scroll region are confirmed live, but the map pan path is not.
-  On-screen zoom controls would fix both at once.
-- The safearea extension logs `ERROR:ENGINE: Could not find '@render' socket` once
-  at startup on Android. It is benign — the extension reaches for the render
-  system before it exists, and in custom mode there is no letterbox for it to
-  colour — but it is noise in every log.
-- The turn digest is capped at 40 turns server-side and 140 rows client-side. A
-  game left to resolve unattended for weeks otherwise produced an event list
-  that exhausted the GUI node budget outright.
-- **A fleet's route can only be set one waypoint at a time from the map.** The
+The game is a foundation being built back up, so most of what is missing is
+missing on purpose. These are the things that are *not* on that plan, or that
+will bite whoever touches them.
+
+- **There is nothing to do but walk.** No production, no combat, no upgrades.
+  That is the current state of the rebuild, not an oversight - but it means
+  pacing, balance and the AI in `tools/play.lua` measure almost nothing yet.
+- **A boxed-in player has no way back.** `tools/play.lua` shows it on the first
+  run: an AI enclosed early finishes with a tenth of the map. Nothing rubber-bands.
+- **Races differ only on mobility.** They still declare growth, industry and
+  research effects, but `modifiers.of` folds only speed, hops and vision, so
+  Drift Cartels is strictly the strongest pick. Balancing races before
+  production returns would be fitting to noise.
+- **Existing games from before the rebuild are dead.** Their stored state has no
+  capitals or captains, so `holds_capital` is false for everyone and they end on
+  the next resolution. There is no migration and there should not be one.
+- **The rebuilt client is unverified on a device.** The sim, the server and the
+  full RPC round trip are covered headlessly, and the desktop build compiles,
+  but the new map screen has not been driven on hardware - the test device
+  disconnected mid-session.
+- **`drive.py` cannot see the system sheet's own buttons.** The bridge's element
+  query returns star labels and the top bar but not the sheet, so those still
+  have to be tapped by position. `state` and `tapstar` are unaffected.
+- **A route can only be set one waypoint at a time from the map.** The
   simulation takes a full waypoint list and expands it lane by lane, and the
   order shape and tests cover it, but the only gesture wired up is "tap a
-  destination". Multi-leg campaigns need a way to chain taps.
-- **Interception is now reachable but still unobserved in play.**
-  `commander_speed` is deliberately below a typical lane, so a green officer
-  spends turns in transit where they can be caught - but whether it happens
-  depends on which lanes the generator drew, and the test still slows commanders
-  right down to keep itself about the rule rather than about the seed.
-- **The pacing of the region victory is untuned.** `victory_region_fraction` is
-  0.5 and the greedy AI in `tools/play.lua` gets a leader to two thirds of what
-  it needs over 400 turns without ever closing it out. That is the AI, which
-  never defends, retreats or concentrates - tuning the fraction against it would
-  be fitting to noise, the same reason `tech_cost_scale` is still where it is.
-- **Armies are still one number.** The commander layer is in; unit composition -
-  the thing that would make "you brought the wrong army" a real decision - is
-  not. Combat remains a Lanchester exchange on a single strength value.
+  destination".
+- **A real two-finger pinch has never been performed**, and there is no other
+  way to zoom, so every device screenshot is at the fit zoom where panning is
+  clamped to almost nothing. On-screen zoom controls would fix both.
 - **A route longer than `ROUTE_POOL` segments draws only its first 64 legs.**
-  The pool is sized for a busy turn rather than for every commander on a
-  twelve-lane campaign, since pooled nodes cost whether or not they are used.
+  Pooled nodes cost whether or not they are used, so the pool is sized for a
+  busy turn rather than the theoretical maximum.
+- The safearea extension logs `ERROR:ENGINE: Could not find '@render' socket`
+  once at startup on Android. It is benign - the extension reaches for the
+  render system before it exists - but it is noise in every log.
+- The turn digest is capped at 40 turns server-side and 140 rows client-side. A
+  game left unattended for weeks otherwise produced an event list that exhausted
+  the GUI node budget outright.

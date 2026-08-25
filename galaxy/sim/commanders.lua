@@ -1,19 +1,13 @@
---- Commanders: the named officer leading a force, and how they improve.
+--- Captains: the named officer, and how they improve.
 --
--- A fleet in `state.fleets` is a commander *and* the ships they lead - one
--- record, because in this game the two never exist apart. The commander is what
--- makes it worth keeping track of: a force with a name, a rank and a history is
--- something a player is attached to, and losing one is meant to sting in a way
--- that losing twenty ships does not.
+-- A captain is a named officer who moves on the map. The name and the face are
+-- most of the point: a piece a player is attached to is worth more than a token,
+-- and every player currently has exactly one.
 --
--- **The cap is the point.** A player may field only `rules.commander_cap` of
--- them, so "which fronts am I fighting on" is a decision rather than a
--- consequence of how many garrisons happened to have ships in them. It is the
--- same reasoning that made fleets deliberate rather than automatic (see
--- galaxy/sim/state.lua) taken one step further.
---
--- Everything here is derived from `level`, so the only thing state has to carry
--- is a level and an experience total.
+-- Everything here derives from `level`, so state carries only a level and an
+-- experience total. **Nothing awards experience yet** - battles will - so the
+-- progression below is dormant rather than dead: it is what rank, speed and the
+-- portrait already read from.
 
 local rules = require("galaxy.sim.rules")
 
@@ -147,13 +141,6 @@ end
 
 -- Derived stats ---------------------------------------------------------------
 
---- Ships this commander can lead. Anything beyond it stays behind.
-function M.command(commander, mods)
-	local level = commander.level or 1
-	local base = rules.command_base + rules.command_per_level * (level - 1)
-	return floor(base * ((mods and mods.command) or 1))
-end
-
 --- World units covered per turn.
 --
 -- Deliberately below a typical lane length at level 1, so a green commander
@@ -162,14 +149,8 @@ end
 -- to be caught.
 function M.speed(commander, mods)
 	local level = commander.level or 1
-	local base = rules.commander_speed + rules.speed_per_level * (level - 1)
+	local base = rules.captain_speed + rules.speed_per_level * (level - 1)
 	return base * ((mods and mods.speed_scale) or 1)
-end
-
---- Multiplier this commander's presence applies in battle.
-function M.tactics(commander, mods)
-	local level = commander.level or 1
-	return (1 + rules.tactics_per_level * (level - 1)) * ((mods and mods.tactics) or 1)
 end
 
 --- Everything a client needs to draw one, in one call.
@@ -182,9 +163,7 @@ function M.profile(commander, mods)
 		xp = commander.xp or 0,
 		next_xp = (level < rules.commander_max_level)
 			and M.xp_for_level(level + 1) or nil,
-		command = M.command(commander, mods),
 		speed = M.speed(commander, mods),
-		tactics = M.tactics(commander, mods),
 	}
 end
 

@@ -81,19 +81,17 @@ do
 		{ id = "a", name = "A", race = "kepler" },
 		{ id = "b", name = "B", race = "vorn" },
 	})
-	local home = state.players[1].home
-	state.systems[home].ships = 40
+	local capital = state.players[1].capital
 	resolve.turn(galaxy, state, {
-		{ player = 1, kind = "launch", at = home, ships = 15,
-			route = { galaxy.adjacency[home][1] } },
-		{ player = 1, kind = "build", at = home, building = "radar" },
+		{ player = 1, kind = "move", captain = 1,
+			route = { galaxy.adjacency[capital][1] } },
 	}, lengths)
 	for _ = 1, 3 do resolve.turn(galaxy, state, {}, lengths) end
 
 	local v = view.project(galaxy, state, 1)
 	local required = {
-		"turn", "you", "players", "systems", "fleets", "contacts",
-		"research", "tech", "available_tech", "race", "rates",
+		"turn", "you", "players", "systems", "captains", "contacts",
+		"race", "capital", "regions", "regions_needed", "regions_held", "rates",
 	}
 	local missing = {}
 	for i = 1, #required do
@@ -102,27 +100,25 @@ do
 	check("the projection has every field the client reads", #missing == 0,
 		table.concat(missing, ", "))
 
-	for _, key in ipairs({ "ships", "garrisoned", "ship_cap", "population",
-		"speed", "hops", "vision", "tech_cost", "ship_cost", "building_cost" }) do
+	for _, key in ipairs({ "systems", "speed", "speed_scale", "hops", "vision" }) do
 		check("rates." .. key .. " is a number", type(v.rates[key]) == "number")
 	end
 
 	check("the roster reports each player's race",
 		v.players[1].race == "kepler" and v.players[2].race == "vorn")
-	check("researched technologies are an array, not a set",
-		type(v.tech) == "table" and (next(v.tech) == nil or type(next(v.tech)) == "number"))
+	check("and where each player's capital is",
+		type(v.players[1].capital) == "number")
 
-	local mine = v.systems[tostring(home)]
-	check("your own systems report their garrison", mine and mine.garrison ~= nil)
-	check("...their building levels", mine and mine.buildings
-		and mine.buildings.radar ~= nil and mine.buildings.fortress ~= nil)
-	check("...what they defend themselves with", mine and type(mine.defence) == "number")
-	check("...and what they produce", mine and type(mine.output) == "number")
-	check("a world under construction reports its progress",
-		mine and mine.building and mine.building.cost and mine.building.paid)
+	local mine = v.systems[tostring(capital)]
+	check("your own capital is in the projection", mine ~= nil)
+	check("...and says whose capital it is", mine and mine.capital_of == 1)
+	check("...and that it is live rather than remembered", mine and mine.live == true)
 
-	check("your fleets are named and routed",
-		#v.fleets > 0 and v.fleets[1].name and v.fleets[1].route ~= nil)
+	check("your captain travels in full",
+		#v.captains == 1 and v.captains[1].route ~= nil
+			and v.captains[1].rank ~= nil and v.captains[1].portrait ~= nil)
+	check("systems are keyed by string, never sparse integers",
+		next(v.systems) ~= nil and type(next(v.systems)) == "string")
 
 	-- Everything a player can see must be describable; nothing may arrive with
 	-- an owner the roster cannot name.

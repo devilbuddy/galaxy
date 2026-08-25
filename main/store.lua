@@ -58,10 +58,6 @@ M.now_estimate = 0
 -- all of it.
 M.orders = {}
 
--- The technology the player has picked but not yet sent. Nil means unchanged,
--- "" means "stop researching".
-M.pending_research = nil
-
 -- The turn the staged plan is aimed at, and what the server last accepted.
 -- `sent_signature` is compared against the live signature to decide whether
 -- anything is unsent, which is more reliable than a dirty flag every call site
@@ -75,14 +71,13 @@ M.sent_turn = nil
 -- who is in the middle of reading the map; the overview offers it instead.
 M.pending_report = nil
 
--- Currently selected fleet id, or nil. A fleet and a system can be selected at
--- once: the system is what the card describes, the fleet is what an order will
--- move.
-M.selected_fleet = nil
+-- Currently selected captain id, or nil. A captain and a system can be selected
+-- at once: the system is what the card describes, the captain is what an order
+-- will move.
+M.selected_captain = nil
 
 -- What the next tap on the map will do, or nil for "just look":
---   { kind = "launch", at = <system>, ships = <n> }
---   { kind = "move",   fleet = <id>,  ships = <n> }
+--   { kind = "move", captain = <id> }
 -- Set by the system sheet, consumed by the next system tap.
 M.aiming = nil
 
@@ -119,9 +114,7 @@ M.revision = 0
 --- How many orders the plan holds. Research counts as one: it is a directive
 --- like any other and the player is owed an accurate count.
 function M.plan_count()
-	local n = #M.orders
-	if M.pending_research ~= nil then n = n + 1 end
-	return n
+	return #M.orders
 end
 
 --- A stable string for the plan as it stands.
@@ -138,12 +131,8 @@ function M.plan_signature()
 			for k = 1, #o.route do route = route .. "," .. tostring(o.route[k]) end
 		end
 		parts[#parts + 1] = table.concat({
-			tostring(o.kind), tostring(o.at), tostring(o.fleet),
-			tostring(o.ships), tostring(o.building), route,
+			tostring(o.kind), tostring(o.captain), route,
 		}, ":")
-	end
-	if M.pending_research ~= nil then
-		parts[#parts + 1] = "research:" .. tostring(M.pending_research)
 	end
 	return table.concat(parts, "|")
 end
@@ -162,7 +151,6 @@ end
 function M.plan_consumed(turn)
 	if not M.orders_turn or turn < M.orders_turn then return false end
 	M.orders = {}
-	M.pending_research = nil
 	M.orders_turn = nil
 	M.sent_signature = nil
 	M.sent_turn = nil

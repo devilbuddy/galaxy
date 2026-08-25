@@ -31,9 +31,12 @@ local RACE_GAP = 14
 local EFFECT_LABEL = {
 	attack = "attack", defence = "defence", capture = "capture",
 	fortress = "fortresses", speed = "speed", hops = "range",
-	industry = "output", ship_cost = "hull cost", building_cost = "build cost",
-	cap = "fleet cap", growth = "growth", capacity = "capacity",
-	research = "research", vision = "vision", tech_cost = "tech cost",
+	-- Only the mobility keys currently do anything (see
+	-- galaxy/sim/modifiers.lua); the rest are the design intent for when
+	-- production is built back, and are still worth showing so a race reads as
+	-- a character rather than a speed stat.
+	industry = "output", growth = "growth", capacity = "capacity",
+	research = "research", vision = "vision",
 }
 
 -- Stable order, so a race always reads the same way.

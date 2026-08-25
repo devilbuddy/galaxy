@@ -1,4 +1,4 @@
---- What kind of place a system is, and what it can do.
+--- What kind of place a system is.
 --
 -- The generator already gives every system a star class, a feature and a
 -- habitability flag, all of it public map data. This turns those into three
@@ -20,8 +20,6 @@
 -- All of it is derived, never stored, so it costs nothing on the wire and a
 -- player can read the value of somewhere they have never been.
 
-local starclass = require("galaxy.starclass")
-local rules = require("galaxy.sim.rules")
 
 local M = {}
 
@@ -84,9 +82,6 @@ function M.profile(galaxy, id)
 	local class = CLASS_VALUE[star.class] or CLASS_VALUE.yellow
 	local feature = FEATURE_VALUE[star.feature]
 
-	local industry = class.industry + (feature and feature.industry or 0)
-	local science = class.science + (feature and feature.science or 0)
-
 	local kind = M.WAYPOINT
 	if star.habitable then
 		kind = M.COLONY
@@ -94,18 +89,14 @@ function M.profile(galaxy, id)
 		kind = M.OUTPOST
 	end
 
-	local capacity = 0
-	if kind == M.COLONY then
-		local entry = starclass.by_id(star.class)
-		capacity = math.floor(rules.base_capacity
-			* (0.55 + 0.65 * (entry and entry.radius or 1)))
-	end
-
+	-- `industry` and `science` are what a place *would* be good at. Nothing
+	-- reads them while there is no production; they are kept because they are
+	-- derived from the star's own class and feature, cost nothing to carry, and
+	-- are exactly what city upgrades will be priced against.
 	local profile = {
 		kind = kind,
-		industry = industry,
-		science = science,
-		capacity = capacity,
+		industry = class.industry + (feature and feature.industry or 0),
+		science = class.science + (feature and feature.science or 0),
 		-- A waypoint produces nothing at all; that is what makes it terrain.
 		productive = kind ~= M.WAYPOINT,
 	}
@@ -119,81 +110,6 @@ end
 
 function M.is_colony(galaxy, id)
 	return M.profile(galaxy, id).kind == M.COLONY
-end
-
---- Population ceiling. Only a colony has one; `mods` is the owner's modifier
---- table, and omitting it gives the ceiling an observer would estimate.
-function M.capacity(galaxy, id, mods)
-	local profile = M.profile(galaxy, id)
-	if profile.kind ~= M.COLONY then return 0 end
-	local capacity = profile.capacity
-	if mods then capacity = capacity * mods.capacity end
-	return math.floor(capacity)
-end
-
---- Build points this system produces per turn.
---
--- A colony's output scales with its population, which is what makes taking one
--- worth more than taking ten waypoints; an outpost gives a flat trickle whoever
--- holds it.
-function M.output(galaxy, id, sys, mods, buildings)
-	local profile = M.profile(galaxy, id)
-	if not profile.productive then return 0 end
-
-	local base
-	if profile.kind == M.COLONY then
-		base = rules.colony_output_flat + (sys.population or 0) * rules.colony_output_per_pop
-	else
-		base = rules.outpost_output
-	end
-
-	local scale = profile.industry
-	if buildings then
-		scale = scale * (1 + rules.shipyard_bonus * (buildings.shipyard or 0))
-	end
-	if mods then scale = scale * mods.industry end
-	return base * scale
-end
-
---- Research this system contributes per turn.
-function M.research(galaxy, id, sys, mods)
-	local profile = M.profile(galaxy, id)
-	if not profile.productive then return 0 end
-
-	local base
-	if profile.kind == M.COLONY then
-		base = (sys.population or 0) * rules.research_per_pop
-	else
-		base = rules.outpost_research
-	end
-
-	local scale = profile.science
-	if mods then scale = scale * mods.research end
-	return base * scale
-end
-
---- What a system defends itself with, before any fleet is counted.
---
--- Population plus fortifications, so an empty colony is still not free and a
--- fortified chokepoint is a real obstacle. It is never consumed - it is the
--- floor under whatever fleets happen to be there.
-function M.defence(galaxy, id, sys, buildings)
-	local profile = M.profile(galaxy, id)
-	local defence = 0
-	if profile.kind == M.COLONY then
-		defence = (sys.population or 0) * rules.planet_defence_per_pop
-	end
-	if buildings then
-		defence = defence + rules.fortress_defence * (buildings.fortress or 0)
-	end
-	return defence
-end
-
---- Lanes of vision this system grants its owner.
-function M.vision(galaxy, id, buildings, mods)
-	local radar = buildings and (buildings.radar or 0) or 0
-	local extra = mods and mods.vision or 0
-	return rules.base_vision + radar * rules.radar_vision + extra
 end
 
 --- Colonies within `hops` lanes of `from`, for the opening-position guarantee.

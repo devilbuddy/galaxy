@@ -28,13 +28,11 @@ local monarch = require("monarch.monarch")
 local druid = require("druid.druid")
 local config = require("galaxy.config")
 local sim_systems = require("galaxy.sim.systems")
-local sim_buildings = require("galaxy.sim.buildings")
-local sim_tech = require("galaxy.sim.tech")
 local sim_path = require("galaxy.sim.path")
 
 local STAR_LABEL_POOL = 70
 local REGION_LABEL_POOL = 12
-local FLEET_POOL = 40
+local CAPTAIN_POOL = 40
 -- Segments of drawn route. Pools cost their nodes whether or not they are used,
 -- and the usual case is one or two legs, so this is sized for a busy turn
 -- rather than for the theoretical maximum of every commander on a twelve-lane
@@ -62,8 +60,7 @@ local TOP_H = 96
 local CAPTAIN_SIZE = 62
 local CAPTAIN_GAP = 10
 local CAPTAIN_H = CAPTAIN_SIZE + 14
--- Shorter now that EMPIRE lives in the top bar: a status line and one row of
--- controls. Every point saved here is map.
+-- A status line and one row of controls. Every point saved here is map.
 local BAR_H = 156
 -- The staged plan is listed in the bar, and the bar grows *upward* to hold it,
 -- so SEND stays exactly where a thumb last found it. Past this many lines the
@@ -127,21 +124,17 @@ local function publish_zones(self)
 end
 
 --- The always-visible numbers: what the empire has, and when the turn lands.
-local function build_overview(self, w, h, pad, on_empire)
+local function build_overview(self, w, h, pad)
 	local y = h - pad.top
 	local width = w - pad.left - pad.right
 	local card, border = ui.card(pad.left, y, width, TOP_H)
 	self.overview = { card = card, border = border }
 
-	-- EMPIRE sits top right, in the bar the player already reads every turn,
-	-- rather than competing with SEND for the thumb row at the bottom.
-	local empire_w = 168
-	self.empire = ui.button(self.druid, w - pad.right - 14 - empire_w, y - 18,
-		empire_w, 60, "EMPIRE", on_empire,
-		{ icon = "icon_research", icon_size = 24, size = ui.CAPS })
-
+	-- The EMPIRE button and its screen are gone. With no production and no
+	-- research there was nothing on it the map does not already show: the
+	-- captain strip is the roster and the overview carries the objective.
 	local x = pad.left + 14
-	local column = ((w - pad.right - 14 - empire_w - 16) - x) / 3
+	local column = ((w - pad.right - 14) - x) / 3
 	local function slot(i, icon, colour)
 		local cx = x + column * (i - 1)
 		return {
@@ -153,7 +146,7 @@ local function build_overview(self, w, h, pad, on_empire)
 	-- Regions replace the raw research number here. Research is a means and
 	-- lives on the empire screen; regions are the objective, and how close the
 	-- game is has to be readable without opening anything.
-	self.overview.ships = slot(1, "icon_warship", ui.TEXT)
+	self.overview.holdings = slot(1, "icon_star", ui.TEXT)
 	self.overview.regions = slot(2, "icon_flag", ui.ACCENT)
 	self.overview.clock = slot(3, "icon_clock", ui.DIM)
 
@@ -186,11 +179,11 @@ local function star_name(id)
 	return (star and star.name) or ("system " .. tostring(id))
 end
 
-local function fleet_by_id(id)
+local function captain_by_id(id)
 	local view = store.game_view
-	if not view or not view.fleets then return nil end
-	for i = 1, #view.fleets do
-		if view.fleets[i].id == id then return view.fleets[i] end
+	if not view or not view.captains then return nil end
+	for i = 1, #view.captains do
+		if view.captains[i].id == id then return view.captains[i] end
 	end
 	return nil
 end
@@ -201,55 +194,21 @@ end
 -- the server is holding, so the thing that has to be right is the list, and the
 -- only way to check a list is to read it.
 local function describe_order(o)
-	local kind = o.kind
-
-	if kind == "launch" then
+	if o.kind == "move" then
+		local captain = captain_by_id(o.captain)
+		local who = (captain and captain.name) or ("Captain " .. tostring(o.captain))
 		local dest = o.route and o.route[#o.route]
-		return string.format("Send %s from %s to %s",
-			o.ships and ui.plural(o.ships, "ship") or "the garrison",
-			star_name(o.at), star_name(dest))
-
-	elseif kind == "move" then
-		local fleet = fleet_by_id(o.fleet)
-		local who = (fleet and fleet.name) or ("Fleet " .. tostring(o.fleet))
-		local dest = o.route and o.route[#o.route]
-		if not dest then return who .. " holds" end
-		if o.ships then
-			return string.format("Detach %s of %s to %s",
-				ui.plural(o.ships, "ship"), who, star_name(dest))
-		end
+		if not dest then return who .. " holds position" end
 		return string.format("%s to %s", who, star_name(dest))
-
-	elseif kind == "garrison" then
-		local fleet = fleet_by_id(o.fleet)
-		return ((fleet and fleet.name) or ("Fleet " .. tostring(o.fleet)))
-			.. " stands down"
-
-	elseif kind == "build" then
-		if o.building == "" then return "Stop building at " .. star_name(o.at) end
-		local entry = sim_buildings.by_id(o.building)
-		return string.format("%s at %s", (entry and entry.label) or tostring(o.building),
-			star_name(o.at))
-
-	elseif kind == "research" then
-		if o.tech == "" then return "Stop researching" end
-		local entry = sim_tech.by_id(o.tech)
-		return "Research " .. ((entry and entry.label) or tostring(o.tech))
 	end
-
-	return tostring(kind)
+	return tostring(o.kind)
 end
 
---- The plan as lines. Research goes last: it is a standing directive rather
---- than a thing that happens at a place, and it reads better as a footnote.
+--- The plan as lines.
 local function plan_lines()
 	local lines = {}
 	for i = 1, #store.orders do
 		lines[#lines + 1] = describe_order(store.orders[i])
-	end
-	if store.pending_research ~= nil then
-		lines[#lines + 1] = describe_order({
-			kind = "research", tech = store.pending_research })
 	end
 	return lines
 end
@@ -266,7 +225,7 @@ local function build_captains(self, w, h, pad)
 	self.captain_nodes = {}
 
 	local view = store.game_view
-	local fleets = (view and view.fleets) or {}
+	local fleets = (view and view.captains) or {}
 	self.captain_zone = nil
 	self.captain_w, self.captain_h = w, h
 	if #fleets == 0 then
@@ -282,17 +241,17 @@ local function build_captains(self, w, h, pad)
 	for i = 1, #fleets do
 		local f = fleets[i]
 		local moving = (f.eta or 0) > 0
-		local chosen = store.selected_fleet == f.id
+		local chosen = store.selected_captain == f.id
 		local node = ui.portrait(x, top, CAPTAIN_SIZE, f.portrait, {
 			ring_colour = chosen and ui.ACCENT or (moving and ui.GOOD or ui.BORDER),
 		})
 		-- The strength under the face, because "which of my four is strong
 		-- enough" is the question a player is usually asking of this row.
-		ui.text(x + CAPTAIN_SIZE * 0.5, top - CAPTAIN_SIZE - 8, ui.number(f.ships),
-			ui.SMALL, chosen and ui.ACCENT or ui.DIM,
-			{ bold = true, pivot = gui.PIVOT_CENTER })
+		ui.small(x + CAPTAIN_SIZE * 0.5, top - CAPTAIN_SIZE - 8,
+			moving and ui.plural(f.eta, "lane") or "here",
+			chosen and ui.ACCENT or ui.FAINT, { pivot = gui.PIVOT_CENTER })
 		self.captain_druid:new_button(node, function()
-			store.selected_fleet = f.id
+			store.selected_captain = f.id
 			store.selected = f.at
 			self.sheet_dirty = true
 			-- Where the force actually is, part way along its lane if it is
@@ -351,7 +310,7 @@ local function build_bar(self, w, pad, submit)
 	self.cancel = ui.button(self.druid, right - send_w - 182, row_y, 168, bh,
 		"CANCEL", function()
 			store.aiming = nil
-			store.selected_fleet = nil
+			store.selected_captain = nil
 			self.sheet_dirty = true
 		end, { size = ui.CAPS })
 
@@ -424,46 +383,18 @@ local function known(id)
 	return view.systems[tostring(id)]
 end
 
-local function my_fleets_at(id)
-	local view = store.game_view
-	local out = {}
-	if not view then return out end
-	for i = 1, #view.fleets do
-		local f = view.fleets[i]
-		if f.at == id and (f.eta or 0) == 0 then out[#out + 1] = f end
-	end
-	table.sort(out, function(p, q) return p.id < q.id end)
-	return out
-end
-
---- Ships already committed out of a garrison by staged orders, so the sheet
---- never offers to launch the same ships twice.
-local function committed_from(id)
-	local n = 0
-	for i = 1, #store.orders do
-		local o = store.orders[i]
-		if o.kind == "launch" and o.at == id then n = n + (o.ships or 0) end
-	end
-	return n
-end
-
-local function staged_build(id)
-	for i = 1, #store.orders do
-		local o = store.orders[i]
-		if o.kind == "build" and o.at == id then return o.building end
-	end
-	return nil
-end
-
 --- Rebuild the panel describing whatever is selected. Returns its height.
 --
 -- Laid out downward from zero and shifted into place at the end, because the
 -- height is not known until the content is on the page.
+--
+-- Much shorter than it was: with no production, no buildings and no research, a
+-- system is a place with an owner and possibly a captain standing on it. It
+-- grows back as those are built.
 local function build_sheet(self, w, pad)
-	-- Its own Druid instance, dropped wholesale. Tracking each component by hand
-	-- is what broke the empire screen: helpers like ui.scroll register one of
-	-- their own, and a component that outlives its node throws on the next touch
-	-- anywhere on screen.
+	-- Its own Druid instance, dropped wholesale. Tracking each component by
+	-- hand is what broke before: helpers register components the caller never
+	-- sees, and one that outlives its node throws on the next touch anywhere.
 	ui.region(self.sheet_druid, self.sheet_nodes)
 	self.sheet_druid = nil
 	self.sheet_zone = nil
@@ -474,8 +405,8 @@ local function build_sheet(self, w, pad)
 
 	-- Aiming hands the screen to the map. The sheet asked the player to "tap
 	-- where to send" while covering nearly half the destinations, which is the
-	-- one moment it must not be in the way; the order bar carries the origin
-	-- and the count instead (see refresh_bar).
+	-- one moment it must not be in the way; the order bar carries the captain
+	-- and the origin instead.
 	if store.aiming then return 0 end
 
 	self.sheet_druid = druid.new(self)
@@ -485,7 +416,8 @@ local function build_sheet(self, w, pad)
 	local info = known(id)
 	local star = g.stars[id]
 	local kind = sim_systems.kind(g, id)
-	local mine = (view and info and info.owner == view.you and info.live) and true or false
+	local you = view and view.you
+	local mine = (view and info and info.owner == you) and true or false
 
 	local width = w - pad.left - pad.right
 	local inner = pad.left + 24
@@ -512,206 +444,71 @@ local function build_sheet(self, w, pad)
 		ui.body(inner, y, "Unexplored", ui.FAINT)
 		y = y - 24
 	else
-		-- Labelled. Three unlabelled glyphs meant three things to memorise, and
-		-- the first of them repeated the garrison figure shown again below.
-		local column = text_w / 3
 		y = y - 46
-		local function stat(i, icon, value, label, colour)
-			local x = inner + column * (i - 1)
-			ui.icon(x, y + 15, 26, icon, ui.FAINT)
-			ui.text(x + 34, y + 2, value, ui.BODY, colour or ui.TEXT, { bold = true })
-			ui.small(x + 34, y - 22, label, ui.FAINT)
-		end
-		if kind == "colony" then
-			stat(1, "icon_growth",
-				string.format("%d/%d", info.population or 0, info.capacity or 0),
-				"people")
+		if (info.capital_of or 0) ~= 0 then
+			local own = info.capital_of == you
+			local who = view and view.players[info.capital_of]
+			ui.icon(inner, y + 14, 26, "icon_flag", own and ui.ACCENT or ui.BAD)
+			ui.body(inner + 34, y,
+				own and "Your capital" or ((who and who.name or "A rival") .. "'s capital"),
+				own and ui.ACCENT or ui.BAD)
+		elseif mine then
+			ui.body(inner, y, "Yours", ui.TEXT)
+		elseif (info.owner or 0) == 0 then
+			ui.body(inner, y, "Unclaimed", ui.DIM)
 		else
-			stat(1, "icon_growth", "-", "no population", ui.FAINT)
+			local who = view and view.players[info.owner]
+			ui.body(inner, y, "Held by " .. (who and who.name or "someone"), ui.BAD)
 		end
-		stat(2, "icon_defence", tostring(info.defence or 0), "defence")
-		stat(3, "icon_industry", ui.number(info.output or 0), "a turn")
-
-		y = y - 50
 		if not info.live then
+			y = y - 30
 			ui.small(inner, y, "Last seen turn " .. tostring(info.seen), ui.WARN)
-		elseif info.owner == 0 then
-			ui.small(inner, y, "Unclaimed", ui.DIM)
-		elseif not mine then
-			local name = (view.players[info.owner] and view.players[info.owner].name)
-				or ("Player " .. info.owner)
-			ui.small(inner, y, "Held by " .. name, ui.BAD)
 		end
 
-		-- Installations. Shown wherever you can see them, tappable only on yours.
-		local allowed = sim_buildings.available(g, id)
-		if #allowed > 0 and info.buildings then
-			y = y - 42
-			ui.caps(inner, y, "installations")
-			-- The bare number was a price and the dots were levels, and nothing
-			-- said so.
-			ui.small(inner + text_w, y, "cost / level", ui.FAINT,
-				{ pivot = gui.PIVOT_E })
-			local staged = staged_build(id)
-			for k = 1, #allowed do
-				local entry = sim_buildings.by_id(allowed[k])
-				local level = info.buildings[entry.id] or 0
-				local pips = sim_buildings.max_level(entry.id)
-				local maxed = level >= pips
-				y = y - 56
-				local row = ui.panel(inner, y + 46, text_w, 52,
-					(staged == entry.id) and ui.ACCENT_SOFT or ui.CARD_ALT)
-				ui.icon(inner + 14, y + 36, 28, entry.icon,
-					level > 0 and ui.TEXT or ui.FAINT)
-				ui.body(inner + 54, y + 20, entry.label,
-					level > 0 and ui.TEXT or ui.DIM)
-
-				-- Level pips read faster than a number at a glance.
-				for pip = 1, pips do
-					ui.dot(inner + text_w - 26 - (pips - pip) * 26, y + 33, 14,
-						pip <= level and ui.GOOD or ui.BORDER)
-				end
-
-				local note = nil
-				if info.building and info.building.kind == entry.id then
-					note = string.format("%d/%d", info.building.paid,
-						info.building.cost or 0)
-				elseif staged == entry.id then
-					note = "queued"
-				elseif maxed then
-					note = "complete"
-				elseif mine then
-					local cost = sim_buildings.cost(entry.id, level,
-						(view.rates and view.rates.building_cost) or 0)
-					note = cost and ui.number(cost) or nil
-				end
-				if note then
-					ui.small(inner + text_w - 34 - pips * 26, y + 33, note, ui.DIM,
-						{ pivot = gui.PIVOT_E })
-				end
-
-				if mine and not maxed then
-					self.sheet_druid:new_button(row, function()
-							-- Tapping what is queued cancels it.
-							for oi = #store.orders, 1, -1 do
-								local o = store.orders[oi]
-								if o.kind == "build" and o.at == id then
-									table.remove(store.orders, oi)
-								end
-							end
-							if staged ~= entry.id then
-								store.orders[#store.orders + 1] = {
-									kind = "build", at = id, building = entry.id,
-								}
-							end
-							self.sheet_dirty = true
-						end)
-				end
-			end
+		-- Captains standing here, and what can be asked of them.
+		local here = {}
+		for i = 1, #((view and view.captains) or {}) do
+			local c = view.captains[i]
+			if c.at == id and (c.eta or 0) == 0 then here[#here + 1] = c end
 		end
-
-		-- Forces here, and what can be done with them.
-		local fleets = mine and my_fleets_at(id) or {}
-		local garrison = (info.garrison or 0) - committed_from(id)
-		if mine and (#fleets > 0 or garrison > 0) then
+		if #here > 0 then
 			y = y - 42
-			ui.caps(inner, y, "forces here")
-
-			if garrison > 0 then
-				-- How many to send. It used to be half, silently, with no way to
-				-- ask for any other number - so "take that waypoint with twenty"
-				-- and "commit everything" were both impossible, though the order
-				-- shape has carried a count all along.
-				local chosen = self.launch_ships
-				if not chosen or chosen > garrison then
-					chosen = math.max(1, math.floor(garrison * 0.5))
-				end
-				self.launch_ships = chosen
-				local step = math.max(1, math.floor(garrison / 10 + 0.5))
-
-				y = y - 58
-				ui.panel(inner, y + 48, text_w, 54, ui.CARD_ALT)
-				ui.icon(inner + 14, y + 37, 28, "icon_warship", ui.TEXT)
-				ui.body(inner + 54, y + 21, "Garrison", ui.TEXT)
-				ui.value(inner + text_w - 14, y + 21, tostring(garrison), ui.BODY, ui.TEXT)
-
-				y = y - 62
-				local function adjust(by)
-					local next_count = math.max(1, math.min(garrison,
-						self.launch_ships + by))
-					self.launch_ships = next_count
-					self.sheet_dirty = true
-				end
-				ui.button(self.sheet_druid, inner, y + 54, 72, 54, "-",
-					function() adjust(-step) end, {})
-				ui.button(self.sheet_druid, inner + 80, y + 54, 72, 54, "+",
-					function() adjust(step) end, {})
-				ui.button(self.sheet_druid, inner + 160, y + 54, 84, 54, "ALL",
-					function()
-						self.launch_ships = garrison
-						self.sheet_dirty = true
-					end, { size = ui.CAPS })
-				-- The count reads as the sentence the order will become.
-				ui.small(inner + 256, y + 27, ui.plural(chosen, "ship"), ui.TEXT)
-
-				ui.button(self.sheet_druid, inner + text_w - 168, y + 54, 168, 54,
-					"LAUNCH", function()
-						store.aiming = { kind = "launch", at = id, ships = chosen }
-						store.selected_fleet = nil
-						self.sheet_dirty = true
-					end, { style = "primary", size = ui.CAPS })
-			end
-
-			for k = 1, #fleets do
-				local fleet = fleets[k]
-				local chosen = store.selected_fleet == fleet.id
+			ui.caps(inner, y, "captains here")
+			for k = 1, #here do
+				local captain = here[k]
+				local chosen = store.selected_captain == captain.id
 				y = y - 58
 				local row = ui.panel(inner, y + 48, text_w, 54,
 					chosen and ui.ACCENT_SOFT or ui.CARD_ALT)
-				ui.portrait(inner + 8, y + 43, 38, fleet.portrait,
+				ui.portrait(inner + 8, y + 43, 38, captain.portrait,
 					{ ring_colour = chosen and ui.ACCENT or ui.BORDER })
-				ui.body(inner + 56, y + 27, fleet.name, ui.TEXT)
-				ui.small(inner + 56, y + 6, fleet.rank or "", ui.FAINT)
-				ui.value(inner + text_w - 14, y + 21,
-					fleet.command and (fleet.ships .. "/" .. fleet.command)
-						or tostring(fleet.ships),
-					ui.BODY,
-					(fleet.command and fleet.ships >= fleet.command) and ui.WARN or ui.TEXT)
+				ui.body(inner + 56, y + 27, captain.name, ui.TEXT)
+				ui.small(inner + 56, y + 6, captain.rank or "", ui.FAINT)
+				ui.small(inner + text_w - 14, y + 21,
+					chosen and "tap a destination" or "tap to move", ui.FAINT,
+					{ pivot = gui.PIVOT_E })
 				self.sheet_druid:new_button(row, function()
 						if chosen then
-							store.selected_fleet = nil
+							store.selected_captain = nil
 							store.aiming = nil
 						else
-							store.selected_fleet = fleet.id
-							store.aiming = { kind = "move", fleet = fleet.id }
+							store.selected_captain = captain.id
+							store.aiming = { kind = "move", captain = captain.id }
 						end
 						self.sheet_dirty = true
 					end)
 			end
-
-			if store.selected_fleet then
-				y = y - 64
-				local stand = ui.button(self.sheet_druid, inner, y + 58, text_w, 54,
-					"STAND DOWN", function()
-						store.orders[#store.orders + 1] = {
-							kind = "garrison", fleet = store.selected_fleet,
-						}
-						store.selected_fleet = nil
-						store.aiming = nil
-						self.sheet_dirty = true
-					end, { size = ui.CAPS })
-			end
 		end
 
-		-- Enemy forces in sight here.
+		-- Rival captains in sight here.
 		if view then
 			local seen = 0
 			for c = 1, #view.contacts do
-				if view.contacts[c].at == id then seen = seen + view.contacts[c].ships end
+				if view.contacts[c].at == id then seen = seen + 1 end
 			end
 			if seen > 0 then
 				y = y - 40
-				ui.small(inner, y, ui.plural(seen, "hostile ship") .. " in sight", ui.BAD)
+				ui.small(inner, y, ui.plural(seen, "rival captain") .. " in sight", ui.BAD)
 			end
 		end
 		y = y - 24
@@ -736,8 +533,8 @@ local function build_sheet(self, w, pad)
 	return height
 end
 
--- Map labels and fleet markers -------------------------------------------------------
-
+--- World position to screen, the same relationship the render script builds its
+--- projection from. Everything the HUD draws over the map goes through this.
 local function project(cam, w, h, wx, wy)
 	return (wx - cam.x) * cam.zoom + w * 0.5, (wy - cam.y) * cam.zoom + h * 0.5
 end
@@ -830,8 +627,8 @@ local function update_routes(self, g, cam, w, h)
 	-- reads as the louder of the two.
 	local mine = player_colour(view.you)
 	local committed = vmath.vector4(mine.x, mine.y, mine.z, 0.5)
-	for i = 1, #view.fleets do
-		local f = view.fleets[i]
+	for i = 1, #view.captains do
+		local f = view.captains[i]
 		if f.route and #f.route > 0 then
 			local a = g.stars[f.at]
 			if a then
@@ -874,14 +671,14 @@ end
 -- GUI nodes rather than world geometry: a marker wants to stay a constant size
 -- at every zoom and to carry a crisp glyph, which is what the labels already do.
 -- It also avoids rebuilding a vertex buffer whenever a fleet moves.
-local function update_fleets(self, g, cam, w, h)
+local function update_captains(self, g, cam, w, h)
 	local view = store.game_view
 	local used = 0
 	if view and self.lane_lengths then
 		local lengths = self.lane_lengths
 
-		local function place(at, next_hop, progress, ships, colour, mine)
-			if used >= FLEET_POOL then return end
+		local function place(at, next_hop, progress, label, colour, mine)
+			if used >= CAPTAIN_POOL then return end
 			local a = g.stars[at]
 			if not a then return end
 			local wx, wy = a.x, a.y
@@ -904,7 +701,7 @@ local function update_fleets(self, g, cam, w, h)
 			-- neighbouring systems are a few units apart, and two markers there
 			-- become one unreadable knot of triangles and numbers.
 			for prior = 1, used do
-				local other = self.fleet_nodes[prior]
+				local other = self.captain_markers[prior]
 				local dx = sx - other.at_x
 				local dy = sy - other.at_y
 				if dx * dx + dy * dy < MARKER_CLEARANCE * MARKER_CLEARANCE then
@@ -921,7 +718,7 @@ local function update_fleets(self, g, cam, w, h)
 			end
 
 			used = used + 1
-			local marker = self.fleet_nodes[used]
+			local marker = self.captain_markers[used]
 			marker.at_x, marker.at_y = sx, sy
 			gui.set_enabled(marker.box, true)
 			gui.set_enabled(marker.text, true)
@@ -929,7 +726,7 @@ local function update_fleets(self, g, cam, w, h)
 			gui.set_position(marker.text, vmath.vector3(sx, sy - 30, 0))
 			gui.set_color(marker.box, colour)
 			gui.set_color(marker.text, colour)
-			gui.set_text(marker.text, ui.number(ships))
+			gui.set_text(marker.text, label or "")
 			-- Point it along the lane; a parked fleet points up.
 			gui.set_rotation(marker.box, vmath.vector3(0, 0,
 				angle and (math.deg(angle) - 90) or 0))
@@ -947,18 +744,18 @@ local function update_fleets(self, g, cam, w, h)
 		end
 
 		local mine_colour = player_colour(view.you)
-		for i = 1, #view.fleets do
-			local f = view.fleets[i]
-			place(f.at, f.next_hop, f.progress, f.ships, mine_colour, true)
+		for i = 1, #view.captains do
+			local f = view.captains[i]
+			place(f.at, f.next_hop, f.progress, f.name, mine_colour, true)
 		end
 		for i = 1, #view.contacts do
 			local c = view.contacts[i]
-			place(c.at, c.next_hop, c.progress, c.ships, player_colour(c.owner), false)
+			place(c.at, c.next_hop, c.progress, c.rank or "", player_colour(c.owner), false)
 		end
 	end
-	for i = used + 1, FLEET_POOL do
-		gui.set_enabled(self.fleet_nodes[i].box, false)
-		gui.set_enabled(self.fleet_nodes[i].text, false)
+	for i = used + 1, CAPTAIN_POOL do
+		gui.set_enabled(self.captain_markers[i].box, false)
+		gui.set_enabled(self.captain_markers[i].text, false)
 	end
 end
 
@@ -1109,31 +906,24 @@ local function resolve_aim(self)
 	local aim = store.aiming
 	if not aim or not selected then return end
 
-	if aim.kind == "launch" then
-		if selected == aim.at then return end
-		local order = {
-			kind = "launch", at = aim.at, ships = aim.ships, route = { selected },
-		}
+	if aim.kind == "move" then
+		local order = { kind = "move", captain = aim.captain, route = { selected } }
 		store.orders[#store.orders + 1] = order
-		request_path(self, order, aim.at, nil)
-	elseif aim.kind == "move" then
-		local order = { kind = "move", fleet = aim.fleet, route = { selected } }
-		store.orders[#store.orders + 1] = order
-		-- A fleet already in a lane must finish it before it can turn, so the
+		-- A captain already in a lane must finish it before turning, so the
 		-- path is plotted from the far end - the same rule the resolver applies.
 		local view = store.game_view
 		local from, fixed = nil, nil
-		for k = 1, #(view and view.fleets or {}) do
-			local f = view.fleets[k]
-			if f.id == aim.fleet then
-				from = f.at
-				fixed = f.next_hop
+		for k = 1, #((view and view.captains) or {}) do
+			local c = view.captains[k]
+			if c.id == aim.captain then
+				from = c.at
+				fixed = c.next_hop
 			end
 		end
 		if from then request_path(self, order, fixed or from, fixed) end
 	end
 	store.aiming = nil
-	store.selected_fleet = nil
+	store.selected_captain = nil
 	-- No flash: the manifest in the bar now names the order that was just
 	-- added, and a flash would cover the line saying it has not been sent.
 end
@@ -1164,9 +954,6 @@ local function submit_orders(self)
 		end
 		payload[#payload + 1] = out
 	end
-	if store.pending_research ~= nil then
-		payload[#payload + 1] = { kind = "research", tech = store.pending_research }
-	end
 
 	-- Held over the round trip so the button can say so. A send that vanishes
 	-- into a request with no visible change is indistinguishable from a tap
@@ -1187,7 +974,7 @@ local function submit_orders(self)
 			res.accepted or 0, tostring(res.for_turn)))
 		store.plan_sent(tonumber(res.for_turn) or store.orders_turn)
 		store.aiming = nil
-		store.selected_fleet = nil
+		store.selected_captain = nil
 		self.sent_flash = 0
 		self.flash = nil
 		self.sheet_dirty = true
@@ -1208,8 +995,7 @@ local function build_chrome(self, w, h)
 
 	local pad = ui.inset()
 	self.pad = pad
-	build_overview(self, w, h, pad,
-		function() monarch.show(hash("empire")) end)
+	build_overview(self, w, h, pad)
 	build_bar(self, w, pad, submit_orders)
 	ui.collect(previous)
 	build_captains(self, w, h, pad)
@@ -1228,8 +1014,7 @@ local function refresh_overview(self)
 
 	gui.set_enabled(o.card, on)
 	gui.set_enabled(o.border, on)
-	self.empire.set_visible(on)
-	local slots = { o.ships, o.regions, o.clock }
+	local slots = { o.holdings, o.regions, o.clock }
 	for i = 1, #slots do
 		gui.set_enabled(slots[i].icon, on)
 		gui.set_enabled(slots[i].value, on)
@@ -1238,11 +1023,9 @@ local function refresh_overview(self)
 	if not on then return end
 
 	local rates = view.rates or {}
-	gui.set_text(o.ships.value, ui.number(rates.ships or 0))
-	local commanders_out = #(view.fleets or {})
-	local cap = view.commander_cap or rates.commander_cap or 0
-	gui.set_text(o.ships.note, string.format("%d/%d led", commanders_out, cap))
-	gui.set_color(o.ships.note, commanders_out >= cap and ui.WARN or ui.DIM)
+	gui.set_text(o.holdings.value, ui.number(rates.systems or 0))
+	gui.set_text(o.holdings.note, "systems")
+	gui.set_color(o.holdings.note, ui.DIM)
 
 	local held = view.regions_held or 0
 	local needed = view.regions_needed or 0
@@ -1358,13 +1141,10 @@ local function refresh_bar(self, g)
 		local text, tone = self.flash, ui.ACCENT
 		if not text then
 			local aim = store.aiming
-			if aim and aim.kind == "launch" then
-				text, tone = string.format("Tap a destination for %s from %s",
-					ui.plural(aim.ships, "ship"), star_name(aim.at)), ui.ACCENT
-			elseif aim then
-				local fleet = fleet_by_id(aim.fleet)
+			if aim then
+				local captain = captain_by_id(aim.captain)
 				text, tone = string.format("Tap where %s should go",
-					(fleet and fleet.name) or "the fleet"), ui.ACCENT
+					(captain and captain.name) or "the captain"), ui.ACCENT
 			elseif self.sending then
 				text, tone = "Sending...", ui.DIM
 			elseif count > 0 and not unsent then
@@ -1405,8 +1185,8 @@ function init(self)
 		local n = make_label(self.region_nodes, REGION_FONT_SCALE, STAR_COLOUR)
 		gui.set_pivot(n, gui.PIVOT_CENTER)
 	end
-	self.fleet_nodes = {}
-	for _ = 1, FLEET_POOL do make_marker(self.fleet_nodes) end
+	self.captain_markers = {}
+	for _ = 1, CAPTAIN_POOL do make_marker(self.captain_markers) end
 
 	-- Route segments, pooled like everything else on the map. Created before the
 	-- fleet markers would draw over them, which is what we want: the marker is
@@ -1522,12 +1302,12 @@ function update(self, dt)
 	-- change: who is in the field, where they are, and which is selected.
 	local view = store.game_view
 	local key = {}
-	for i = 1, #((view and view.fleets) or {}) do
-		local f = view.fleets[i]
-		key[#key + 1] = table.concat({ f.id, f.portrait or "", f.ships or 0,
+	for i = 1, #((view and view.captains) or {}) do
+		local f = view.captains[i]
+		key[#key + 1] = table.concat({ f.id, f.portrait or "",
 			f.at or 0, (f.eta or 0) > 0 and "m" or "p" }, ":")
 	end
-	key[#key + 1] = tostring(store.selected_fleet)
+	key[#key + 1] = tostring(store.selected_captain)
 	local joined = table.concat(key, "|")
 	if joined ~= self.captain_key then
 		self.captain_key = joined
@@ -1568,7 +1348,7 @@ function update(self, dt)
 
 	update_labels(self, g, store.camera, w, h)
 	update_routes(self, g, store.camera, w, h)
-	update_fleets(self, g, store.camera, w, h)
+	update_captains(self, g, store.camera, w, h)
 end
 
 local function on_chrome(self, x, y)

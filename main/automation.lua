@@ -56,10 +56,10 @@ function M.update(dt)
 		seed = store.galaxy and store.galaxy.seed or 0,
 		turn = view and view.turn or 0,
 		selected = store.selected or 0,
-		selected_fleet = store.selected_fleet or 0,
+		selected_captain = store.selected_captain or 0,
 		aiming = store.aiming and store.aiming.kind or "",
 		staged_orders = store.plan_count and store.plan_count() or 0,
-		commanders = view and #view.fleets or 0,
+		captains = view and #view.captains or 0,
 	})
 end
 

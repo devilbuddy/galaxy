@@ -16,9 +16,7 @@
 local modifiers = require("galaxy.sim.modifiers")
 local rules = require("galaxy.sim.rules")
 local systems = require("galaxy.sim.systems")
-local buildings = require("galaxy.sim.buildings")
 local state_mod = require("galaxy.sim.state")
-local tech = require("galaxy.sim.tech")
 local commanders = require("galaxy.sim.commanders")
 local regions_mod = require("galaxy.sim.regions")
 
@@ -45,15 +43,15 @@ function M.visible_systems(galaxy, state, player, mods)
 
 	for id, sys in pairs(state.systems) do
 		if sys.owner == player then
-			push(id, systems.vision(galaxy, id, sys.buildings, mods))
+			push(id, rules.base_vision + mods.vision)
 		end
 	end
-	for i = 1, #state.fleets do
-		local fleet = state.fleets[i]
-		if fleet.owner == player then
-			local reach = rules.fleet_vision + mods.vision
-			push(fleet.at, reach)
-			push(fleet.route[1], reach)
+	for i = 1, #state.captains do
+		local captain = state.captains[i]
+		if captain.owner == player then
+			local reach = rules.captain_vision + mods.vision
+			push(captain.at, reach)
+			push(captain.route[1], reach)
 		end
 	end
 
@@ -91,11 +89,7 @@ function M.remember(galaxy, state, player)
 		memory[id] = {
 			turn = state.turn,
 			owner = sys.owner,
-			population = sys.population,
-			garrison = sys.ships,
-			radar = sys.buildings.radar,
-			fortress = sys.buildings.fortress,
-			shipyard = sys.buildings.shipyard,
+			capital_of = sys.capital_of,
 		}
 	end
 	return visible
@@ -119,33 +113,9 @@ function M.project(galaxy, state, player)
 	local out_systems = {}
 	for id in pairs(visible) do
 		local sys = state.systems[id]
-		local mine = sys.owner == player
 		out_systems[tostring(id)] = {
 			owner = sys.owner,
-			population = sys.population,
-			-- The immobile force sitting on it, which is most of what defends it.
-			garrison = sys.ships,
-			-- Buildings are structures: if you can see the world you can see
-			-- its fortress and its radar mast.
-			buildings = {
-				radar = sys.buildings.radar,
-				fortress = sys.buildings.fortress,
-				shipyard = sys.buildings.shipyard,
-			},
-			-- What it would defend itself with, before any fleet.
-			defence = math.floor(systems.defence(galaxy, id, sys, sys.buildings)
-				* (mine and mods.fortress or 1)),
-			-- Only your own worlds report what they are producing and building.
-			output = mine and math.floor(
-				systems.output(galaxy, id, sys, mods, sys.buildings)) or nil,
-			building = mine and sys.building and {
-				kind = sys.building.kind,
-				paid = sys.building.paid,
-				cost = buildings.cost(sys.building.kind,
-					sys.buildings[sys.building.kind] or 0, mods.building_cost),
-			} or nil,
-			capacity = systems.capacity(galaxy, id, mine and mods or nil),
-			home_of = sys.home_of,
+			capital_of = sys.capital_of,
 			seen = state.turn,
 			live = true,
 		}
@@ -154,45 +124,33 @@ function M.project(galaxy, state, player)
 		if not out_systems[tostring(id)] then
 			out_systems[tostring(id)] = {
 				owner = seen.owner,
-				population = seen.population,
-				garrison = seen.garrison or 0,
-				buildings = {
-					radar = seen.radar or 0,
-					fortress = seen.fortress or 0,
-					shipyard = seen.shipyard or 0,
-				},
+				capital_of = seen.capital_of or 0,
 				seen = seen.turn,
 				live = false,
 			}
 		end
 	end
 
-	-- Your own fleets in full; everyone else's only where you have eyes, and
-	-- without their orders - you can see a force in a lane, not its campaign.
-	local fleets, contacts = {}, {}
-	for i = 1, #state.fleets do
-		local f = state.fleets[i]
-		if f.owner == player then
-			local profile = commanders.profile(f, mods)
-			fleets[#fleets + 1] = {
-				id = f.id, name = f.name, ships = f.ships,
-				at = f.at, next_hop = f.route[1], progress = f.progress,
-				route = f.route, eta = #f.route,
-				-- The commander, flattened: the client should never have to
-				-- know the level curve to draw a rank or a capacity bar.
+	-- Your own captains in full; everyone else's only where you have eyes, and
+	-- without their orders - you can see where someone is, not their campaign.
+	local captains, contacts = {}, {}
+	for i = 1, #state.captains do
+		local c = state.captains[i]
+		if c.owner == player then
+			local profile = commanders.profile(c, mods)
+			captains[#captains + 1] = {
+				id = c.id, name = c.name,
+				at = c.at, next_hop = c.route[1], progress = c.progress,
+				route = c.route, eta = #c.route,
 				level = profile.level, rank = profile.rank,
 				portrait = profile.portrait,
 				xp = profile.xp, next_xp = profile.next_xp,
-				command = profile.command, speed = profile.speed,
-				tactics = profile.tactics,
+				speed = profile.speed,
 			}
-		elseif visible[f.at] or (f.route[1] and visible[f.route[1]]) then
-			-- An enemy commander's rank shows - you can tell a veteran force
-			-- from a green one by how it moves - but not their experience.
+		elseif visible[c.at] or (c.route[1] and visible[c.route[1]]) then
 			contacts[#contacts + 1] = {
-				owner = f.owner, ships = f.ships,
-				at = f.at, next_hop = f.route[1], progress = f.progress,
-				rank = commanders.rank(f.level or 1),
+				owner = c.owner, at = c.at, next_hop = c.route[1],
+				progress = c.progress, rank = commanders.rank(c.level or 1),
 			}
 		end
 	end
@@ -200,27 +158,17 @@ function M.project(galaxy, state, player)
 	local roster = {}
 	for i = 1, #state.players do
 		-- Names, race and liveness are public - you should know what you are
-		-- fighting - but holdings are not.
+		-- up against - but holdings are not.
 		roster[i] = {
 			name = state.players[i].name,
 			race = state.players[i].race,
 			alive = state.players[i].alive,
+			capital = state.players[i].capital,
 		}
 	end
 
-	-- Researched technologies go out as an array, not a set: an empty set
-	-- encodes as `[]` or `{}` depending on the encoder and the client would have
-	-- to guess. Ordered by the tree so the list is stable.
-	local known = {}
-	for i = 1, #tech.TECHS do
-		if me.tech[tech.TECHS[i].id] then known[#known + 1] = tech.TECHS[i].id end
-	end
-
-	local population = state_mod.population_of(state, player)
-
 	-- Region control is public. Who holds what is visible from the borders on
-	-- the map, and an objective nobody can see the state of is not an
-	-- objective - a player has to be able to tell how close the game is.
+	-- the map, and an objective nobody can see the state of is not an objective.
 	local held, counts = regions_mod.control(galaxy, state)
 	local region_view = {}
 	for r = 1, #held do
@@ -232,37 +180,22 @@ function M.project(galaxy, state, player)
 		you = player,
 		winner = state.winner,
 		players = roster,
+		systems = out_systems,
+		captains = captains,
+		contacts = contacts,
+		race = me.race,
+		capital = me.capital,
 		regions = region_view,
 		region_weights = regions_mod.weights(galaxy),
 		regions_needed = regions_mod.needed(galaxy),
 		regions_held = regions_mod.tally(galaxy, state, held)[player] or 0,
-		commander_cap = rules.commander_cap,
-		systems = out_systems,
-		fleets = fleets,
-		contacts = contacts,
-		research = me.research,
-		tech = known,
-		researching = me.researching,
-		available_tech = tech.available(me.tech),
-		race = me.race,
 		-- The numbers the client needs to explain itself.
 		rates = {
-			ships = state_mod.ships_of(state, player),
-			garrisoned = state_mod.garrisons_of(state, player),
-			ship_cap = math.floor(population * mods.cap),
-			population = population,
-			-- A commander's speed is their own (level x race x tech), so what
-			-- the empire has is a multiplier, not a distance. Reported as the
-			-- speed a green officer actually moves at, which is the number a
-			-- player can compare against a lane.
+			systems = state_mod.holdings_of(state, player),
 			speed = commanders.speed({ level = 1 }, mods),
 			speed_scale = mods.speed_scale,
-			commander_cap = rules.commander_cap,
 			hops = mods.hops,
 			vision = mods.vision,
-			tech_cost = mods.tech_cost,
-			ship_cost = mods.ship_cost,
-			building_cost = mods.building_cost,
 		},
 	}
 end

@@ -259,7 +259,20 @@ def main():
     p.add_argument("name")
     args = ap.parse_args()
 
-    game = connect(args.port, args.device)
+    try:
+        game = connect(args.port, args.device)
+    except Exception as exc:
+        # A wall of tracebacks for "the game is not running" helps nobody. The
+        # cause is nearly always one of two things, so say both.
+        print(f"could not reach the game on port {args.port}: "
+              f"{type(exc).__name__}", file=sys.stderr)
+        print("  is the debug build running, and is the port forwarded?",
+              file=sys.stderr)
+        print(f"  device:  adb forward tcp:{args.port} tcp:{args.port}",
+              file=sys.stderr)
+        print("  desktop: --port from the editor's "
+              "\"Engine service started on port N\" line", file=sys.stderr)
+        return 2
     return {
         "health": cmd_health, "text": cmd_text, "find": cmd_find,
         "click": cmd_click, "tap": cmd_tap, "shot": cmd_shot,

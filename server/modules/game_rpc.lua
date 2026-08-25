@@ -24,7 +24,6 @@ local resolve = require("galaxy.sim.resolve")
 local modifiers = require("galaxy.sim.modifiers")
 local view = require("galaxy.sim.view")
 local races = require("galaxy.sim.races")
-local tech = require("galaxy.sim.tech")
 local rng = require("galaxy.rng")
 
 local M = {}
@@ -78,33 +77,18 @@ end
 
 --- Repair a state that has been round-tripped through JSON storage.
 --
--- Sim state is stored as JSON. Dense arrays (systems, fleets, players) survive
--- intact, but `knowledge[player]` is keyed by star id and is *sparse*, so it
--- encodes as an object and comes back with string keys. Indexing it with a
--- number would then silently miss, and every player's fog-of-war memory would
+-- Sim state is stored as JSON. Dense arrays (systems, captains, players)
+-- survive intact, but `knowledge[player]` is keyed by star id and is *sparse*,
+-- so it encodes as an object and comes back with string keys. Indexing it with
+-- a number would then silently miss, and every player's fog-of-war memory would
 -- appear empty after the first turn - the map would forget everything it had
 -- seen, every turn, with no error anywhere.
+--
+-- The repair itself lives in the sim (`state.normalise`), so the rules and the
+-- repair for them cannot drift apart.
 local function normalise_state(state)
 	if not state then return nil end
-	if type(state.knowledge) ~= "table" then
-		state.knowledge = {}
-	else
-		local repaired = {}
-		for player, memory in pairs(state.knowledge) do
-			local by_id = {}
-			if type(memory) == "table" then
-				for id, seen in pairs(memory) do
-					by_id[tonumber(id) or id] = seen
-				end
-			end
-			repaired[tonumber(player) or player] = by_id
-		end
-		state.knowledge = repaired
-	end
-	-- Everything else the JSON round trip damages - stockpiles, the researched
-	-- set, per-system freighter counts - is repaired by the sim itself, so the
-	-- rules and the repair for them cannot drift apart.
-	return sim_state.migrate(state)
+	return sim_state.normalise(state)
 end
 
 local function fail(message)
@@ -153,12 +137,34 @@ end
 
 -- Turn resolution -------------------------------------------------------------
 
+--- Has every player still in the game submitted orders for the coming turn?
+--
+-- Submitting is what ends a player's turn, so once the last one is in there is
+-- nothing left to wait for. Waiting out the clock anyway is the single worst
+-- thing an asynchronous game can do to four people who are all paying
+-- attention at the same time.
+--
+-- An order record existing is the whole test. A player with nothing to do still
+-- submits - an empty batch is how "I am done" is said.
+local function everyone_submitted(game, turn)
+	local waiting = 0
+	for i = 1, #game.players do
+		local player = game.players[i]
+		if player.alive ~= false then
+			local submitted = read_one(ORDERS, game.id .. ":" .. turn, player.id)
+			if not submitted then waiting = waiting + 1 end
+		end
+	end
+	return waiting == 0
+end
+
 --- Resolve every turn that is due. Returns how many were resolved.
 local function catch_up(game, game_version)
 	if game.status ~= "active" then return 0, game_version end
 
 	local now = os.time()
-	if now < game.next_turn_at then return 0, game_version end
+	local early = everyone_submitted(game, game.turn + 1)
+	if now < game.next_turn_at and not early then return 0, game_version end
 
 	local entry = galaxy_cache.get(game.seed)
 	local state, state_version = read_one(STATE, game.id, nil)
@@ -166,7 +172,10 @@ local function catch_up(game, game_version)
 	if not state then return 0, game_version end
 
 	local resolved = 0
-	while now >= game.next_turn_at and resolved < MAX_CATCHUP_PER_CALL do
+	-- `early` only ever unlocks the *first* turn of this call: once it has
+	-- resolved, nobody has submitted for the one after it, so the loop falls
+	-- back to the clock and cannot run away.
+	while (early or now >= game.next_turn_at) and resolved < MAX_CATCHUP_PER_CALL do
 		local turn = state.turn + 1
 
 		-- Gather each player's orders for the turn about to resolve.
@@ -187,12 +196,8 @@ local function catch_up(game, game_version)
 					orders[#orders + 1] = {
 						player = i,
 						kind = o.kind,
-						at = tonumber(o.at),
-						fleet = tonumber(o.fleet),
-						ships = tonumber(o.ships),
+						captain = tonumber(o.captain),
 						route = route,
-						building = o.building,
-						tech = o.tech,
 					}
 				end
 			end
@@ -202,7 +207,15 @@ local function catch_up(game, game_version)
 		write_one(EVENTS, game.id .. ":" .. turn, nil, { turn = turn, events = events })
 
 		game.turn = state.turn
-		game.next_turn_at = game.next_turn_at + game.turn_interval
+		if early then
+			-- Everyone was ready, so the clock restarts from now rather than
+			-- from a deadline that has not arrived. Otherwise four prompt
+			-- players would find the next turn already half over.
+			game.next_turn_at = now + game.turn_interval
+			early = false
+		else
+			game.next_turn_at = game.next_turn_at + game.turn_interval
+		end
 		resolved = resolved + 1
 
 		-- Holding enough regions wins outright (galaxy/sim/regions.lua). The
@@ -501,12 +514,11 @@ end
 
 --- game.orders { game_id, orders: [ order ] }
 --
--- An order is one of:
---   { kind = "launch",   at, ships?, route }    form a fleet from a garrison
---   { kind = "move",     fleet, ships?, route } redirect one, or detach part
---   { kind = "garrison", fleet }                stand a fleet down where it is
---   { kind = "build",    at, building }         raise a level ("" cancels)
---   { kind = "research", tech }                 set the research target
+-- There is one order:
+--   { kind = "move", captain, route }   send a captain along a list of waypoints
+--
+-- An empty batch is meaningful: it is how a player says "I am done this turn",
+-- which is what lets the turn resolve early once everyone has said it.
 --
 -- Orders replace whatever was previously submitted for the coming turn, so a
 -- player can revise their plan any number of times before it resolves. The
@@ -543,10 +555,9 @@ local function rpc_orders(context, payload)
 
 	local clean = {}
 
-	--- Drop earlier orders that this one supersedes. Two research directives in
-	--- one batch would otherwise make the array order meaningful, which no
-	--- client should have to know about, and two build orders for one world
-	--- would fight.
+	--- Drop earlier orders this one supersedes. A captain takes one order a
+	--- turn, so the array's position never carries meaning a client would have
+	--- to know about.
 	local function replace(match)
 		for k = #clean, 1, -1 do
 			if match(clean[k]) then table.remove(clean, k) end
@@ -555,62 +566,15 @@ local function rpc_orders(context, payload)
 
 	for i = 1, #incoming do
 		local o = incoming[i]
-		local kind = o.kind
-
-		if kind == "launch" then
-			local at = tonumber(o.at)
-			local route = clean_route(o.route)
-			if at and route and #route > 0 then
-				clean[#clean + 1] = {
-					kind = "launch", at = math.floor(at),
-					ships = o.ships and math.floor(tonumber(o.ships) or 0) or nil,
-					route = route,
-				}
-			end
-
-		elseif kind == "move" then
-			local fleet = tonumber(o.fleet)
-			if fleet then
+		if o.kind == "move" then
+			local captain = tonumber(o.captain)
+			if captain then
 				local entry = {
-					kind = "move", fleet = math.floor(fleet),
-					ships = o.ships and math.floor(tonumber(o.ships) or 0) or nil,
+					kind = "move", captain = math.floor(captain),
 					route = clean_route(o.route) or {},
 				}
-				-- A fleet takes one order a turn; the last one wins.
-				replace(function(c)
-					return (c.kind == "move" or c.kind == "garrison")
-						and c.fleet == entry.fleet
-				end)
+				replace(function(c) return c.captain == entry.captain end)
 				clean[#clean + 1] = entry
-			end
-
-		elseif kind == "garrison" then
-			local fleet = tonumber(o.fleet)
-			if fleet then
-				local entry = { kind = "garrison", fleet = math.floor(fleet) }
-				replace(function(c)
-					return (c.kind == "move" or c.kind == "garrison")
-						and c.fleet == entry.fleet
-				end)
-				clean[#clean + 1] = entry
-			end
-
-		elseif kind == "build" then
-			local at = tonumber(o.at)
-			if at then
-				local entry = {
-					kind = "build", at = math.floor(at),
-					building = (o.building == nil) and "" or tostring(o.building),
-				}
-				replace(function(c) return c.kind == "build" and c.at == entry.at end)
-				clean[#clean + 1] = entry
-			end
-
-		elseif kind == "research" then
-			local id = o.tech
-			if id == nil or id == "" or tech.by_id(id) then
-				replace(function(c) return c.kind == "research" end)
-				clean[#clean + 1] = { kind = "research", tech = id }
 			end
 		end
 	end
@@ -618,9 +582,15 @@ local function rpc_orders(context, payload)
 	local turn = game.turn + 1
 	write_one(ORDERS, game.id .. ":" .. turn, user_id, { turn = turn, orders = clean })
 
+	-- Submitting ends this player's turn, so the game may now be ready to run
+	-- without waiting for the clock. Checked here rather than on the next poll
+	-- because the player who submits last should see the result immediately.
+	local resolved = catch_up(game, nil)
+
 	return nk.json_encode({
 		accepted = #clean,
 		for_turn = turn,
+		resolved = resolved,
 		resolves_at = game.next_turn_at,
 	})
 end
