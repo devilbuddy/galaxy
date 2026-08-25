@@ -4,10 +4,9 @@
 -- most of the point: a piece a player is attached to is worth more than a token,
 -- and every player currently has exactly one.
 --
--- Everything here derives from `level`, so state carries only a level and an
--- experience total. **Nothing awards experience yet** - battles will - so the
--- progression below is dormant rather than dead: it is what rank, reach and the
--- portrait already read from.
+-- Rank, reach and how much a captain can spend taking ground all derive from
+-- `level`, so state carries only a level, an experience total and the strength
+-- currently left in the field.
 
 local rules = require("galaxy.sim.rules")
 
@@ -98,8 +97,9 @@ end
 --- Cumulative experience needed to *reach* this level.
 --
 -- Quadratic, so early promotions come from a couple of skirmishes and the last
--- ones take a campaign. Experience is measured in enemy ships destroyed, which
--- is a number the player can see on the battle report and reason about.
+-- ones take a campaign. Experience is the **strength a captain has overcome**,
+-- so a colony is worth more than a waypoint without any table having to say so,
+-- and it is a number the player watched happen on the turn report.
 function M.xp_for_level(level)
 	if level <= 1 then return 0 end
 	return rules.commander_xp_base * (level - 1) * level
@@ -157,6 +157,36 @@ function M.steps(commander, mods)
 	return steps
 end
 
+--- The most strength a captain can hold.
+--
+-- Rank buys weight as well as reach, which is what makes a veteran able to
+-- crack a capital when a fresh officer cannot: `rules.capital_defence` is set
+-- above a level-one captain's whole ceiling on purpose.
+--
+-- A whole number, for the same reason `steps` is - the player is expected to do
+-- this arithmetic themselves before committing to an attack, and half a point
+-- of strength is not something anyone can hold in their head.
+function M.max_strength(commander, mods)
+	local level = commander.level or 1
+	local base = rules.captain_strength
+		+ rules.strength_per_level * (level - 1)
+	return floor(base * ((mods and mods.attack) or 1) + 0.5)
+end
+
+--- Strength in hand right now, never above the ceiling.
+--
+-- Clamped on read rather than on write: the ceiling moves when a captain is
+-- promoted or demoted, and a value stored under the old one would otherwise
+-- read as full when it is not, or sit above full forever.
+function M.strength(commander, mods)
+	local cap = M.max_strength(commander, mods)
+	local have = tonumber(commander.strength)
+	if not have then return cap end
+	if have > cap then return cap end
+	if have < 0 then return 0 end
+	return have
+end
+
 --- Everything a client needs to draw one, in one call.
 function M.profile(commander, mods)
 	local level = commander.level or 1
@@ -168,6 +198,8 @@ function M.profile(commander, mods)
 		next_xp = (level < rules.commander_max_level)
 			and M.xp_for_level(level + 1) or nil,
 		steps = M.steps(commander, mods),
+		strength = M.strength(commander, mods),
+		max_strength = M.max_strength(commander, mods),
 	}
 end
 

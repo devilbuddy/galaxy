@@ -10,11 +10,12 @@
 --   * every player has a **capital**, which is theirs from the first turn and
 --     is the one place they will eventually build;
 --   * every player has a single **captain**, a named officer who moves along
---     the lane graph and claims what they pass through.
+--     the lane graph, claims what they pass through, and spends **strength** to
+--     take ground somebody else holds.
 --
--- There is no production, no research and no combat yet. A captain has no army,
--- so a border they cannot cross is what stops them - which is exactly the job
--- armies will take over when unit types arrive.
+-- There is no production and no research yet. Strength comes from rank and is
+-- recovered by standing on your own ground, which is the placeholder a city
+-- producing unit types will replace.
 
 local rng = require("galaxy.rng")
 local rules = require("galaxy.sim.rules")
@@ -167,11 +168,16 @@ function M.add_captain(state, owner, at)
 		owner = owner,
 		name = commanders.name(player),
 		number = number,
-		-- Everything else about an officer - rank, how fast they move, the face
-		-- they wear - derives from these, so state carries nothing it can
-		-- compute. Experience has no source yet; battles will bring one.
+		-- Everything else about an officer - rank, how fast they move, how much
+		-- they can spend, the face they wear - derives from these, so state
+		-- carries nothing it can compute.
 		level = 1,
 		xp = 0,
+		-- Strength in hand. Left nil rather than filled in, because the ceiling
+		-- depends on the player's race and this is called from places that do
+		-- not have their modifiers; `commanders.strength` reads a missing value
+		-- as full, which is what a newly raised officer is.
+		strength = nil,
 		at = at,
 		route = {},
 	}
@@ -205,6 +211,27 @@ end
 --- The system a moving captain is heading for next, or nil.
 function M.next_hop(captain)
 	return captain.route[1]
+end
+
+--- Where a broken captain reforms.
+--
+-- The capital, and only the capital. A defeated officer is not killed - with
+-- one captain each, losing it outright would leave a player with no move to
+-- make for the rest of the game - but being thrown the whole way home is a real
+-- cost in a game where a lane is a turn, and it is the one place strength comes
+-- back quickly.
+--
+-- Falls back to where they already stand for a player whose capital has been
+-- taken; they are about to be eliminated anyway, and a nil here would be a
+-- crash in the middle of turn resolution.
+function M.refuge(state, captain)
+	local player = state.players[captain.owner]
+	local capital = player and player.capital
+	if capital and state.systems[capital]
+		and state.systems[capital].owner == captain.owner then
+		return capital
+	end
+	return captain.at
 end
 
 -- Aggregates ---------------------------------------------------------------------
@@ -271,9 +298,32 @@ function M.normalise(state)
 		local pk = tonumber(player)
 		if pk then
 			local out = {}
-			for id, turn in pairs(seen) do
+			for id, entry in pairs(seen) do
 				local key = tonumber(id)
-				if key then out[key] = tonumber(turn) or 0 end
+				if key then
+					-- An entry is what was seen there, not just when. This used
+					-- to coerce it with `tonumber(entry) or 0`, which was right
+					-- when memory was id -> turn and silently flattened every
+					-- record to the number zero once `view.remember` started
+					-- storing a table. The symptom was the whole point of this
+					-- function inverted: fog memory was wiped on every read, so
+					-- the map forgot everything the moment it left live view -
+					-- and `view.project` crashed outright the first time a
+					-- player remembered somewhere they could no longer see.
+					if type(entry) == "table" then
+						out[key] = {
+							turn = tonumber(entry.turn) or 0,
+							owner = tonumber(entry.owner) or 0,
+							capital_of = tonumber(entry.capital_of) or 0,
+						}
+					else
+						-- A record written before memory carried what was seen.
+						out[key] = {
+							turn = tonumber(entry) or 0,
+							owner = 0, capital_of = 0,
+						}
+					end
+				end
 			end
 			knowledge[pk] = out
 		end
@@ -289,6 +339,10 @@ function M.normalise(state)
 		c.progress = nil
 		c.level = tonumber(c.level) or 1
 		c.xp = tonumber(c.xp) or 0
+		-- Deliberately allowed to stay nil: `commanders.strength` reads that as
+		-- a full complement, which is what every captain in a game that
+		-- predates strength should come back as.
+		c.strength = tonumber(c.strength)
 	end
 
 	state.turn = tonumber(state.turn) or 0

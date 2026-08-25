@@ -21,6 +21,8 @@
 -- player can read the value of somewhere they have never been.
 
 
+local rules = require("galaxy.sim.rules")
+
 local M = {}
 
 M.COLONY = "colony"
@@ -106,6 +108,27 @@ end
 
 function M.kind(galaxy, id)
 	return M.profile(galaxy, id).kind
+end
+
+--- What it costs a captain to take this system from whoever holds it.
+--
+-- Derived from the star, like everything else here, so it is **public**: the
+-- client computes it from the same tables rather than being told, and a player
+-- can price a conquest on the far side of the galaxy before setting out. That
+-- is the whole reason combat is a single visible comparison - see
+-- `rules.defence`.
+--
+-- `capital` and `mods` are the two things that are not map data: whose capital
+-- it is, and what its owner's race does to how hard they are to shift. Both are
+-- already in the player's view of the game.
+--
+-- Rounded to a whole number because a fraction here would be exactly the
+-- invisible arithmetic discrete movement was introduced to get rid of.
+function M.defence(galaxy, id, capital, mods)
+	local base = rules.defence[M.kind(galaxy, id)] or 0
+	if capital then base = base + rules.capital_defence end
+	local scale = (mods and mods.defence) or 1
+	return math.floor(base * scale + 0.5)
 end
 
 function M.is_colony(galaxy, id)

@@ -4,12 +4,12 @@
 -- without reading the resolution logic. Values are per *turn*, and a turn is a
 -- scheduled batch, not a real-time tick.
 --
--- The game is being rebuilt from its foundations. Right now it is only this:
--- every player has a capital and one captain, captains move along lanes, and
--- whatever they pass through becomes theirs. There is no production, no
--- research and no combat - those arrive with city upgrades and unit types, and
--- the constants for them will arrive with the code that reads them rather than
--- sitting here describing a game that is not running.
+-- The game is being rebuilt from its foundations. Right now it is this: every
+-- player has a capital and one captain, captains move along lanes, whatever
+-- they pass through becomes theirs, and a captain with enough **strength**
+-- takes ground somebody else holds. There is still no production and no
+-- research; their constants will arrive with the code that reads them rather
+-- than sitting here describing a game that is not running.
 
 return {
 	-- Movement ----------------------------------------------------------------
@@ -35,8 +35,44 @@ return {
 	-- How far ahead a route may be plotted, in lanes. Standing orders are what
 	-- make a game checked twice a day playable rather than tedious.
 	max_route_hops = 12,          -- baseline (via hops)
+
+	-- Strength -----------------------------------------------------------------
+	-- What a captain can spend to take ground, and the ceiling it recovers to.
+	--
+	-- **The whole model is one comparison, and every number in it is on screen.**
+	-- A captain attacks only when it can win; otherwise it stops at the border
+	-- exactly as it did before combat existed. So there are no failed assaults,
+	-- no dice, and nothing to misjudge - which is the only way an attack can be
+	-- a decision rather than a gamble in a game checked twice a day.
+	captain_strength = 12,
+	strength_per_level = 3,
+
+	-- What it costs to take a system, by what kind of place it is. Public map
+	-- data (galaxy/sim/systems.lua derives kind from the star), so a player can
+	-- price a conquest from the other side of the galaxy.
+	--
+	-- A waypoint is terrain and barely resists; a colony costs most of a fresh
+	-- captain. With recovery at `strength_recovery` a turn, a chain of waypoints
+	-- is effectively free to walk and a colony is a real decision - which is the
+	-- distinction the map is drawn around.
+	defence = { waypoint = 2, outpost = 5, colony = 9 },
+	-- On top of the kind. A capital is the losing condition, so taking one
+	-- should need a captain who has been winning, not a fresh one.
+	capital_defence = 12,
+
+	-- Regained per turn, but only on ground you hold: an army in somebody
+	-- else's space is an army out of supply. It is what stops a deep raid from
+	-- continuing indefinitely, and what makes going home mean something.
+	strength_recovery = 3,
+	capital_recovery = 8,
+
 	commander_max_level = 10,
-	commander_xp_base = 75,
+	-- Experience is the strength a captain has overcome, so a colony is worth
+	-- more than a waypoint without anything having to say so. Low enough that a
+	-- promotion is a few real fights rather than a campaign - the ladder was
+	-- written when experience meant ships destroyed and there were thousands of
+	-- them about.
+	commander_xp_base = 8,
 
 	-- Intelligence ------------------------------------------------------------
 	-- Lanes of vision from each source. A captain sees barely past itself; a

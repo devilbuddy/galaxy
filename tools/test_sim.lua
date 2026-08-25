@@ -1,9 +1,10 @@
 -- The simulation, from the ground up.
 --
--- The game is currently only this: every player has a capital and one captain,
--- captains move along lanes, and what they pass through becomes theirs. These
--- tests are the contract that skeleton has to keep while production, combat and
--- city upgrades are built back onto it.
+-- The game is currently this: every player has a capital and one captain,
+-- captains move along lanes, what they pass through becomes theirs, and a
+-- captain with enough strength takes ground somebody else holds. These tests
+-- are the contract that skeleton has to keep while production and city upgrades
+-- are built back onto it.
 --
 -- Run: luajit tools/test_sim.lua
 
@@ -211,12 +212,16 @@ do
 		t.captains[1].at == ttarget, t.captains[1].at)
 end
 
-print("a border stops a captain")
+print("a border stops a captain that cannot pay for it")
 do
 	local s = new_game(2)
 	local from = s.captains[1].at
 	local blocker = GALAXY.adjacency[from][1]
+	-- A capital, so the resistance is above a level-one captain's whole
+	-- ceiling. Any ordinary system next door would now simply fall.
 	s.systems[blocker].owner = 2
+	s.systems[blocker].capital_of = 2
+	s.players[2].capital = blocker
 
 	local beyond = nil
 	for _, id in ipairs(GALAXY.adjacency[blocker]) do
@@ -241,6 +246,164 @@ do
 	check("and the captain is still on its own side", s.captains[1].at ~= blocker)
 	check("its route is dropped rather than left waiting",
 		#s.captains[1].route == 0)
+	-- The player has to be able to work out what it would take, or the only way
+	-- to find the number is to lose a captain against it.
+	check("the refusal says what it would have taken",
+		blocked and blocked.resistance and blocked.strength
+			and blocked.resistance > blocked.strength,
+		blocked and (tostring(blocked.strength) .. " vs " .. tostring(blocked.resistance)))
+end
+
+print("strength is what takes ground")
+do
+	local s = new_game(2)
+	local captain = s.captains[1]
+	local from = captain.at
+	local target = GALAXY.adjacency[from][1]
+	s.systems[target].owner = 2
+
+	local mods = modifiers.of(s.players[1])
+	local before = commanders.strength(captain, mods)
+	local cost = systems.defence(GALAXY, target, false, modifiers.of(s.players[2]))
+	check("a fresh captain can afford an ordinary system", before >= cost,
+		before .. " vs " .. cost)
+
+	local ev = res.turn(GALAXY, s, {
+		{ player = 1, kind = "move", captain = captain.id, route = { target } },
+	}, LENGTHS)
+	local battle
+	for i = 1, #ev do if ev[i].kind == "battle" then battle = ev[i] end end
+
+	check("the system changes hands", s.systems[target].owner == 1)
+	check("the captain is standing on it", captain.at == target)
+	check("a battle is reported", battle ~= nil and battle.at == target)
+	check("it cost exactly the resistance",
+		battle and battle.resistance == cost, battle and battle.resistance)
+	-- Recovery runs in the aftermath of the same turn, so the strength left is
+	-- what was spent plus one turn's resupply on ground that is now ours.
+	check("strength was spent taking it",
+		commanders.strength(captain, mods) <= before - cost + rules.strength_recovery,
+		commanders.strength(captain, mods))
+	check("and the fight was worth experience", (captain.xp or 0) == cost,
+		captain.xp)
+end
+
+print("a garrison is part of what a system costs")
+do
+	local s = new_game(2)
+	local target = GALAXY.adjacency[s.captains[1].at][1]
+	s.systems[target].owner = 2
+	local bare = systems.defence(GALAXY, target, false, modifiers.of(s.players[2]))
+
+	-- A veteran parked on it. Deliberately far above what a fresh attacker can
+	-- cover, so the assertion does not depend on which star the map put here.
+	s.captains[2].at = target
+	s.captains[2].level = rules.commander_max_level
+	local garrison = commanders.strength(s.captains[2], modifiers.of(s.players[2]))
+
+	local ev = res.turn(GALAXY, s, {
+		{ player = 1, kind = "move", captain = 1, route = { target } },
+	}, LENGTHS)
+	local blocked
+	for i = 1, #ev do if ev[i].kind == "captain_blocked" then blocked = ev[i] end end
+
+	check("a garrisoned system turns a fresh captain back", blocked ~= nil)
+	check("and it costs the world plus whoever is standing on it",
+		blocked and blocked.resistance == bare + garrison,
+		blocked and (tostring(blocked.resistance)
+			.. " vs " .. bare .. "+" .. garrison))
+	check("the defender is untouched by an attack that never happened",
+		s.captains[2].at == target
+			and commanders.strength(s.captains[2], modifiers.of(s.players[2])) == garrison)
+end
+
+print("a broken captain goes home")
+do
+	local s = new_game(2)
+	-- A weak garrison on an ordinary system, so the attack lands.
+	local target = GALAXY.adjacency[s.captains[1].at][1]
+	s.systems[target].owner = 2
+	s.captains[2].at = target
+	s.captains[2].strength = 0
+	s.captains[2].level = 3
+	local home = s.players[2].capital
+
+	local ev = res.turn(GALAXY, s, {
+		{ player = 1, kind = "move", captain = 1, route = { target } },
+	}, LENGTHS)
+	local broken
+	for i = 1, #ev do if ev[i].kind == "captain_broken" then broken = ev[i] end end
+
+	check("the defender is broken, not deleted", #s.captains == 2)
+	check("and reported as such", broken ~= nil)
+	check("thrown back to their capital", s.captains[2].at == home,
+		s.captains[2].at .. " vs " .. home)
+	check("stripped of the rank they had earned", s.captains[2].level == 2,
+		s.captains[2].level)
+	check("their route is gone with them", #s.captains[2].route == 0)
+end
+
+print("strength comes back, but only on your own ground")
+do
+	local s = new_game(2)
+	local captain = s.captains[1]
+	local mods = modifiers.of(s.players[1])
+	local full = commanders.max_strength(captain, mods)
+
+	-- At the capital: the fastest recovery there is.
+	captain.strength = 0
+	res.turn(GALAXY, s, {}, LENGTHS)
+	check("a captain refits fastest at their capital",
+		commanders.strength(captain, mods) == math.min(full, rules.capital_recovery),
+		commanders.strength(captain, mods))
+
+	-- On ordinary ground the player holds: slower.
+	local own = GALAXY.adjacency[captain.at][1]
+	s.systems[own].owner = 1
+	captain.at = own
+	captain.strength = 0
+	res.turn(GALAXY, s, {}, LENGTHS)
+	check("slower on ordinary ground they hold",
+		commanders.strength(captain, mods) == rules.strength_recovery,
+		commanders.strength(captain, mods))
+
+	-- In space nobody holds: not at all. An army out of supply is what stops a
+	-- deep raid running for ever.
+	local neutral
+	for _, id in ipairs(GALAXY.adjacency[own]) do
+		if s.systems[id].owner == 0 then neutral = id break end
+	end
+	if neutral then
+		s.systems[neutral].owner = 0
+		captain.at = neutral
+		captain.strength = 0
+		-- Resupply reads where the captain stands; claiming happens in
+		-- movement, so a parked captain on neutral ground stays out of supply.
+		res.turn(GALAXY, s, {}, LENGTHS)
+		check("and not at all out of supply",
+			commanders.strength(captain, mods) == 0,
+			commanders.strength(captain, mods))
+	end
+
+	check("never above the ceiling", (function()
+		captain.at = s.players[1].capital
+		s.systems[captain.at].owner = 1
+		captain.strength = full
+		res.turn(GALAXY, s, {}, LENGTHS)
+		return commanders.strength(captain, mods) == full
+	end)())
+end
+
+print("a capital needs a veteran")
+do
+	local s = new_game(2)
+	local capital = s.players[2].capital
+	local defence = systems.defence(GALAXY, capital, true, modifiers.of(s.players[2]))
+	local green = commanders.max_strength({ level = 1 }, modifiers.of(s.players[1]))
+	check("a fresh captain cannot crack one at full strength", green < defence,
+		green .. " vs " .. defence)
+	check("but a promoted one can", commanders.max_strength(
+		{ level = rules.commander_max_level }, modifiers.of(s.players[1])) >= defence)
 end
 
 print("fog of war")
@@ -261,6 +424,10 @@ do
 	check("an enemy captain in range shows up", #v2.contacts == 1)
 	check("with a rank but no orders",
 		v2.contacts[1].rank ~= nil and v2.contacts[1].route == nil)
+	-- Combat is a comparison the attacker is expected to make before
+	-- committing, so both halves of it have to be on screen.
+	check("and their strength, so an attack can be priced",
+		type(v2.contacts[1].strength) == "number")
 end
 
 print("what a captain is")
@@ -289,6 +456,16 @@ do
 	check("the fast race gets a whole extra lane",
 		cartel.step_bonus == base.step_bonus + 1)
 	check("and can plot further ahead", cartel.hops > base.hops)
+
+	-- Races used to differ on mobility alone, which made the fast one strictly
+	-- the best pick. Strength is what finally reads the other two keys.
+	local vorn = modifiers.of({ race = "vorn" })
+	local silicate = modifiers.of({ race = "silicate" })
+	check("the warlike race hits harder",
+		commanders.max_strength({ level = 1 }, vorn)
+			> commanders.max_strength({ level = 1 }, base))
+	check("the entrenched race is harder to shift", silicate.defence > base.defence)
+	check("and the fast one pays for it in defence", cartel.defence < base.defence)
 end
 
 print("regions are the objective")
@@ -362,6 +539,37 @@ do
 			and type(next(repaired.knowledge[1])) == "number")
 	local ok = pcall(res.turn, GALAXY, repaired, {}, LENGTHS)
 	check("and a repaired state resolves another turn", ok)
+	-- What was seen, not just *when*. The repair was written when memory was
+	-- id -> turn and coerced each entry with `tonumber`, which flattened every
+	-- record to the number zero the moment it started carrying an owner. That
+	-- inverted the whole purpose of this function - fog memory was wiped on
+	-- every read - and crashed `view.project` outright on the first system a
+	-- player remembered but could no longer see.
+	check("and remembers what was seen there, not just when", (function()
+		local memory = repaired.knowledge[1] or {}
+		local n = 0
+		for _, entry in pairs(memory) do
+			if type(entry) ~= "table" or entry.owner == nil then return false end
+			n = n + 1
+		end
+		return n > 0
+	end)())
+
+	-- Somewhere remembered that is definitely *not* in live view, which is the
+	-- only branch that reads a memory entry back.
+	local far = nil
+	local seen_now = view.visible_systems(GALAXY, repaired, 1)
+	for id = 1, #GALAXY.stars do
+		if not seen_now[id] then far = id break end
+	end
+	repaired.knowledge[1][far] = { turn = 1, owner = 2, capital_of = 0 }
+	local projected, why = pcall(view.project, GALAXY, repaired, 1)
+	check("a projection still builds from remembered ground", projected, why)
+	check("and the memory of it survives the trip", (function()
+		local v = view.project(GALAXY, repaired, 1)
+		local entry = v.systems[tostring(far)]
+		return entry ~= nil and entry.owner == 2 and entry.live == false
+	end)())
 end
 
 print("bots")
@@ -416,16 +624,25 @@ do
 		check("a captain under way is not re-routed every turn", true)
 	end
 
-	check("a bot never walks into someone else's border",
-		(function()
-			local u = new_game(2)
-			u.players[2].bot = true
-			-- Fence the bot in with player 1's ground.
-			local cap = u.players[2].capital
-			for _, n in ipairs(GALAXY.adjacency[cap]) do u.systems[n].owner = 1 end
-			local fenced = bots.all_orders(GALAXY, u)
-			return #fenced == 0
-		end)())
+	-- Fenced in by somebody else's ground. It used to have no answer to this at
+	-- all and would simply stop for the rest of the game, which is most of what
+	-- made the old skeleton unresolvable.
+	local function fenced_game(strength)
+		local u = new_game(2)
+		u.players[2].bot = true
+		local cap = u.players[2].capital
+		for _, n in ipairs(GALAXY.adjacency[cap]) do u.systems[n].owner = 1 end
+		u.captains[2].strength = strength
+		return u, bots.all_orders(GALAXY, u)
+	end
+
+	local u, out = fenced_game(nil)
+	check("a fenced-in bot attacks its way out", #out == 1, #out)
+	check("and the target is ground somebody holds",
+		out[1] and u.systems[out[1].route[1]].owner == 1)
+
+	local _, spent = fenced_game(0)
+	check("but not one that has spent itself", #spent == 0, #spent)
 end
 
 print("determinism")

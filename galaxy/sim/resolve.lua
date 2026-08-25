@@ -10,10 +10,9 @@
 --
 --   **orders → movement → aftermath → visibility**
 --
--- Production, research, buildings and combat have all been taken out. What is
--- left is the skeleton they will be built back onto: captains move along lanes,
--- claim what they pass through, and stop at a border they have no army to
--- cross.
+-- Production, research and buildings have all been taken out; combat has been
+-- built back, as one comparison. Captains move along lanes, claim what they
+-- pass through, and take ground off each other when they have the strength to.
 --
 -- Two invariants survive from the version this replaced, and both must:
 --
@@ -31,6 +30,7 @@ local view = require("galaxy.sim.view")
 local commanders = require("galaxy.sim.commanders")
 local regions_mod = require("galaxy.sim.regions")
 local modifiers = require("galaxy.sim.modifiers")
+local systems_mod = require("galaxy.sim.systems")
 
 local floor = math.floor
 local min = math.min
@@ -132,41 +132,152 @@ end
 
 -- 2. Movement -------------------------------------------------------------------
 
---- Move every captain as far as its turn allows, claiming as it goes.
+--- What it costs to take `id` from the player who holds it, right now.
+--
+-- The world's own resistance plus whatever is garrisoned on it. **Every term is
+-- something the attacker can already see**: the kind of place is public map
+-- data, whose capital it is is in their view, and a captain standing on it is a
+-- contact they have eyes on. That is what makes the comparison below a decision
+-- rather than a gamble.
+--
+-- Returns the total **and its parts**: the world's own resistance, and every
+-- officer standing on it by name. Nothing needs the breakdown to decide the
+-- battle - the decision is the total - but a fight that reports only a number
+-- can never be replayed as anything more than a number, and a battle you can
+-- watch is where this is going. Carrying who was there costs a table per fight
+-- and is the difference between an event and a scene.
+local function resistance(galaxy, state, mods, id)
+	local sys = state.systems[id]
+	local owner = sys.owner
+	local world = systems_mod.defence(galaxy, id, sys.capital_of == owner, mods[owner])
+	local total = world
+	local garrison = {}
+	for i = 1, #state.captains do
+		local c = state.captains[i]
+		if c.owner == owner and c.at == id then
+			local held = commanders.strength(c, mods[owner])
+			total = total + held
+			garrison[#garrison + 1] = {
+				captain = c.id, name = c.name,
+				rank = commanders.rank(c.level or 1), strength = held,
+			}
+		end
+	end
+	return total, world, garrison
+end
+
+--- Throw the defenders of a system that has just fallen back to their capital.
+--
+-- Broken rather than killed, and demoted rather than deleted: with one captain
+-- each, an officer who could be removed from the board would end the game for
+-- their player on a single bad turn, and everyone would stop committing.
+local function break_defenders(state, mods, id, owner, events)
+	for i = 1, #state.captains do
+		local c = state.captains[i]
+		if c.owner == owner and c.at == id then
+			local home = state_mod.refuge(state, c)
+			c.route = {}
+			c.strength = 0
+			commanders.demote(c)
+			c.at = home
+			emit(events, {
+				kind = "captain_broken", turn = state.turn,
+				player = owner, captain = c.id, name = c.name,
+				at = home, lost = id, rank = commanders.rank(c.level),
+				visible_to = { owner },
+			})
+		end
+	end
+end
+
+--- Move every captain as far as its turn allows, claiming and taking as it goes.
 --
 -- A captain crosses a whole number of lanes and always ends the turn *at* a
 -- system. Movement used to be a distance covered along a lane, which meant a
 -- captain could sit partway down one - a state the player could neither see at
 -- fit zoom nor predict, because lane lengths are never drawn.
 --
--- Unclaimed systems are taken *in passing* and do not stop the captain, so a
--- route through a chain of empty systems sweeps them all up. A system somebody
--- else holds does stop it: there is no army to push through with, and
--- pretending otherwise would make borders meaningless.
+-- Unclaimed systems are taken in passing and do not stop it, so a route through
+-- a chain of empty systems sweeps them all up.
+--
+-- **A captain attacks only when it can win.** If it cannot cover the
+-- resistance it stops at the border exactly as it did before combat existed,
+-- and the event says both numbers so the player can see what it would take. The
+-- alternative - letting an assault fail - would mean a captain could be spent
+-- to nothing by an arithmetic slip made twelve hours earlier, and would turn
+-- every attack into a gamble in a game whose whole point is planning ahead.
 local function movement(galaxy, state, mods, events)
 	for i = 1, #state.captains do
 		local captain = state.captains[i]
-		local steps = commanders.steps(captain, mods[captain.owner])
+		local my_mods = mods[captain.owner]
+		local steps = commanders.steps(captain, my_mods)
+		-- Where it started, and every system it sets foot in. Nothing in the
+		-- resolver reads this back; it exists because **the event log is the
+		-- record of the turn**, and a log that reports only outcomes can be
+		-- listed but never replayed. A captain crossing its own territory
+		-- changes nothing and so emitted nothing at all, which meant the one
+		-- thing a player would most want to watch - a fleet moving - was the
+		-- one thing the log did not contain.
+		local from, walked = captain.at, {}
 
 		while steps > 0 and #captain.route > 0 do
 			local next_id = captain.route[1]
 			local sys = state.systems[next_id]
+			local defender = sys.owner
 
-			if sys.owner ~= 0 and sys.owner ~= captain.owner then
-				-- Stopped *before* entering: a border you cannot cross is one
-				-- you do not stand in. The route is dropped rather than held,
-				-- so a captain never waits on something that may never change.
-				captain.route = {}
+			if defender ~= 0 and defender ~= captain.owner then
+				local cost, world, garrison = resistance(galaxy, state, mods, next_id)
+				local have = commanders.strength(captain, my_mods)
+				if have < cost then
+					-- Stopped *before* entering: a border you cannot cross is
+					-- one you do not stand in. The route is dropped rather than
+					-- held, so a captain never waits on something that may
+					-- never change.
+					captain.route = {}
+					emit(events, {
+						kind = "captain_blocked", turn = state.turn,
+						player = captain.owner, captain = captain.id,
+						name = captain.name, at = captain.at,
+						blocked_by = next_id, held_by = defender,
+						strength = have, resistance = cost,
+						defence = world, garrison = garrison,
+						visible_to = { captain.owner },
+					})
+					break
+				end
+
+				-- Taken. The garrison goes home before the system changes
+				-- hands, so `refuge` is asked while the defender still holds
+				-- their capital - which matters when the capital *is* the
+				-- system falling.
+				break_defenders(state, mods, next_id, defender, events)
+				captain.strength = have - cost
+				-- Promotion is reported when the *title* changes, not when the
+				-- level does. Ranks span two levels each, so awarding a level
+				-- announced "promoted to Captain" to someone who was already
+				-- a Captain - which reads as the game not knowing what it did.
+				local was_rank = commanders.rank(captain.level or 1)
+				commanders.award(captain, cost)
+				local now_rank = commanders.rank(captain.level or 1)
+				sys.owner = captain.owner
 				emit(events, {
-					kind = "captain_blocked", turn = state.turn,
-					player = captain.owner, captain = captain.id,
-					name = captain.name, at = captain.at, blocked_by = next_id,
-					held_by = sys.owner, visible_to = { captain.owner },
+					kind = "battle", turn = state.turn,
+					at = next_id, player = captain.owner, captain = captain.id,
+					name = captain.name, against = defender,
+					rank = now_rank,
+					-- What was brought and what was faced, both broken down.
+					-- The client turns these into a sentence today and will turn
+					-- them into a replay later; the resolver states facts.
+					brought = have, resistance = cost,
+					defence = world, garrison = garrison,
+					strength = captain.strength,
+					level = captain.level,
+					promoted = (now_rank ~= was_rank) and now_rank or nil,
 				})
-				break
 			end
 
 			captain.at = next_id
+			walked[#walked + 1] = next_id
 			table.remove(captain.route, 1)
 			steps = steps - 1
 
@@ -179,12 +290,44 @@ local function movement(galaxy, state, mods, events)
 				})
 			end
 		end
+
+		if #walked > 0 then
+			emit(events, {
+				kind = "captain_moved", turn = state.turn,
+				player = captain.owner, captain = captain.id,
+				name = captain.name, from = from, at = captain.at,
+				path = walked, bound_for = captain.route[#captain.route],
+				visible_to = { captain.owner },
+			})
+		end
+	end
+end
+
+--- Strength comes back, but only on ground you hold.
+--
+-- An army in somebody else's space is an army out of supply: it is what stops a
+-- deep raid running forever, and what makes the trip home mean something. The
+-- capital is much faster, because it is the one place that will later be able
+-- to build.
+local function resupply(state, mods)
+	for i = 1, #state.captains do
+		local captain = state.captains[i]
+		local sys = state.systems[captain.at]
+		if sys and sys.owner == captain.owner then
+			local my_mods = mods[captain.owner]
+			local gain = (sys.capital_of == captain.owner)
+				and rules.capital_recovery or rules.strength_recovery
+			local cap = commanders.max_strength(captain, my_mods)
+			captain.strength = min(cap, commanders.strength(captain, my_mods) + gain)
+		end
 	end
 end
 
 -- 3. Aftermath ------------------------------------------------------------------
 
-local function aftermath(galaxy, state, events, summaries)
+local function aftermath(galaxy, state, mods, events, summaries)
+	resupply(state, mods)
+
 	for i = 1, #state.players do
 		local player = state.players[i]
 		if player.alive and not state_mod.is_alive(state, i) then
@@ -216,7 +359,29 @@ local function aftermath(galaxy, state, events, summaries)
 				state.winner = i
 				emit(events, {
 					kind = "victory", turn = state.turn, player = i,
-					regions = tally[i], needed = needed,
+					regions = tally[i], needed = needed, by = "regions",
+				})
+			end
+		end
+
+		-- The other way to win, which only became reachable when capitals
+		-- became takeable: everyone else is out. Without this a two-player game
+		-- that ended in a conquest simply carried on with nobody to play
+		-- against and no winner ever declared.
+		if not state.winner and #state.players > 1 then
+			local alive, last = 0, nil
+			for i = 1, #state.players do
+				if state.players[i].alive then
+					alive = alive + 1
+					last = i
+				end
+			end
+			if alive == 1 then
+				state.winner = last
+				emit(events, {
+					kind = "victory", turn = state.turn, player = last,
+					regions = tally[last] or 0, needed = needed,
+					by = "survival",
 				})
 			end
 		end
@@ -279,14 +444,16 @@ function M.turn(galaxy, state, orders, lengths)
 
 	state.turn = state.turn + 1
 	-- Seeded per turn, so replaying a turn gives an identical result. Nothing
-	-- rolls dice yet; the stream is here because combat will.
+	-- rolls dice - combat is a comparison, deliberately, so that a player can
+	-- work out the answer before committing - but the stream stays because the
+	-- turn is the right place to derive one from and something will want it.
 	local _ = rng.stream(state.seed, "turn:" .. state.turn)
 
 	local events = {}
 	local summaries = {}
 	local mods = {}
 	for i = 1, #state.players do
-		summaries[i] = { claimed = 0 }
+		summaries[i] = { claimed = 0, taken = 0 }
 		mods[i] = modifiers.of(state.players[i])
 	end
 
@@ -294,13 +461,15 @@ function M.turn(galaxy, state, orders, lengths)
 	movement(galaxy, state, mods, events)
 
 	for e = 1, #events do
-		if events[e].kind == "claimed" then
-			local s = summaries[events[e].player]
-			if s then s.claimed = s.claimed + 1 end
+		local kind = events[e].kind
+		local s = summaries[events[e].player]
+		if s then
+			if kind == "claimed" then s.claimed = s.claimed + 1
+			elseif kind == "battle" then s.taken = s.taken + 1 end
 		end
 	end
 
-	aftermath(galaxy, state, events, summaries)
+	aftermath(galaxy, state, mods, events, summaries)
 	apply_visibility(galaxy, state, events)
 
 	return events

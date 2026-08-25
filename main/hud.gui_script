@@ -248,6 +248,36 @@ local function refresh_zoom(self)
 	self.zoom_out.set_enabled(can_out)
 end
 
+--- What it would take to shift whoever holds `id`, from the player's own view.
+--
+-- The world's own resistance (sent per system, because the owner's race weighs
+-- it and the client has no business re-implementing that) plus every rival
+-- captain the player can actually see standing on it. Both halves are already
+-- on the wire precisely so this sum can be done here: combat is one comparison
+-- and the player is expected to make it *before* committing a captain to a
+-- twelve-hour turn.
+local function resistance_at(id, info)
+	if not info or (info.owner or 0) == 0 then return nil end
+	local total = info.defence or 0
+	local view = store.game_view
+	for i = 1, #((view and view.contacts) or {}) do
+		local c = view.contacts[i]
+		if c.at == id then total = total + (c.strength or 0) end
+	end
+	return total
+end
+
+--- The most any one of the player's captains could bring to bear.
+local function best_strength()
+	local view = store.game_view
+	local best = 0
+	for i = 1, #((view and view.captains) or {}) do
+		local c = view.captains[i]
+		if (c.strength or 0) > best then best = c.strength end
+	end
+	return best
+end
+
 local function star_name(id)
 	local g = store.galaxy
 	local star = id and g and g.stars[id]
@@ -320,8 +350,22 @@ local function build_captains(self, w, h, pad)
 		local node = ui.portrait(x, top, CAPTAIN_SIZE, f.portrait, {
 			ring_colour = chosen and ui.ACCENT or (moving and ui.GOOD or ui.BORDER),
 		})
-		-- The strength under the face, because "which of my four is strong
-		-- enough" is the question a player is usually asking of this row.
+		-- The strength on the face, because "which of mine is strong enough for
+		-- that" is the question this row exists to answer. A badge rather than a
+		-- second line of text: the strip is already only 76 units tall, and the
+		-- number has to survive being read at a glance on a phone.
+		--
+		-- It goes amber under a third, which is the one state that needs acting
+		-- on - a captain that has to go home before it can take anything else.
+		local badge_w, badge_h = 36, 22
+		local bx = x + CAPTAIN_SIZE - badge_w
+		local by = top - CAPTAIN_SIZE + badge_h
+		local strength = f.strength or 0
+		local spent = strength * 3 <= (f.max_strength or 1)
+		ui.pill(bx, by, badge_w, badge_h, ui.BG)
+		ui.small(bx + badge_w * 0.5, by - badge_h * 0.5, tostring(strength),
+			spent and ui.WARN or ui.TEXT,
+			{ bold = true, pivot = gui.PIVOT_CENTER })
 		ui.small(x + CAPTAIN_SIZE * 0.5, top - CAPTAIN_SIZE - 8,
 			-- Turns, because that is the question: not how far, but when.
 			moving and (f.eta == 1 and "next turn" or (f.eta .. " turns")) or "here",
@@ -545,6 +589,28 @@ local function build_sheet(self, w, pad)
 			ui.small(inner, y, "Last seen turn " .. tostring(info.seen), ui.WARN)
 		end
 
+		-- **What it would cost, against what you have.** This is the whole of
+		-- combat, and it is here rather than only in the turn report because a
+		-- player has to be able to price an attack before ordering one - the
+		-- alternative is finding out twelve hours later that a captain was
+		-- turned back.
+		local cost = resistance_at(id, info)
+		if cost and not mine then
+			local have = best_strength()
+			local enough = have >= cost
+			y = y - 44
+			ui.icon(inner, y + 14, 26, "icon_defence",
+				enough and ui.GOOD or ui.WARN)
+			ui.body(inner + 34, y, cost .. " to take", enough and ui.GOOD or ui.WARN)
+			ui.small(inner + text_w, y,
+				enough and ("your best: " .. have) or ("you have " .. have),
+				ui.FAINT, { pivot = gui.PIVOT_E })
+		elseif cost and mine then
+			y = y - 44
+			ui.icon(inner, y + 14, 26, "icon_defence", ui.DIM)
+			ui.body(inner + 34, y, "Defends at " .. cost, ui.DIM)
+		end
+
 		-- Captains standing here, and what can be asked of them.
 		local here = {}
 		for i = 1, #((view and view.captains) or {}) do
@@ -563,7 +629,9 @@ local function build_sheet(self, w, pad)
 				ui.portrait(inner + 8, y + 43, 38, captain.portrait,
 					{ ring_colour = chosen and ui.ACCENT or ui.BORDER })
 				ui.body(inner + 56, y + 27, captain.name, ui.TEXT)
-				ui.small(inner + 56, y + 6, captain.rank or "", ui.FAINT)
+				ui.small(inner + 56, y + 6, string.format("%s   %d/%d",
+					captain.rank or "", captain.strength or 0,
+					captain.max_strength or 0), ui.FAINT)
 				ui.small(inner + text_w - 14, y + 21, "tap to move", ui.FAINT,
 					{ pivot = gui.PIVOT_E })
 				self.sheet_druid:new_button(row, function()
@@ -581,13 +649,17 @@ local function build_sheet(self, w, pad)
 
 		-- Rival captains in sight here.
 		if view then
-			local seen = 0
 			for c = 1, #view.contacts do
-				if view.contacts[c].at == id then seen = seen + 1 end
-			end
-			if seen > 0 then
-				y = y - 40
-				ui.small(inner, y, ui.plural(seen, "rival captain") .. " in sight", ui.BAD)
+				local rival = view.contacts[c]
+				if rival.at == id then
+					y = y - 34
+					ui.icon(inner, y + 10, 22, "icon_warship",
+						player_colour(rival.owner))
+					ui.small(inner + 30, y,
+						(rival.rank or "A rival captain")
+							.. "   " .. tostring(rival.strength or 0),
+						ui.BAD)
+				end
 			end
 		end
 		y = y - 24
@@ -808,11 +880,18 @@ local function update_captains(self, g, cam, w, h)
 		local mine_colour = player_colour(view.you)
 		for i = 1, #view.captains do
 			local f = view.captains[i]
-			place(f.at, f.next_hop, f.name, mine_colour, true)
+			-- Name and strength: which captain, and what it can pay for. The
+			-- rank is on the strip and the sheet; the number is the one thing
+			-- that has to be readable while looking at the map.
+			place(f.at, f.next_hop,
+				f.name .. "  " .. tostring(f.strength or 0), mine_colour, true)
 		end
 		for i = 1, #view.contacts do
 			local c = view.contacts[i]
-			place(c.at, c.next_hop, c.rank or "", player_colour(c.owner), false)
+			-- A rival's number without their rank, which would be twice the
+			-- width for a Grand Admiral and is a tap away on the sheet.
+			place(c.at, c.next_hop, tostring(c.strength or 0),
+				player_colour(c.owner), false)
 		end
 	end
 	for i = used + 1, CAPTAIN_POOL do
@@ -1510,7 +1589,11 @@ function update(self, dt)
 	for i = 1, #((view and view.captains) or {}) do
 		local f = view.captains[i]
 		key[#key + 1] = table.concat({ f.id, f.portrait or "",
-			f.at or 0, (f.eta or 0) > 0 and "m" or "p" }, ":")
+			f.at or 0, (f.eta or 0) > 0 and "m" or "p",
+			-- Strength is drawn on the face, so it has to be part of what
+			-- counts as the roster changing - otherwise the badge shows what a
+			-- captain had before its last battle until something else moves.
+			f.strength or 0 }, ":")
 	end
 	key[#key + 1] = tostring(store.selected_captain)
 	local joined = table.concat(key, "|")

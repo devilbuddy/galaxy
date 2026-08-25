@@ -51,6 +51,9 @@ local function describe(event, me)
 		if (event.claimed or 0) > 0 then
 			bits[#bits + 1] = "+" .. ui.plural(event.claimed, "claimed")
 		end
+		if (event.taken or 0) > 0 then
+			bits[#bits + 1] = "+" .. ui.plural(event.taken, "taken")
+		end
 		return {
 			heading = true,
 			title = "Turn " .. tostring(event.turn),
@@ -74,10 +77,60 @@ local function describe(event, me)
 
 	elseif kind == "captain_blocked" then
 		local who = player_name(event.held_by)
+		-- The numbers, not just the fact. Being turned back is the moment a
+		-- player needs to know exactly what it would have taken; without it the
+		-- only way to find out is to try again next turn and be turned back
+		-- again.
+		local detail = system_name(event.blocked_by) .. " is held by " .. who
+		if event.resistance then
+			detail = detail .. string.format("  -  %s against %s",
+				tostring(event.strength or 0), tostring(event.resistance))
+		end
 		return {
 			icon = "icon_close", tone = ui.WARN,
 			title = (event.name or "A captain") .. " was turned back",
-			subtitle = system_name(event.blocked_by) .. " is held by " .. who,
+			subtitle = detail,
+		}
+
+	elseif kind == "battle" then
+		local mine = event.player == me
+		local title = mine
+			and ((event.name or "A captain") .. " took " .. system_name(event.at))
+			or (player_name(event.player) .. " took " .. system_name(event.at))
+		-- Named, not just numbered. "33 resistance broken" is a receipt; "the
+		-- world's 9 and Commodore Vantor" is what happened, and it is the same
+		-- data the resolver already sends for a replay to be built from.
+		local defended = {}
+		for i = 1, #(event.garrison or {}) do
+			local g = event.garrison[i]
+			defended[#defended + 1] = (g.rank and (g.rank .. " ") or "")
+				.. tostring(g.name) .. " (" .. tostring(g.strength) .. ")"
+		end
+		local detail
+		if #defended > 0 then
+			detail = string.format("%s defences and %s",
+				tostring(event.defence or 0), table.concat(defended, ", "))
+		else
+			detail = tostring(event.resistance or 0) .. " defences broken"
+		end
+		if mine and event.strength then
+			detail = detail .. "  -  " .. tostring(event.strength) .. " left"
+		end
+		if event.promoted then
+			detail = detail .. "  -  promoted to " .. event.promoted
+		end
+		return {
+			icon = "icon_attack", tone = mine and ui.GOOD or ui.BAD,
+			title = title, subtitle = detail,
+		}
+
+	elseif kind == "captain_broken" then
+		return {
+			icon = "icon_defence", tone = ui.BAD,
+			title = (event.name or "A captain") .. " was broken at "
+				.. system_name(event.lost),
+			subtitle = "Reformed at the capital as "
+				.. (event.rank or "a lesser officer"),
 		}
 
 	elseif kind == "region_control" then
@@ -103,8 +156,10 @@ local function describe(event, me)
 			icon = "icon_flag", tone = event.player == me and ui.GOOD or ui.BAD,
 			title = event.player == me and "You have won"
 				or (player_name(event.player) .. " has won"),
-			subtitle = string.format("%d of %d regions held",
-				event.regions or 0, event.needed or 0),
+			subtitle = event.by == "survival"
+				and "Everyone else has lost their capital"
+				or string.format("%d of %d regions held",
+					event.regions or 0, event.needed or 0),
 		}
 
 	elseif kind == "order_rejected" then
@@ -212,7 +267,9 @@ local function build(self, data)
 	local y = 0
 	for i = 1, #events do
 		local row = describe(events[i], me)
-		if row.heading then
+		if not row then
+			-- Carried for the playback, with nothing to say in a list.
+		elseif row.heading then
 			-- A turn boundary is a divider with a label, not another row: it is
 			-- the thing that makes a long digest scannable.
 			if i > 1 then y = y - 16 end

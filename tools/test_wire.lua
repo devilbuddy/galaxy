@@ -119,6 +119,20 @@ do
 			and v.captains[1].rank ~= nil and v.captains[1].portrait ~= nil)
 	check("and reports when it arrives, in turns",
 		type(v.captains[1].eta) == "number" and type(v.captains[1].steps) == "number")
+	-- Combat is one visible comparison, so both sides of it have to reach the
+	-- client: what a captain can spend, and what a system costs to take.
+	check("and what it can spend, against what it could spend at full",
+		type(v.captains[1].strength) == "number"
+			and type(v.captains[1].max_strength) == "number")
+	check("a system somebody holds says what it defends at",
+		type(mine.defence) == "number", mine.defence)
+	check("and unclaimed ground says nothing, because there is nothing to take",
+		(function()
+			for _, sys in pairs(v.systems) do
+				if (sys.owner or 0) == 0 and sys.defence ~= nil then return false end
+			end
+			return true
+		end)())
 	check("systems are keyed by string, never sparse integers",
 		next(v.systems) ~= nil and type(next(v.systems)) == "string")
 

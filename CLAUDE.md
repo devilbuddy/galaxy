@@ -186,14 +186,25 @@ foundation, not a reduced version of something finished:
 - every player has a **capital** and a single **captain**;
 - captains move along the lane graph, and whatever they pass through becomes
   theirs;
-- a border they cannot cross is what stops them, because there is no army to
-  push with;
-- holding enough regions wins; losing your capital loses.
+- a captain with enough **strength** takes ground somebody else holds; one
+  without it stops at the border;
+- strength comes back only on ground you hold, fastest at your capital;
+- holding enough regions wins; losing your capital loses, and being the last one
+  with a capital also wins.
 
-There is no production, no research, no buildings and no combat. Those were all
-built once and deliberately taken out, because the loop underneath them was
-never the thing being tested. They come back in this order: **city upgrades
-producing unit types → armies with a shape → battles → a battle you can watch.**
+There is no production, no research and no buildings. Those were built once and
+deliberately taken out, because the loop underneath them was never the thing
+being tested. What is left to build back: **city upgrades producing unit types →
+armies with a shape → a battle you can watch → the turn digest played back on
+the map instead of listed.**
+
+Combat was built back first, ahead of the production that will feed it, because
+without it the game could not end. `tools/play.lua` proved it: the map was fully
+carved by turn ~125 and then *nothing changed for 275 turns* - two players sat on
+three of the four regions they needed and neither could take the fourth, because
+a border was absolute. With strength, the same seed decides on turn 133 and the
+borders move all the way through. **You cannot tune production until you know
+what it buys.**
 
 `resolve.turn(galaxy, state, orders)` advances exactly one turn and returns the
 events it produced. It is a pure function of its inputs plus a per-turn seeded
@@ -206,7 +217,8 @@ game is reconstructable from `(seed, order history)`.
 | `systems.lua` | what kind of place a system is, derived from its star |
 | `races.lua` | the six playable races, as pure modifier bundles |
 | `modifiers.lua` | folds race into the numbers the resolver reads |
-| `commanders.lua` | the named officer: rank, portrait, speed |
+| `commanders.lua` | the named officer: rank, portrait, reach and strength |
+| `bots.lua` | what a bot does with its turn, on the server and in the harness |
 | `state.lua` | opening state, captains, and JSON-round-trip repair |
 | `path.lua` | Dijkstra along lanes; captains never move in straight lines |
 | `regions.lua` | who holds a stretch of the galaxy, and who wins because of it |
@@ -214,7 +226,9 @@ game is reconstructable from `(seed, order history)`.
 | `view.lua` | fog of war: detection range, remembered state, per-player projection |
 
 Turn order is **orders → movement → aftermath → visibility**. It was nine
-phases; five of them belonged to production and combat and went with them.
+phases; five of them belonged to production and went with it. Combat lives
+inside movement rather than in a phase of its own, because it is what happens
+when a captain tries to enter a system - not a separate step.
 
 #### One captain, one verb
 
@@ -233,6 +247,51 @@ so a route through a chain of empty systems sweeps them all up.
 repelled would mean standing in a system you do not hold; the route is dropped
 rather than held, so a captain never waits on something that may never change.
 
+#### Combat is one comparison, and every number in it is on screen
+
+```
+resistance = the world's own defence + every captain garrisoned on it
+```
+
+**A captain attacks only when it can win.** If `strength >= resistance` the
+system changes hands, the attacker spends exactly the resistance, and the
+garrison is thrown home. If it cannot, the captain stops at the border exactly
+as it did before combat existed - and the event carries *both numbers*, so the
+player can see what it would have taken.
+
+There are no failed assaults and no dice. That is deliberate and it is the whole
+design: an attack is ordered twelve hours before it resolves, so if the outcome
+were a gamble - or depended on an arithmetic slip - committing a captain would
+be something a player learns not to do. Everything the comparison needs is
+already on the wire before the order is given: `systems.defence` is derived from
+the star and so is public map data, and a rival captain's **strength is shown,
+not just their rank**, wherever you have eyes on them.
+
+The per-turn RNG stream is still derived. Nothing rolls it.
+
+| | |
+|---|---|
+| `rules.defence` | `waypoint 2, outpost 5, colony 9`, plus `capital_defence 12` |
+| `rules.captain_strength` | 12 at level one, `+3` a level |
+| `rules.strength_recovery` | `3` a turn on ground you hold, `8` at your capital |
+
+Two consequences worth keeping:
+
+- **A capital needs a veteran.** `capital_defence` puts a capital above a fresh
+  captain's entire ceiling, so eliminating a player takes an officer who has been
+  winning - not an opening rush.
+- **Strength comes back only on ground you hold**, which is what stops a deep
+  raid running for ever and what makes the trip home mean something. It is also
+  the placeholder a city producing unit types will replace.
+
+**A defeated captain is broken, not killed** (`commanders.demote`): thrown back
+to its capital at zero strength and stripped of a rank. With one captain each, an
+officer that could be removed from the board would end a player's game on a
+single turn, and everyone would stop committing.
+
+**Battles are the only source of experience**, worth the resistance overcome - so
+a colony is worth more than a waypoint without any table having to say so.
+
 **An empty batch is meaningful.** It is how a player says "I am done this turn",
 which is what lets a turn resolve early once everyone has said it.
 
@@ -248,8 +307,8 @@ map data. `systems.lua` turns those into three kinds of place:
 | **waypoint** | everything else |
 
 None of them currently produce anything - the distinction is what capitals are
-placed on, what counts towards a region, and what city upgrades will be priced
-against. `profile.industry` and `profile.science` are carried for the same
+placed on, what counts towards a region, **what it costs to take** (see
+`systems.defence`), and what city upgrades will be priced against. `profile.industry` and `profile.science` are carried for the same
 reason: they are derived from the star itself and cost nothing to keep.
 
 **The generator guarantees a colony floor** (`config.colony_fraction`).
@@ -276,8 +335,9 @@ portrait are most of the point: a piece a player is attached to is worth more
 than a token. Everything derives from `level`, so state carries only a level and
 an experience total.
 
-**Nothing awards experience yet.** Battles will. The progression is dormant
-rather than dead: rank, speed and the portrait already read from it.
+**Battles award experience**, worth the resistance overcome. Rank buys reach
+*and* weight, so a veteran covers more lanes a turn and can crack a capital a
+fresh officer cannot.
 
 **Movement is whole lanes, not a distance.** A captain crosses
 `rules.captain_steps` lanes a turn and always ends the turn *at* a system.
@@ -434,6 +494,16 @@ player's pending moves straight from storage.
 and while dense arrays survive, `knowledge[player]` is keyed by star id and
 *sparse*, so it returns with string keys. Indexing it with a number would then
 silently miss and every player's fog memory would look empty after each turn.
+
+**The repair has to match the shape it is repairing.** This one coerced each
+entry with `tonumber(entry) or 0`, which was correct when memory was `id -> turn`
+and quietly flattened every record to the number zero once `view.remember`
+started storing `{ turn, owner, capital_of }`. The function written to *stop* fog
+memory being wiped on every read was the thing wiping it, and `view.project`
+crashed outright the first time a player remembered somewhere they could no
+longer see. Nothing offline caught it: under LuaJIT the crash needs a remembered
+system that is not also currently visible, which the tests happened not to
+produce. It was found by playing a game through the real RPCs.
 
 For the same reason `view.project` keys systems by **string** id: a Lua table
 with sparse integer keys encodes ambiguously, and the client must be able to
@@ -1250,22 +1320,35 @@ The game is a foundation being built back up, so most of what is missing is
 missing on purpose. These are the things that are *not* on that plan, or that
 will bite whoever touches them.
 
-- **There is nothing to do but walk.** No production, no combat, no upgrades.
-  That is the current state of the rebuild, not an oversight - but it means
-  pacing, balance and the AI in `tools/play.lua` measure almost nothing yet.
-- **A boxed-in player has no way back.** `tools/play.lua` shows it on the first
-  run: an AI enclosed early finishes with a tenth of the map. Nothing rubber-bands.
-- **Races differ only on mobility.** They still declare growth, industry and
-  research effects, but `modifiers.of` folds only speed, hops and vision, so
-  Drift Cartels is strictly the strongest pick. Balancing races before
-  production returns would be fitting to noise.
+- **There is nothing to build.** No production, no upgrades, no unit types. The
+  only thing strength is spent on is taking ground, and the only place it comes
+  from is a rule rather than a city. Pacing and balance are therefore still
+  measuring a skeleton.
+- **A boxed-in player has no way back.** Combat means a border can now be pushed,
+  which is most of the old version of this problem - but nothing rubber-bands,
+  and a player ground down to their capital has no way to rebuild a captain.
+- **Half of each race is still inert.** `modifiers.of` now folds speed, hops,
+  vision, attack and defence, so races differ meaningfully - but growth,
+  industry, research, capacity and the cost keys are read by nothing until
+  production returns.
+- **Six-player games rarely finish.** Two, three and four-player games decide in
+  70-300 turns across every seed tried. Six needs 400-1000 and sometimes never
+  gets there, because `victory_region_fraction` asks any one of six players for
+  half the galaxy. Territory does change hands throughout, so this is a
+  threshold that should probably scale with the player count - not a stall.
+- **The turn digest is a list, not a playback.** The log now carries everything a
+  replay needs - `captain_moved` records the exact path walked each turn, and
+  `battle` carries who defended and with what - but nothing animates it. The
+  movement events are on the wire and deliberately *not* rendered in the list,
+  because one row per captain per turn across a forty-turn digest would bury
+  everything that actually happened.
 - **Existing games from before the rebuild are dead.** Their stored state has no
   capitals or captains, so `holds_capital` is false for everyone and they end on
   the next resolution. There is no migration and there should not be one.
-- **The rebuilt client is unverified on a device.** The sim, the server and the
-  full RPC round trip are covered headlessly, and the desktop build compiles,
-  but the new map screen has not been driven on hardware - the test device
-  disconnected mid-session.
+- **Combat is unverified on a device.** The sim, the server and the full RPC
+  round trip are covered, and the desktop client has been driven through a
+  battle, but the strength badge, the "N to take" line and the battle rows in
+  the digest have only been seen on desktop.
 - **`drive.py` cannot see the system sheet's own buttons.** The bridge's element
   query returns star labels and the top bar but not the sheet, so those still
   have to be tapped by position. `state` and `tapstar` are unaffected.

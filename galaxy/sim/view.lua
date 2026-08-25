@@ -106,6 +106,16 @@ function M.project(galaxy, state, player)
 	local visible = M.visible_systems(galaxy, state, player, mods)
 	local memory = state.knowledge[player] or {}
 
+	-- What a system costs to take is derived from the star, which is public, so
+	-- the client could recompute it - except for the owner's race modifier,
+	-- which it has no business knowing the shape of. Sending the finished number
+	-- keeps `rules.defence` from having to be re-implemented on the client and
+	-- keeps the two from drifting.
+	local defence_mods = {}
+	for i = 1, #state.players do
+		defence_mods[i] = modifiers.of(state.players[i])
+	end
+
 	-- Keyed by *string* id. A Lua table with sparse integer keys is encoded
 	-- ambiguously as JSON - some encoders produce an object, others a
 	-- null-padded array - and the client must be able to tell which system each
@@ -118,6 +128,9 @@ function M.project(galaxy, state, player)
 			capital_of = sys.capital_of,
 			seen = state.turn,
 			live = true,
+			-- Nil for unowned ground: there is nothing to take it off.
+			defence = sys.owner ~= 0 and systems.defence(galaxy, id,
+				sys.capital_of == sys.owner, defence_mods[sys.owner]) or nil,
 		}
 	end
 	for id, seen in pairs(memory) do
@@ -151,11 +164,20 @@ function M.project(galaxy, state, player)
 				portrait = profile.portrait,
 				xp = profile.xp, next_xp = profile.next_xp,
 				steps = profile.steps,
+				strength = profile.strength,
+				max_strength = profile.max_strength,
 			}
 		elseif visible[c.at] or (c.route[1] and visible[c.route[1]]) then
+			-- **A rival's strength is shown, not just their rank.** Combat is a
+			-- comparison the attacker is expected to do before committing, and
+			-- hiding half of it would turn every attack into a guess - which is
+			-- the one thing a game checked twice a day cannot afford. What stays
+			-- hidden is where they are *going*: you can see a fleet, not a plan.
+			local their_mods = modifiers.of(state.players[c.owner])
 			contacts[#contacts + 1] = {
 				owner = c.owner, at = c.at, next_hop = c.route[1],
 				rank = commanders.rank(c.level or 1),
+				strength = commanders.strength(c, their_mods),
 			}
 		end
 	end
@@ -201,6 +223,8 @@ function M.project(galaxy, state, player)
 			steps = commanders.steps({ level = 1 }, mods),
 			hops = mods.hops,
 			vision = mods.vision,
+			recovery = rules.strength_recovery,
+			capital_recovery = rules.capital_recovery,
 		},
 	}
 end

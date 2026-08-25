@@ -16,10 +16,18 @@
 -- "which system next", and a tree there is ceremony around an `if`. When a bot
 -- has to weigh expanding against defending against raiding against building,
 -- that is the moment to reach for one.
+--
+-- **It knows what a fight costs.** Combat is a single visible comparison, so a
+-- bot can price a target exactly the way a player can, and it simply never
+-- picks one it cannot afford. What it does not do yet is defend, retreat, or
+-- wait deliberately for a promotion - it waits only because it has run out of
+-- things it can pay for.
 
 local rng = require("galaxy.rng")
 local state_mod = require("galaxy.sim.state")
 local systems = require("galaxy.sim.systems")
+local commanders = require("galaxy.sim.commanders")
+local modifiers = require("galaxy.sim.modifiers")
 
 local M = {}
 
@@ -28,12 +36,40 @@ local M = {}
 -- are counted in.
 local KIND_BONUS = { colony = 2.0, outpost = 1.0, waypoint = 0 }
 
---- The nearest unclaimed systems reachable without crossing someone's border.
+-- Taking something off somebody is worth more than walking into empty space -
+-- it is the only thing that moves a border - but it costs strength that would
+-- otherwise have bought two or three free systems, so the premium is modest.
+local CONTESTED_BONUS = 1.5
+
+--- What it would cost this bot to take `id` from whoever holds it.
+--
+-- The same sum the resolver does, and deliberately so: a bot working from a
+-- different estimate would march into fights it cannot win, which is the exact
+-- mistake "never walk into a border" was written to stop.
+local function cost_of(galaxy, state, mods, id)
+	local sys = state.systems[id]
+	local owner = sys.owner
+	local total = systems.defence(galaxy, id, sys.capital_of == owner, mods[owner])
+	for i = 1, #state.captains do
+		local c = state.captains[i]
+		if c.owner == owner and c.at == id then
+			total = total + commanders.strength(c, mods[owner])
+		end
+	end
+	return total
+end
+
+--- The nearest systems worth going to, reachable without crossing a border.
 --
 -- Breadth-first out from `from`, walking only through space this player already
--- holds. A captain turned back at a border has wasted the turn it took to get
--- there, so a route that ends at one is never worth plotting.
-local function reachable_targets(galaxy, state, player, from, limit)
+-- holds - a captain that has to fight its way *to* a target has spent the
+-- strength it was going to take the target with.
+--
+-- Two kinds of target: unclaimed ground, which is free, and a neighbour's
+-- system the captain can currently afford. Anything dearer than the strength in
+-- hand is not a target at all, because the resolver would simply turn the
+-- captain back at the border and the trip would be wasted.
+local function reachable_targets(galaxy, state, mods, player, from, strength, limit)
 	local dist = { [from] = 0 }
 	local queue, head = { from }, 1
 	local found = {}
@@ -48,11 +84,16 @@ local function reachable_targets(galaxy, state, player, from, limit)
 				dist[n] = dist[id] + 1
 				local owner = state.systems[n].owner
 				if owner == 0 then
-					found[#found + 1] = { id = n, hops = dist[n] }
+					found[#found + 1] = { id = n, hops = dist[n], cost = 0 }
 				elseif owner == player then
 					queue[#queue + 1] = n
+				else
+					local cost = cost_of(galaxy, state, mods, n)
+					if strength >= cost then
+						found[#found + 1] = { id = n, hops = dist[n], cost = cost }
+					end
+					-- Too dear: not a road either, so the search stops here.
 				end
-				-- Somebody else's ground is neither a target nor a road.
 			end
 		end
 	end
@@ -63,6 +104,7 @@ end
 local function score(galaxy, candidate, jitter)
 	local kind = systems.kind(galaxy, candidate.id)
 	return (KIND_BONUS[kind] or 0)
+		+ (candidate.cost > 0 and CONTESTED_BONUS or 0)
 		- candidate.hops * 1.5
 		+ jitter
 end
@@ -77,6 +119,9 @@ function M.orders(galaxy, state, player)
 	local stream = rng.stream(state.seed,
 		"bot:" .. player .. ":turn:" .. state.turn)
 
+	local mods = {}
+	for i = 1, #state.players do mods[i] = modifiers.of(state.players[i]) end
+
 	local captains = state_mod.captains_of(state, player)
 	for i = 1, #captains do
 		local captain = captains[i]
@@ -84,7 +129,9 @@ function M.orders(galaxy, state, player)
 		-- would make a bot dither on the spot, and its standing order is
 		-- usually still the best one.
 		if state_mod.is_parked(captain) then
-			local targets = reachable_targets(galaxy, state, player, captain.at, 12)
+			local strength = commanders.strength(captain, mods[player])
+			local targets = reachable_targets(galaxy, state, mods, player,
+				captain.at, strength, 12)
 			local best, best_score = nil, nil
 			for t = 1, #targets do
 				-- A little noise so two bots in the same position do not make
@@ -101,6 +148,9 @@ function M.orders(galaxy, state, player)
 					captain = captain.id, route = { best.id },
 				}
 			end
+			-- No affordable target means standing still, which is the right
+			-- move: strength only comes back on ground you hold, so a bot with
+			-- nothing it can take is a bot refitting for the one it can.
 		end
 	end
 	return orders

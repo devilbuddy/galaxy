@@ -6,11 +6,11 @@
 -- vocabulary with whatever else grants effects later, and means a new key is
 -- wired up by naming it here once.
 --
--- **Only three keys currently do anything**: speed, hops and vision. The races
--- in galaxy/sim/races.lua still declare growth, industry, research and the rest,
--- because those are the design intent for when production is built back - but
--- until something reads them they are inert data, and races are effectively
--- distinguished by mobility alone. Worth remembering before balancing anything.
+-- **Five keys currently do anything**: speed, hops, vision, attack and defence.
+-- The races in galaxy/sim/races.lua still declare growth, industry, research and
+-- the rest, because those are the design intent for when production is built
+-- back - but until something reads them they are inert data. Worth remembering
+-- before balancing anything: a race's economic half is still not playing.
 --
 -- Deliberately not cached. The result is a handful of table lookups, asked for
 -- once per player per turn, and a cache would either be serialised into Nakama
@@ -57,6 +57,17 @@ function M.of(player)
 
 		-- Intelligence. Extra lanes on top of the base.
 		vision = e.vision or 0,
+
+		-- War. `attack` weighs a captain's own strength; `defence` weighs how
+		-- hard the systems this player holds are to take off them - so it is
+		-- read against the *owner* of the ground, never the attacker.
+		--
+		-- These two are what finally make races differ by something other than
+		-- mobility. Vorn hit a quarter harder, Silicate are a quarter harder to
+		-- shift, and the Cartels pay for their speed by being soft - which is
+		-- the trade the blurbs have been promising since they were written.
+		attack = scale(e, "attack"),
+		defence = scale(e, "defence"),
 	}
 end
 
