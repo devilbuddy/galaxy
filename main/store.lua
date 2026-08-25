@@ -71,6 +71,11 @@ M.sent_turn = nil
 -- what stops the button offering to end a turn that has already been ended.
 M.turn_ended = nil
 
+-- Set by the in-game menu when the player confirms they are leaving. The HUD
+-- acts on it: a popup cannot navigate from its own teardown (see
+-- main/screens/menu.gui_script).
+M.leave_requested = nil
+
 -- A turn digest that arrived on a background poll rather than on arrival at the
 -- map. Held rather than shown, because a popup must not land on top of a player
 -- who is in the middle of reading the map; the overview offers it instead.

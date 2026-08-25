@@ -138,11 +138,16 @@ local function build_overview(self, w, h, pad)
 	local card, border = ui.card(pad.left, y, width, TOP_H)
 	self.overview = { card = card, border = border }
 
-	-- The EMPIRE button and its screen are gone. With no production and no
-	-- research there was nothing on it the map does not already show: the
-	-- captain strip is the roster and the overview carries the objective.
+	-- The way out. The map had no exit at all - once you were in a game the
+	-- only way back to the lobby was to restart the app. It sits where EMPIRE
+	-- used to, which is the corner a thumb already goes to.
+	local menu_size = 60
+	self.menu = ui.icon_button(self.druid, w - pad.right - 14 - menu_size,
+		y - 18, menu_size, "icon_menu",
+		function() monarch.show(hash("menu")) end,
+		{ background = ui.CARD_ALT, colour = ui.DIM })
 	local x = pad.left + 14
-	local column = ((w - pad.right - 14) - x) / 3
+	local column = ((w - pad.right - 28 - menu_size) - x) / 3
 	local function slot(i, icon, colour)
 		local cx = x + column * (i - 1)
 		return {
@@ -259,8 +264,20 @@ local function build_captains(self, w, h, pad)
 			moving and ui.plural(f.eta, "lane") or "here",
 			chosen and ui.ACCENT or ui.FAINT, { pivot = gui.PIVOT_CENTER })
 		self.captain_druid:new_button(node, function()
+			-- Selecting a captain *is* the intent to order one - the bar's own
+			-- hint says "tap a captain to give them orders" - so this starts
+			-- the aim rather than only pointing the camera at them. The sheet
+			-- stands down while aiming, which is what hands the map over for
+			-- the tap being asked for.
 			store.selected_captain = f.id
 			store.selected = f.at
+			store.aiming = { kind = "move", captain = f.id }
+			-- Consume this selection change here. `resolve_aim` fires whenever
+			-- the selection moves with an aim active, so setting both in one
+			-- callback would resolve the order instantly against the system the
+			-- captain is already standing on - a route from a place to itself,
+			-- which the server rightly refuses.
+			self.last_selected = f.at
 			self.sheet_dirty = true
 			-- Where the force actually is, part way along its lane if it is
 			-- under way, so the camera lands on the marker and not behind it.
@@ -492,8 +509,7 @@ local function build_sheet(self, w, pad)
 					{ ring_colour = chosen and ui.ACCENT or ui.BORDER })
 				ui.body(inner + 56, y + 27, captain.name, ui.TEXT)
 				ui.small(inner + 56, y + 6, captain.rank or "", ui.FAINT)
-				ui.small(inner + text_w - 14, y + 21,
-					chosen and "tap a destination" or "tap to move", ui.FAINT,
+				ui.small(inner + text_w - 14, y + 21, "tap to move", ui.FAINT,
 					{ pivot = gui.PIVOT_E })
 				self.sheet_druid:new_button(row, function()
 						if chosen then
@@ -1390,6 +1406,28 @@ function update(self, dt)
 
 	self.clock = (self.clock or 0) + dt
 	automation.update(dt)
+
+	-- Leaving the game. The menu popup sets this rather than navigating itself,
+	-- because a screen being torn down cannot reliably do it.
+	if store.leave_requested then
+		store.leave_requested = nil
+		monarch.back(nil, function()
+			-- Cleared once the map is gone. The store is process-wide, so a
+			-- stale view would follow the player into the next game they open.
+			store.game = nil
+			store.game_view = nil
+			store.game_id = nil
+			store.selected = nil
+			store.selected_captain = nil
+			store.aiming = nil
+			store.orders = {}
+			store.orders_turn = nil
+			store.sent_signature = nil
+			store.turn_ended = nil
+			store.pending_report = nil
+		end)
+		return
+	end
 
 	local g = store.galaxy
 

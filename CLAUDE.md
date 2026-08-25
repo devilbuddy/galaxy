@@ -594,6 +594,31 @@ ends a turn and the game resolves once everyone has, so the order bar reads
 early-resolution path was unreachable by a human - the client had no way to send
 the empty batch the server was waiting for.
 
+### Leaving a game
+
+A menu glyph sits top right of the overview bar, where EMPIRE used to, and opens
+a confirmation. The map had no exit at all before it: once you were in a game
+the only way back to the lobby was to restart the app.
+
+The confirmation says two true things - the game is still there when you come
+back, and, **when there are staged orders that have not been sent, that leaving
+loses them.** Those orders live in `store` and nowhere else, so that is a real
+consequence and the reason the dialog exists rather than an immediate exit.
+
+Two traps, both found by trying it:
+
+- **`monarch.back()`, not `monarch.show(hash("lobby"))`.** The lobby is already
+  underneath the map on Monarch's stack, so showing it again does nothing and
+  leaves the map loaded - running, with its game pulled out from under it.
+- **A popup cannot navigate from its own callback.** Monarch is tearing the
+  script down as the callback runs, and a `monarch.back` scheduled from there
+  silently never happens. The menu sets `store.leave_requested` and the HUD acts
+  on it, because the HUD is still alive at that moment.
+
+The store is cleared *after* the map has gone. Wiping it while the map was still
+running left it rendering a game it no longer had - a map with no owner,
+offering a new galaxy.
+
 ### Client screens (Monarch) and UI (Druid)
 
 `main/main.collection` is a bootstrap holding `main/app.script` plus one Monarch

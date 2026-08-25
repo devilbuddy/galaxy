@@ -57,6 +57,33 @@ embedded_instances {
   scale3 { x: 1.0 y: 1.0 z: 1.0 }
 }
 embedded_instances {
+  id: "menu_screen"
+  data: "components {\n"
+  "  id: \"screen\"\n"
+  "  component: \"/monarch/screen_proxy.script\"\n"
+  "  properties {\n"
+  "    id: \"screen_id\"\n"
+  "    value: \"menu\"\n"
+  "    type: PROPERTY_TYPE_HASH\n"
+  "  }\n"
+  "  properties {\n"
+  "    id: \"popup\"\n"
+  "    value: \"true\"\n"
+  "    type: PROPERTY_TYPE_BOOLEAN\n"
+  "  }\n"
+  "}\n"
+  "embedded_components {\n"
+  "  id: \"collectionproxy\"\n"
+  "  type: \"collectionproxy\"\n"
+  "  data: \"collection: \\\"/main/screens/menu.collection\\\"\\n\"\n"
+  "  \"\"\n"
+  "}\n"
+  ""
+  position { x: 0.0 y: 0.0 z: 0.0 }
+  rotation { x: 0.0 y: 0.0 z: 0.0 w: 1.0 }
+  scale3 { x: 1.0 y: 1.0 z: 1.0 }
+}
+embedded_instances {
   id: "setup_screen"
   data: "components {\n"
   "  id: \"screen\"\n"

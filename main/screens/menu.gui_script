@@ -1,0 +1,97 @@
+--- The in-game menu: for now, one question and a way out.
+--
+-- A player needs to be able to leave a game, and the map had no exit at all -
+-- once you were in one the only way back to the lobby was to restart the app.
+--
+-- Leaving is confirmed rather than immediate, and the confirmation says two
+-- true things: the game is still there when you come back, and whether you are
+-- about to walk away from orders you never sent. Those orders live in `store`
+-- and nowhere else, so leaving really does lose them - which is exactly what a
+-- confirmation is for.
+
+local druid = require("druid.druid")
+local monarch = require("monarch.monarch")
+local store = require("main.store")
+local ui = require("main.ui")
+
+local CARD_W = 600
+local PAD = 28
+
+local function build(self)
+	local w, h = store.screen.width, store.screen.height
+	self.druid = druid.new(self)
+
+	ui.shade()
+
+	local unsent = store.plan_count() > 0
+		and store.sent_signature ~= store.plan_signature()
+	local count = store.plan_count()
+
+	-- Sized to its content. The body wraps to three lines at this width, which
+	-- is what the warning below it has to clear - it was written against two
+	-- and landed on top of the third.
+	local card_h = unsent and 384 or 324
+	local x = (w - CARD_W) * 0.5
+	local y = (h + card_h) * 0.5
+
+	ui.card(x, y, CARD_W, card_h)
+
+	local inner = x + PAD
+	local text_w = CARD_W - PAD * 2
+
+	ui.h2(inner, y - 40, "Leave this game?")
+	ui.small(inner, y - 90,
+		"It will be waiting in the menu when you come back, and turns keep "
+		.. "resolving on their schedule while you are away.",
+		ui.DIM, { width = text_w, anchor_top = true })
+
+	local by = y - 206
+	if unsent then
+		-- The one thing leaving actually costs. Staged orders are client-side
+		-- until they are sent; nothing on the server knows about them.
+		ui.icon(inner, by + 4, 26, "icon_close", ui.WARN)
+		ui.small(inner + 36, by,
+			ui.plural(count, "order") .. " you have not sent will be lost.",
+			ui.WARN, { width = text_w - 40, anchor_top = true })
+	end
+
+	local gap = 16
+	local half = (text_w - gap) * 0.5
+	local button_y = y + PAD - card_h + ui.CONTROL
+
+	ui.button(self.druid, inner, button_y, half, ui.CONTROL, "STAY",
+		function() monarch.hide(hash("menu")) end, { size = ui.CAPS })
+
+	ui.button(self.druid, inner + half + gap, button_y, half, ui.CONTROL,
+		"LEAVE", function()
+			-- Asked for rather than done here. Navigating from inside a popup's
+			-- own callback does not survive: Monarch is tearing this script
+			-- down as the callback runs, and `monarch.back` scheduled from it
+			-- silently never happens. The HUD is still alive at that moment, so
+			-- it does the going back and the clearing up.
+			store.leave_requested = true
+			monarch.hide(hash("menu"))
+		end, { style = unsent and "danger" or "primary", size = ui.CAPS })
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	ui.install_druid_picking()
+	build(self)
+end
+
+function final(self)
+	if self.druid then self.druid:final() end
+end
+
+function update(self, dt)
+	if self.druid then self.druid:update(dt) end
+end
+
+function on_input(self, action_id, action)
+	return ui.modal_input(self.druid, action_id, action)
+end
+
+function on_message(self, message_id, message, sender)
+	if self.druid then self.druid:on_message(message_id, message, sender) end
+end
