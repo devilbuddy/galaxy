@@ -9,9 +9,26 @@ local gestures = require("main.gestures")
 
 -- Zoom is world-pixels per screen-pixel: 1.0 shows the map at native scale.
 -- The lower bound is recomputed on start so the whole galaxy always fits.
-local ZOOM_MAX = 9.0
+--
+-- The ceiling used to be 9.0, and nothing had ever been there: pinch cannot be
+-- injected from a workstation, so until the on-screen controls existed the
+-- range past the fit zoom was unreachable and unlooked-at. It is 80 world units
+-- across, and lanes run 60 to 200 - so the whole screen sits *between* two
+-- systems, showing a bare lane and no star at all. 3.0 is about 240 units, or a
+-- system and the ones it is joined to, which is as close as there is anything
+-- to see.
+local ZOOM_MAX = 3.0
 local ZOOM_MIN_FLOOR = 0.05
 local WHEEL_STEP = 1.18
+
+-- One press of an on-screen zoom button. The range from fit to ZOOM_MAX is
+-- about 9x, so this crosses the whole of it in six presses: much less and
+-- getting anywhere is a drum solo, much more and each press is a lurch.
+local BUTTON_STEP = 1.5
+-- How fast a button zoom converges, and how close counts as arrived (as a
+-- ratio, because zoom is perceived multiplicatively).
+local ZOOM_RATE = 11
+local ZOOM_SETTLED = 1.002
 
 -- How far past the map's edge the camera may travel, as a fraction of the
 -- viewport. A little overscroll stops the rim from feeling walled off.
@@ -65,6 +82,7 @@ local function apply(self)
 	clamp_position(self)
 	local cam = store.camera
 	cam.x, cam.y, cam.zoom = self.x, self.y, self.zoom
+	cam.zoom_min, cam.zoom_max = self.zoom_min, ZOOM_MAX
 end
 
 --- Zoom about a screen point, so the world under the finger stays under it.
@@ -81,6 +99,52 @@ local function zoom_to(self, target, screen_x, screen_y)
 	self.x = wx - (screen_x - w * 0.5) / self.zoom
 	self.y = wy - (screen_y - h * 0.5) / self.zoom
 	apply(self)
+end
+
+--- The point a button zoom pivots about.
+--
+-- Never the middle of the window. The sheet and the order bar can cover the
+-- bottom half of it, so the geometric centre is often a point behind a panel,
+-- and pivoting on something invisible sends everything the player *can* see
+-- rushing off the top of the band. The middle of `hud_band` is the middle of
+-- the map as far as anyone looking at it is concerned - the same reason the
+-- camera clamps against the band rather than the window.
+--
+-- Better still, when a system is selected: zooming in is almost always "closer
+-- to *that*". Anchoring anywhere else slides it steadily off the pivot, and
+-- three presses later the star is behind the sheet describing it - which is
+-- exactly what the first run of these buttons did.
+local function band_anchor(self)
+	local w, h = viewport(self)
+	local band = store.hud_band
+	local low, high = 0, h
+	if band.ceiling > band.floor then low, high = band.floor, band.ceiling end
+
+	local g, id = store.galaxy, store.selected
+	local star = id and g and g.stars[id]
+	if star then
+		-- The same relationship the render script projects with, inverted by
+		-- zoom_to below.
+		local sx = (star.x - self.x) * self.zoom + w * 0.5
+		local sy = (star.y - self.y) * self.zoom + h * 0.5
+		-- Only if it is somewhere the player can actually see it; a selection
+		-- off the edge of the screen is not what they are reaching toward.
+		if sx >= 0 and sx <= w and sy >= low and sy <= high then
+			return sx, sy
+		end
+	end
+	return w * 0.5, (low + high) * 0.5
+end
+
+--- Ask for a zoom, to be eased into over the next few frames.
+--
+-- Clamped here rather than in the glide, because a target outside the range
+-- would never be reached and the glide would never end.
+local function set_zoom_target(self, target)
+	self.zoom_target = math.max(self.zoom_min, math.min(ZOOM_MAX, target))
+	-- The player has taken charge of the zoom, so stop re-fitting the view
+	-- whenever the window or the safe-area insets change under them.
+	self.user_zoomed = true
 end
 
 --- Recompute the zoom floor so the whole populated map fits the window.
@@ -110,6 +174,7 @@ function init(self)
 	self.x, self.y = 0, 0
 	self.zoom = 0.42
 	self.zoom_min = ZOOM_MIN_FLOOR
+	self.zoom_target = nil
 	-- Pan/pinch/tap recognition lives in main/gestures.lua so it can be tested
 	-- without a device (tools/test_gestures.lua).
 	self.recognizer = gestures.new({ tap_slop = TAP_SLOP })
@@ -175,6 +240,9 @@ local FOCUS_RATE = 7.5
 -- Below this the glide is over. In world units, so it scales with zoom the way
 -- the eye does.
 local FOCUS_SETTLED = 1.5
+-- And below this a frame moved the camera nowhere at all, which means something
+-- else is holding it - see the glide in update().
+local FOCUS_ARRIVED = 0.01
 
 local function focus_on(self, x, y)
 	self.focus_x, self.focus_y = x, y
@@ -184,8 +252,51 @@ local function cancel_focus(self)
 	self.focus_x, self.focus_y = nil, nil
 end
 
+--- Hand the view back to the player: whatever it was gliding toward, stop.
+local function cancel_glide(self)
+	cancel_focus(self)
+	self.zoom_target = nil
+end
+
+--- Frame the whole galaxy again.
+--
+-- The way *back* is the control that matters most. Nine times the fit zoom over
+-- a 2600-unit world is a long way from anywhere, and stepping out of it one
+-- press at a time is the kind of thing a player does once and then stops
+-- zooming in at all.
+local function zoom_fit(self)
+	self.zoom_target = self.zoom_min
+	-- Asking to see the whole map is also asking to be re-framed when the
+	-- window changes, which is what `user_zoomed` gates - so this is the one
+	-- zoom that clears it rather than sets it.
+	self.user_zoomed = false
+	-- Where the view will come to rest, computed at the zoom it will rest *at*:
+	-- frame_offset_y is in world units and so depends on the zoom, and reading
+	-- it mid-glide would aim at a moving point.
+	local bar = store.hud_bar_height or 0
+	focus_on(self, self.centre_x, self.centre_y + (bar * 0.5) / self.zoom_min)
+end
+
 function update(self, dt)
+	if self.zoom_target then
+		-- Eased for the same reason `focus` is: a cut leaves the player
+		-- re-reading the screen to work out what moved, and a 1.5x jump moves
+		-- every star at once.
+		local ratio = self.zoom_target / self.zoom
+		local next_zoom = self.zoom + (self.zoom_target - self.zoom) * math.min(1, dt * ZOOM_RATE)
+		if ratio < ZOOM_SETTLED and ratio > 1 / ZOOM_SETTLED then
+			next_zoom = self.zoom_target
+			self.zoom_target = nil
+		end
+		local ax, ay = band_anchor(self)
+		zoom_to(self, next_zoom, ax, ay)
+	end
+
+	-- Focus runs *after* the zoom, because zoom_to moves the camera to hold the
+	-- anchor point still and would otherwise drag the glide off its target on
+	-- every frame the two overlap.
 	if self.focus_x then
+		local was_x, was_y = self.x, self.y
 		local t = math.min(1, dt * FOCUS_RATE)
 		self.x = self.x + (self.focus_x - self.x) * t
 		self.y = self.y + (self.focus_y - self.y) * t
@@ -195,6 +306,15 @@ function update(self, dt)
 			cancel_focus(self)
 		end
 		apply(self)
+		-- Somewhere off the edge of the content is a perfectly reasonable thing
+		-- to ask for - the clamp simply stops at the edge - but then the glide
+		-- is pulling against it and the "close enough" test above never fires.
+		-- A frame that moved the camera nowhere means the clamp has taken over
+		-- and there is nothing left to ease toward.
+		if self.focus_x and math.abs(self.x - was_x) < FOCUS_ARRIVED
+			and math.abs(self.y - was_y) < FOCUS_ARRIVED then
+			cancel_focus(self)
+		end
 	end
 
 	local w, h = viewport(self)
@@ -214,9 +334,10 @@ end
 --- Apply one frame of recognised gesture to the camera.
 local function apply_gesture(self, g)
 	-- The moment the player touches the map it is theirs again.
-	if g.pan_dx ~= 0 or g.pan_dy ~= 0 or g.zoom ~= 1 then cancel_focus(self) end
+	if g.pan_dx ~= 0 or g.pan_dy ~= 0 or g.zoom ~= 1 then cancel_glide(self) end
 	if g.zoom ~= 1 and g.anchor_x then
 		zoom_to(self, self.zoom * g.zoom, g.anchor_x, g.anchor_y)
+		self.user_zoomed = true
 	end
 	if g.pan_dx ~= 0 or g.pan_dy ~= 0 then
 		-- Drag the map, not the camera: content follows the finger.
@@ -270,9 +391,13 @@ function on_input(self, action_id, action)
 		apply_gesture(self, g)
 		return is_button and not g.blocked
 	elseif action_id == hash("zoom_in") and action.pressed then
+		cancel_glide(self)
 		zoom_to(self, self.zoom * WHEEL_STEP, ax, ay)
+		self.user_zoomed = true
 	elseif action_id == hash("zoom_out") and action.pressed then
+		cancel_glide(self)
 		zoom_to(self, self.zoom / WHEEL_STEP, ax, ay)
+		self.user_zoomed = true
 	end
 end
 
@@ -281,6 +406,22 @@ function on_message(self, message_id, message)
 		-- Clamped by apply() as the glide runs, so asking for somewhere off the
 		-- edge of the content simply stops at the edge.
 		focus_on(self, message.x, message.y)
+		return
+	end
+	if message_id == hash("zoom_step") then
+		-- The HUD asks for a direction, not a level: the step size belongs with
+		-- the range it is a step of, and a button that named its own factor
+		-- would be a second place the zoom is described.
+		--
+		-- Stepping from the *target* rather than the current zoom is what makes
+		-- an impatient double-tap add up instead of the second press landing
+		-- somewhere in the middle of the first one's glide.
+		set_zoom_target(self, (self.zoom_target or self.zoom)
+			* (message.out and (1 / BUTTON_STEP) or BUTTON_STEP))
+		return
+	end
+	if message_id == hash("zoom_fit") then
+		zoom_fit(self)
 		return
 	end
 	if message_id == hash("map_ready") then

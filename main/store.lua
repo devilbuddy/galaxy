@@ -26,7 +26,12 @@ M.screen = {
 
 -- Live camera state, written by main/camera.script and read by the render
 -- script to build the projection.
-M.camera = { x = 0, y = 0, zoom = 1 }
+--
+-- `zoom_min` is the fit-the-whole-galaxy floor and `zoom_max` the ceiling; both
+-- are published because the HUD's zoom buttons have to know when they have run
+-- out of range - a control that still animates a press but does nothing is
+-- indistinguishable from a broken one.
+M.camera = { x = 0, y = 0, zoom = 1, zoom_min = 1, zoom_max = 1 }
 
 -- Currently selected star index, or nil.
 M.selected = nil

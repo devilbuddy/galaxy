@@ -294,6 +294,41 @@ def icon_menu():
     return img
 
 
+def icon_plus():
+    """Zoom in. A plus, not a magnifier with a plus in it: at 60 units square
+    the lens reads as a smudge and the sign inside it is unreadable."""
+    img, d = canvas(ICON)
+    d.rounded_rectangle([16 * SS, 33 * SS, 56 * SS, 39 * SS],
+                        radius=3 * SS, fill=white())
+    d.rounded_rectangle([33 * SS, 16 * SS, 39 * SS, 56 * SS],
+                        radius=3 * SS, fill=white())
+    return img
+
+
+def icon_minus():
+    img, d = canvas(ICON)
+    d.rounded_rectangle([16 * SS, 33 * SS, 56 * SS, 39 * SS],
+                        radius=3 * SS, fill=white())
+    return img
+
+
+def icon_frame():
+    """Four corner brackets: fit the whole galaxy on screen."""
+    img, d = canvas(ICON)
+    near, far, arm, weight = 15, 57, 16, 6
+    for x_out, y_out in ((near, near), (far, near), (near, far), (far, far)):
+        x_in = x_out + (arm if x_out == near else -arm)
+        y_in = y_out + (arm if y_out == near else -arm)
+        x_cap = x_out + (weight if x_out == near else -weight)
+        y_cap = y_out + (weight if y_out == near else -weight)
+        for box in ([x_out, y_out, x_in, y_cap], [x_out, y_out, x_cap, y_in]):
+            d.rounded_rectangle(
+                [min(box[0], box[2]) * SS, min(box[1], box[3]) * SS,
+                 max(box[0], box[2]) * SS, max(box[1], box[3]) * SS],
+                radius=3 * SS, fill=white())
+    return img
+
+
 ICONS = {
     "icon_metal": icon_metal,
     "icon_fuel": icon_fuel,
@@ -317,6 +352,9 @@ ICONS = {
     "icon_flag": icon_flag,
     "icon_clock": icon_clock,
     "icon_menu": icon_menu,
+    "icon_plus": icon_plus,
+    "icon_minus": icon_minus,
+    "icon_frame": icon_frame,
 }
 
 

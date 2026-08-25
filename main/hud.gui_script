@@ -60,6 +60,21 @@ local STAR_FONT_SCALE = 0.62
 local REGION_FONT_SCALE = 1.00
 
 local TOP_H = 96
+-- The zoom stack, on the right under the overview. Pinch is the only other way
+-- in, and multi-touch cannot be injected from a workstation - so before these
+-- existed the range past the fit zoom was not just untested but unlooked-at,
+-- and every device screenshot was taken at the one zoom the map ever reached.
+--
+-- It sits against the *top* chrome rather than the bottom, which costs some
+-- thumb reach, because the bottom right is not a stable place to put anything:
+-- the order bar spans the full width and grows upward as the plan does, and the
+-- system sheet comes up over it. A control that moves when you stage an order
+-- is the same problem SEND was kept still to avoid.
+local ZOOM_SIZE = ui.CONTROL
+local ZOOM_GAP = 8
+-- Between the in/out pair and the fit button, which is a different kind of
+-- thing: one steps, the other goes back to the beginning.
+local ZOOM_SPLIT = 16
 -- The commander strip under the overview: one face per force in the field. It
 -- is the roster *and* the way around the map - with a cap of four there are
 -- never enough of them to need a list, and a player thinks in terms of "where
@@ -126,6 +141,7 @@ local function publish_zones(self)
 	if self.top_zone then zones[#zones + 1] = self.top_zone end
 	if self.bar_zone then zones[#zones + 1] = self.bar_zone end
 	if self.captain_zone then zones[#zones + 1] = self.captain_zone end
+	if self.zoom_zone then zones[#zones + 1] = self.zoom_zone end
 	if self.sheet_zone then zones[#zones + 1] = self.sheet_zone end
 	store.hud_zones = zones
 end
@@ -183,6 +199,53 @@ local function build_overview(self, w, h, pad)
 	self.report_button:set_enabled(false)
 
 	self.top_zone = { pad.left, h - pad.top - TOP_H, w - pad.right, h - pad.top }
+end
+
+--- Zoom in, zoom out, and frame the whole galaxy.
+--
+-- The camera owns the step size and the range; these only say which direction,
+-- so there is one description of how far a press goes rather than two that can
+-- drift apart.
+local function build_zoom(self, w, h, pad)
+	local x = w - pad.right - ZOOM_SIZE
+	local top = h - pad.top - TOP_H - ui.GAP
+
+	local function press(out)
+		return function() msg.post("camera#camera_script", "zoom_step", { out = out }) end
+	end
+
+	self.zoom_in = ui.icon_button(self.druid, x, top, ZOOM_SIZE, "icon_plus",
+		press(false), { background = ui.CARD, colour = ui.TEXT })
+	local y = top - ZOOM_SIZE - ZOOM_GAP
+	self.zoom_out = ui.icon_button(self.druid, x, y, ZOOM_SIZE, "icon_minus",
+		press(true), { background = ui.CARD, colour = ui.TEXT })
+	y = y - ZOOM_SIZE - ZOOM_SPLIT
+	-- Deliberately never disabled. At the fit zoom it still recentres, which is
+	-- the other half of being lost on a map this much larger than the screen.
+	ui.icon_button(self.druid, x, y, ZOOM_SIZE, "icon_frame",
+		function() msg.post("camera#camera_script", "zoom_fit") end,
+		{ background = ui.CARD, colour = ui.DIM })
+
+	self.zoom_zone = { x, y - ZOOM_SIZE, x + ZOOM_SIZE, top }
+	-- Forced apart so the first refresh applies a style rather than deciding
+	-- nothing has changed.
+	self.zoom_state = nil
+end
+
+--- Grey the pair out at the ends of the range.
+--
+-- Gated on a change, like everything else in here: this is called every frame
+-- and nothing else in the project does per-frame work.
+local function refresh_zoom(self)
+	if not self.zoom_in then return end
+	local cam = store.camera
+	local can_in = cam.zoom < (cam.zoom_max or 1) - 1e-4
+	local can_out = cam.zoom > (cam.zoom_min or 1) + 1e-4
+	local state = (can_in and "i" or "-") .. (can_out and "o" or "-")
+	if state == self.zoom_state then return end
+	self.zoom_state = state
+	self.zoom_in.set_enabled(can_in)
+	self.zoom_out.set_enabled(can_out)
 end
 
 local function star_name(id)
@@ -1107,6 +1170,7 @@ local function build_chrome(self, w, h)
 	local pad = ui.inset()
 	self.pad = pad
 	build_overview(self, w, h, pad)
+	build_zoom(self, w, h, pad)
 	build_bar(self, w, pad, submit_orders)
 	ui.collect(previous)
 	build_captains(self, w, h, pad)
@@ -1422,6 +1486,7 @@ function update(self, dt)
 	end
 
 	refresh_overview(self)
+	refresh_zoom(self)
 	refresh_bar(self, g)
 	if not g then return end
 

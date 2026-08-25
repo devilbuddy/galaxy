@@ -553,14 +553,29 @@ end
 --- A square glyph-only button, for close and back.
 function M.icon_button(druid, x, y, size, image, on_click, opts)
 	opts = opts or {}
-	local fill = M.panel(x, y, size, size, opts.background or M.CARD_ALT)
+	local background = opts.background or M.CARD_ALT
+	local colour = opts.colour or M.DIM
+	local fill = M.panel(x, y, size, size, background)
 	local inset = math.floor(size * 0.28)
-	local glyph = M.icon(x + inset, y - inset, size - inset * 2, image,
-		opts.colour or M.DIM)
-	return {
+	local glyph = M.icon(x + inset, y - inset, size - inset * 2, image, colour)
+
+	local handle = {
 		fill = fill, glyph = glyph,
 		component = druid and druid:new_button(fill, on_click) or nil,
 	}
+
+	--- Grey it out and stop it responding, together.
+	--
+	-- A glyph button has no caption to change, so the tint is the only thing
+	-- saying whether it will do anything - and a control that still animates a
+	-- press but does nothing is indistinguishable from a broken one.
+	function handle.set_enabled(enabled)
+		if handle.component then handle.component:set_enabled(enabled) end
+		gui.set_color(fill, enabled and background or M.CARD)
+		gui.set_color(glyph, enabled and colour or M.FAINT)
+	end
+
+	return handle
 end
 
 --- A row of text tabs with an underline under the active one.

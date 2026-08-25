@@ -542,7 +542,7 @@ The whole map is ~6 draw calls and does no per-frame CPU work except the
 parallax backdrop.
 
 **Shapes are drawn procedurally in the fragment shaders, not from sprites.** A
-textured quad is only ever as sharp as its texture, and this map zooms to ~19x
+textured quad is only ever as sharp as its texture, and this map zooms to ~9x
 the fit scale, where a 64px disc is visibly mushy. Each layer derives its shape
 from the UV instead (`main/shaders/`):
 
@@ -579,7 +579,38 @@ caller:
 
 ### Zoom and the backdrop
 
-`ZOOM_MAX` is 9.0, roughly 19x the fit zoom. At that range a fixed-resolution
+**Zoom is three buttons on the right of the map**, under the overview:
+in, out, and frame-the-whole-galaxy. Before them there was no way to zoom at
+all - pinch is the only other route and multi-touch cannot be injected from a
+workstation, so every device screenshot ever taken was at the fit zoom.
+
+They are on the *top* right, which costs some thumb reach, because the bottom
+right is not a stable place to put anything: the order bar spans the full width
+and grows upward as the plan does, and the system sheet comes up over it. A
+control that moves when you stage an order is the problem SEND was kept still
+to avoid.
+
+Three details, each of which the first run of the buttons found:
+
+- **`ZOOM_MAX` is 3.0.** It was 9.0, and nothing had ever been there. 9.0 is 80
+  world units across and lanes run 60 to 200, so the whole screen sits *between*
+  two systems - a bare lane, no star. 3.0 is a system and the ones it is joined
+  to, which is as close as there is anything to see.
+- **A button zoom pivots on the selected system**, if there is one and it is
+  somewhere visible; otherwise on the middle of `store.hud_band`. Never the
+  middle of the *window*: with a tall sheet up that point is behind a panel, and
+  pivoting on something invisible sends everything the player can see rushing
+  off the top of the band. Anchoring on the selection is what stops the star
+  sliding off the pivot and ending up behind the sheet describing it - three
+  presses was enough.
+- **The camera eases rather than jumps**, for the same reason `focus` does, and
+  a press steps from the *target* rather than the current zoom so an impatient
+  double-tap adds up instead of landing mid-glide.
+
+The camera owns the step size and the range; the buttons only say which
+direction, so there is one description of how far a press goes.
+
+At that range a fixed-resolution
 backdrop stretched over the world is a smear, so `main/galaxy.script` fades the
 nebula and dust out between zoom 0.6 and 2.2, and eases the region wash back to
 45%. Fading is done with a `tint` fragment constant set via
@@ -762,8 +793,7 @@ way, so the view lands on the marker rather than behind it.
 
 It is the roster and the way around the map at once. With a cap of four there
 are never enough commanders to need a list, and a player thinks in terms of
-"where is Kess", not "which system was that". It is also the only way to move
-the camera deliberately, since zoom is pinch-only and pinch cannot be injected.
+"where is Kess", not "which system was that".
 
 The camera **eases** rather than cuts (`focus` in `main/camera.script`): the map
 is the one thing the player holds a mental picture of, and a cut leaves them
@@ -1243,9 +1273,14 @@ will bite whoever touches them.
   simulation takes a full waypoint list and expands it lane by lane, and the
   order shape and tests cover it, but the only gesture wired up is "tap a
   destination".
-- **A real two-finger pinch has never been performed**, and there is no other
-  way to zoom, so every device screenshot is at the fit zoom where panning is
-  clamped to almost nothing. On-screen zoom controls would fix both.
+- **A real two-finger pinch has still never been performed.** The zoom buttons
+  cover the range, so this is no longer load-bearing, but `gestures.lua`'s pinch
+  path is verified only by `tools/test_gestures.lua` and has never run against
+  real hardware.
+- **A fleet marker's name can land on top of a star label.** The label pass
+  rejects label-on-label overlaps, but markers are a separate pool and are not
+  part of that test, so at close zoom "Kess" prints through "Talitha's Landing".
+  Only visible since there was a way to zoom in.
 - **A route longer than `ROUTE_POOL` segments draws only its first 64 legs.**
   Pooled nodes cost whether or not they are used, so the pool is sized for a
   busy turn rather than the theoretical maximum.
