@@ -1059,7 +1059,7 @@ local function submit_orders(self)
 		msg.post("/galaxy#galaxy_script", "regenerate", {})
 		return
 	end
-	if self.sending or store.plan_count() == 0 then return end
+	if self.sending then return end
 
 	local payload = {}
 	for i = 1, #store.orders do
@@ -1088,9 +1088,11 @@ local function submit_orders(self)
 			print("galaxy: orders rejected (" .. tostring(err) .. ")")
 			return
 		end
-		print(string.format("galaxy: %d order(s) accepted for turn %s",
-			res.accepted or 0, tostring(res.for_turn)))
+		print(string.format("galaxy: %d order(s) accepted for turn %s%s",
+			res.accepted or 0, tostring(res.for_turn),
+			(res.resolved or 0) > 0 and " (resolved immediately)" or ""))
 		store.plan_sent(tonumber(res.for_turn) or store.orders_turn)
+		store.turn_ended = tonumber(res.for_turn) or true
 		store.aiming = nil
 		store.selected_captain = nil
 		self.sent_flash = 0
@@ -1247,8 +1249,14 @@ local function refresh_bar(self, g)
 			label, style, enabled = "SEND " .. count, "primary", true
 		elseif count > 0 then
 			label, style, enabled = "ORDERS IN", "disabled", false
+		elseif store.turn_ended then
+			label, style, enabled = "WAITING", "disabled", false
 		else
-			label, style, enabled = "NO ORDERS", "disabled", false
+			-- Nothing to send is not nothing to say. Submitting is what ends a
+			-- player's turn, and the turn resolves as soon as everyone has -
+			-- so a player with no orders needs a way to say they are done, or
+			-- a game of prompt players still waits out the clock.
+			label, style, enabled = "END TURN", "primary", true
 		end
 		self.send.set_text(label)
 		-- Enabled first: set_enabled picks a style of its own, so the exact one
@@ -1265,6 +1273,8 @@ local function refresh_bar(self, g)
 					(captain and captain.name) or "the captain"), ui.ACCENT
 			elseif self.sending then
 				text, tone = "Sending...", ui.DIM
+			elseif store.turn_ended and count == 0 then
+				text, tone = "Turn ended - waiting on the others", ui.GOOD
 			elseif count > 0 and not unsent then
 				text, tone = string.format("%s in for turn %d",
 					ui.plural(count, "order"), turn), ui.GOOD

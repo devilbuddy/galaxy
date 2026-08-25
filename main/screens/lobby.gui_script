@@ -53,100 +53,14 @@ local function screen()
 	return store.screen.width, store.screen.height
 end
 
---- A race's modifiers, split into what it is good and bad at.
-local function race_effects(race)
-	local ups, downs = {}, {}
-	for i = 1, #EFFECT_ORDER do
-		local key = EFFECT_ORDER[i]
-		local value = race.mods[key]
-		if value then
-			local label = EFFECT_LABEL[key] or key
-			local text
-			if WHOLE_NUMBER[key] then
-				text = string.format("%+d %s", value, label)
-			else
-				text = string.format("%+d%% %s", math.floor(value * 100 + 0.5), label)
-			end
-			-- Cheaper hulls and cheaper buildings are *good* despite being
-			-- negative, so the sign alone cannot decide which column it lands in.
-			local beneficial = value > 0
-			if key == "ship_cost" or key == "tech_cost" or key == "building_cost" then
-				beneficial = value < 0
-			end
-			if beneficial then ups[#ups + 1] = text else downs[#downs + 1] = text end
-		end
-	end
-	return ups, downs
-end
-
--- Race picker ------------------------------------------------------------------
-
-local function refresh_races(self)
-	for i = 1, #races.RACES do
-		local race = races.RACES[i]
-		local chosen = race.id == store.race
-		local tile = self.race_tiles[i]
-		gui.set_color(tile.fill, chosen and ui.CARD_HI or ui.CARD_ALT)
-		gui.set_color(tile.border, chosen and ui.race_colour(race.id) or ui.BORDER)
-		gui.set_color(tile.label, chosen and ui.TEXT or ui.DIM)
-		gui.set_color(tile.dot, ui.race_colour(race.id, chosen and 1.0 or 0.5))
-	end
-
-	local race = races.by_id(store.race)
-	gui.set_text(self.race_blurb, race.blurb)
-	local ups, downs = race_effects(race)
-	gui.set_text(self.race_good, table.concat(ups, "   "))
-	gui.set_text(self.race_bad, table.concat(downs, "   "))
-end
-
-local function build_races(self, w, y, pad)
-	local card_w = w - pad.left - pad.right
-	local rows = math.ceil(#races.RACES / RACE_COLUMNS)
-	local height = 44 + rows * (RACE_TILE_H + RACE_GAP) + 76 + PAD
-	ui.card(pad.left, y, card_w, height)
-	ui.section(pad.left + PAD, y - 16, card_w - PAD * 2, "your people")
-
-	local column = (card_w - PAD * 2 - RACE_GAP * (RACE_COLUMNS - 1)) / RACE_COLUMNS
-	self.race_tiles = {}
-	for i = 1, #races.RACES do
-		local race = races.RACES[i]
-		local col = (i - 1) % RACE_COLUMNS
-		local row = math.floor((i - 1) / RACE_COLUMNS)
-		local x = pad.left + PAD + (column + RACE_GAP) * col
-		local ty = y - 62 - (RACE_TILE_H + RACE_GAP) * row
-
-		local fill = ui.panel(x, ty, column, RACE_TILE_H, ui.CARD_ALT)
-		local border = ui.panel_line(x, ty, column, RACE_TILE_H, ui.BORDER)
-		local dot = ui.dot(x + 20, ty - RACE_TILE_H * 0.5 + 7, 14,
-			ui.race_colour(race.id))
-		local label = ui.text(x + 46, ty - RACE_TILE_H * 0.5, race.label, ui.BODY,
-			ui.DIM, { bold = true, width = column - 62, height = RACE_TILE_H })
-
-		self.race_tiles[i] = { fill = fill, border = border, dot = dot, label = label }
-		self.druid:new_button(fill, function()
-			store.race = race.id
-			refresh_races(self)
-		end)
-	end
-
-	local below = y - 62 - rows * (RACE_TILE_H + RACE_GAP)
-	self.race_blurb = ui.body(pad.left + PAD, below - 6, "", ui.TEXT)
-	self.race_good = ui.small(pad.left + PAD, below - 36, "", ui.GOOD)
-	self.race_bad = ui.small(pad.left + PAD, below - 62, "", ui.BAD)
-	refresh_races(self)
-
-	return y - height - ui.GAP
-end
-
--- Game list --------------------------------------------------------------------
-
 local function roster_line(game)
-	local who = {}
+	local people, bots = 0, 0
 	for i = 1, #game.players do
-		who[#who + 1] = ui.race_label(game.players[i].race)
+		if game.players[i].bot then bots = bots + 1 else people = people + 1 end
 	end
-	return string.format("%d/%d   %s", #game.players, game.max_players,
-		table.concat(who, ", "))
+	local who = ui.plural(people, "player")
+	if bots > 0 then who = who .. " and " .. ui.plural(bots, "bot") end
+	return string.format("%d/%d   %s", #game.players, game.max_players, who)
 end
 
 --- Rebuild the list from the last server response.
@@ -163,13 +77,13 @@ local function render_games(self)
 	local y = -4
 	local games = self.games or {}
 
-	if self.mine then
-		local g = self.mine
+	for m = 1, #(self.mine or {}) do
+		local g = self.mine[m]
 		local h = 186
 		keep(ui.panel(0, y, w, h, ui.CARD))
 		keep(ui.panel_line(0, y, w, h, ui.ACCENT_SOFT))
 
-		keep(ui.caps(PAD, y - 18, "your game"))
+		keep(ui.caps(PAD, y - 18, m == 1 and "your games" or ""))
 		keep(ui.title(PAD, y - 62, g.name))
 		keep(ui.small(PAD, y - 98, roster_line(g), ui.DIM))
 		keep(ui.small(PAD, y - 128, g.status == "lobby"
@@ -200,7 +114,7 @@ local function render_games(self)
 	end
 
 	if #games == 0 then
-		if not self.mine then
+		if #(self.mine or {}) == 0 then
 			keep(ui.body(PAD, y - 40, "No open games. Start one.", ui.DIM))
 		end
 	else
@@ -220,11 +134,7 @@ local function render_games(self)
 		local bw = 170
 		local handle = ui.button(self.druid, w - PAD - bw, y - 22, bw, ui.CONTROL, "JOIN",
 			function()
-				self:set_status("Joining " .. g.name .. "...")
-				backend.game_join(g.id, { race = store.race }, function(res, err)
-					if err then self:set_status("Could not join: " .. err) return end
-					self:refresh()
-				end)
+				monarch.show(hash("setup"), nil, { mode = "join", game = g })
 			end,
 			{ style = "secondary", size = ui.CAPS })
 		keep(handle.fill); keep(handle.border); keep(handle.label)
@@ -252,28 +162,14 @@ local function build(self)
 
 	local footer_top = pad.bottom + ui.CONTROL
 	local card_w = w - pad.left - pad.right
-	local half = (card_w - ui.GAP) * 0.5
-	ui.button(self.druid, pad.left, footer_top, half, ui.CONTROL, "NEW GAME",
-		function()
-			self:set_status("Creating game...")
-			backend.game_create({
-				name = "Game " .. tostring(math.random(1000, 9999)),
-				max_players = 4,
-				race = store.race,
-				-- Short turns by default so the prototype can actually be played
-				-- through; a real game would use the 12 hour default.
-				turn_interval = 60,
-				star_count = 160,
-			}, function(res, err)
-				if err then self:set_status("Could not create: " .. err) return end
-				self:refresh()
-			end)
-		end,
+	-- One action. Creating a game is a flow of its own now (screens/setup), so
+	-- this button opens it rather than firing a request with whatever the lobby
+	-- happened to have selected. REFRESH went with it: the lobby already polls.
+	ui.button(self.druid, pad.left, footer_top, card_w, ui.CONTROL, "NEW GAME",
+		function() monarch.show(hash("setup"), nil, { mode = "create" }) end,
 		{ style = "primary", size = ui.CAPS })
-	ui.button(self.druid, pad.left + half + ui.GAP, footer_top, half, ui.CONTROL,
-		"REFRESH", function() self:refresh() end, { size = ui.CAPS })
 
-	local y = build_races(self, w, top - 132, pad)
+	local y = top - 132
 
 	self.list_width = card_w
 	self.list_height = y - (footer_top + ui.GAP)
@@ -290,7 +186,7 @@ function init(self)
 	self.rows = {}
 	self.row_buttons = {}
 	self.games = {}
-	self.mine = nil
+	self.mine = {}
 	self.since_refresh = 0
 	store.race = store.race or races.DEFAULT
 
@@ -309,7 +205,7 @@ function init(self)
 			self.games = res.games or {}
 			-- Only one game at a time is supported in the UI for now; the most
 			-- recently created is the one offered.
-			self.mine = res.mine and res.mine[#res.mine] or nil
+			self.mine = res.mine or {}
 			self:set_status(string.format("%d open, %d of yours",
 				#self.games, res.mine and #res.mine or 0))
 			render_games(self)
@@ -350,7 +246,7 @@ function update(self, dt)
 			backend.game_list(function(res, err)
 				if not err and res.games then
 					self.games = res.games
-					self.mine = res.mine and res.mine[#res.mine] or nil
+					self.mine = res.mine or {}
 					render_games(self)
 				end
 			end)

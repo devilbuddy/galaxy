@@ -294,6 +294,34 @@ widest source has to win wherever two overlap.
 **Rival captains are visible where you have eyes.** Their rank and heading show;
 their orders do not.
 
+#### Bots
+
+`galaxy/sim/bots.lua` is engine-free like the rest of the simulation, so the
+same code decides a bot's move on Nakama and in `tools/play.lua` under luajit.
+**One implementation on purpose**: an AI that only existed in the harness would
+be the one nobody plays against, and the one that shipped would be the one
+nobody tests.
+
+- **Deterministic.** A bot never touches `math.random`; its stream is
+  `rng.stream(seed, "bot:" .. player .. ":turn:" .. n)`, so replaying a game
+  reproduces the bots exactly and a Nakama restart does not change a decision
+  it had already effectively made.
+- **Decided at resolution, not submitted.** Bots have no storage record and
+  never write orders; `catch_up` asks them for a batch just before
+  `resolve.turn`. The resolver cannot tell them from a human, which is the
+  point.
+- **Always ready.** `everyone_submitted` ignores bots, so a solo game against
+  three of them resolves the instant the human ends their turn. That is most of
+  what having them is for.
+- **They never walk into a border.** The search only travels through ground the
+  bot already holds, because a captain turned back has wasted the trip.
+
+It is a plain function rather than a behaviour tree. The game has one verb, so
+the whole decision is "which system next", and a tree there is ceremony around
+an `if`. When a bot has to weigh expanding against defending against raiding
+against building, that is the moment to reach for one - and to vet it against
+the gopher-lua traps first.
+
 #### Regions are the objective
 
 The map is deliberately far bigger than any one player will touch. With one
@@ -548,6 +576,23 @@ together *are* the visual treatment:
 Textures are premultiplied by Defold at build time, so alpha layers use
 `ONE / ONE_MINUS_SRC_ALPHA` (not `SRC_ALPHA / ...`) and the shader premultiplies
 the vertex colour to match.
+
+### Setting up a game
+
+Creating and joining are their own flow (`main/screens/setup.*`), not part of
+the lobby. The race picker used to sit at the top of the lobby - the largest,
+first thing on screen, and inert until you were actually creating or joining
+something. **A choice belongs where it is being made.**
+
+One screen does both jobs, because they ask the same question: creating picks
+your race and fills the other seats with bots, joining picks your race and shows
+you who is already there. The lobby is now a list of games and one button.
+
+**A player must be able to end a turn with nothing to say.** Submitting is what
+ends a turn and the game resolves once everyone has, so the order bar reads
+`END TURN` when nothing is staged rather than a dead `NO ORDERS`. Without it the
+early-resolution path was unreachable by a human - the client had no way to send
+the empty batch the server was waiting for.
 
 ### Client screens (Monarch) and UI (Druid)
 

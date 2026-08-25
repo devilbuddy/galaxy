@@ -66,6 +66,11 @@ M.orders_turn = nil
 M.sent_signature = nil
 M.sent_turn = nil
 
+-- The turn this player has declared themselves done with, or nil. Submitting is
+-- what ends a turn - the game resolves as soon as everyone has - so this is
+-- what stops the button offering to end a turn that has already been ended.
+M.turn_ended = nil
+
 -- A turn digest that arrived on a background poll rather than on arrival at the
 -- map. Held rather than shown, because a popup must not land on top of a player
 -- who is in the middle of reading the map; the overview offers it instead.
@@ -152,6 +157,7 @@ function M.plan_consumed(turn)
 	if not M.orders_turn or turn < M.orders_turn then return false end
 	M.orders = {}
 	M.orders_turn = nil
+	M.turn_ended = nil
 	M.sent_signature = nil
 	M.sent_turn = nil
 	return true

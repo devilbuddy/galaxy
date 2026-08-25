@@ -139,6 +139,10 @@ function M.new(galaxy, players)
 			id = players[i].id,
 			name = players[i].name,
 			race = races.exists(players[i].race) and players[i].race or races.DEFAULT,
+			-- Carried into the simulation so `bots.all_orders` can find them.
+			-- Nothing else in the resolver reads it: a bot's orders arrive in
+			-- the same shape a human's do and are treated identically.
+			bot = players[i].bot and true or nil,
 			capital = capital,
 			alive = true,
 			next_commander_number = 1,

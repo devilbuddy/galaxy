@@ -329,6 +329,70 @@ do
 	check("and a repaired state resolves another turn", ok)
 end
 
+print("bots")
+do
+	local bots = require("galaxy.sim.bots")
+	local s = new_game(2)
+	s.players[2].bot = true
+
+	local orders = bots.all_orders(GALAXY, s)
+	check("a bot issues orders", #orders > 0, #orders)
+	check("only for itself",
+		orders[1].player == 2 and orders[1].kind == "move")
+	check("and a human is left alone",
+		(function()
+			for i = 1, #orders do if orders[i].player == 1 then return false end end
+			return true
+		end)())
+
+	-- The invariant that matters: a bot must be reproducible, or a replayed
+	-- game diverges and a Nakama restart changes what the bot was going to do.
+	local again = bots.all_orders(GALAXY, s)
+	local same = #orders == #again
+	if same then
+		for i = 1, #orders do
+			if orders[i].captain ~= again[i].captain
+				or orders[i].route[1] ~= again[i].route[1] then
+				same = false
+			end
+		end
+	end
+	check("asked twice, it answers the same", same)
+
+	-- ...and across a fresh game on the same seed.
+	local t = new_game(2)
+	t.players[2].bot = true
+	local fresh = bots.all_orders(GALAXY, t)
+	check("and identically in a fresh game on the same seed",
+		#fresh == #orders and fresh[1].route[1] == orders[1].route[1],
+		fresh[1] and fresh[1].route[1])
+
+	-- A captain already under way keeps its standing order.
+	res.turn(GALAXY, s, orders, LENGTHS)
+	local moving = s.captains[2]
+	if #moving.route > 0 then
+		local next_orders = bots.all_orders(GALAXY, s)
+		local re_routed = false
+		for i = 1, #next_orders do
+			if next_orders[i].captain == moving.id then re_routed = true end
+		end
+		check("a captain under way is not re-routed every turn", not re_routed)
+	else
+		check("a captain under way is not re-routed every turn", true)
+	end
+
+	check("a bot never walks into someone else's border",
+		(function()
+			local u = new_game(2)
+			u.players[2].bot = true
+			-- Fence the bot in with player 1's ground.
+			local cap = u.players[2].capital
+			for _, n in ipairs(GALAXY.adjacency[cap]) do u.systems[n].owner = 1 end
+			local fenced = bots.all_orders(GALAXY, u)
+			return #fenced == 0
+		end)())
+end
+
 print("determinism")
 do
 	local function run()

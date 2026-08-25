@@ -16,6 +16,7 @@ local path = require("galaxy.sim.path")
 local races = require("galaxy.sim.races")
 local regions = require("galaxy.sim.regions")
 local systems = require("galaxy.sim.systems")
+local bots = require("galaxy.sim.bots")
 local config = require("galaxy.config")
 
 local seed = tonumber(arg[1]) or 1337
@@ -33,51 +34,14 @@ local lengths = path.lane_lengths(galaxy)
 local race_ids = races.ids()
 local players = {}
 for i = 1, player_count do
-	players[i] = { id = "ai" .. i, name = "AI " .. i,
-		race = race_ids[((i - 1) % #race_ids) + 1] }
+	players[i] = { id = "ai" .. i, name = bots.name(i),
+		race = race_ids[((i - 1) % #race_ids) + 1], bot = true }
 end
 local state = st.new(galaxy, players)
 
---- The nearest system this player does not hold, by lanes from `from`.
---
--- Nearest rather than best, because there is nothing yet to judge "best" by: no
--- production, so every system is worth exactly one system.
-local function nearest_free(player, from)
-	local seen, order, head = { [from] = 0 }, { from }, 1
-	while head <= #order do
-		local id = order[head]; head = head + 1
-		local neighbours = galaxy.adjacency[id]
-		for k = 1, #neighbours do
-			local n = neighbours[k]
-			if not seen[n] then
-				seen[n] = seen[id] + 1
-				-- Somebody else's border is not a destination; the captain
-				-- would only be turned back at it.
-				if state.systems[n].owner == 0 then return n, seen[n] end
-				if state.systems[n].owner == player then order[#order + 1] = n end
-			end
-		end
-	end
-	return nil
-end
-
-local function ai_orders(player)
-	local orders = {}
-	local mine = st.captains_of(state, player)
-	for i = 1, #mine do
-		local captain = mine[i]
-		if st.is_parked(captain) then
-			local target = nearest_free(player, captain.at)
-			if target then
-				orders[#orders + 1] = {
-					player = player, kind = "move",
-					captain = captain.id, route = { target },
-				}
-			end
-		end
-	end
-	return orders
-end
+-- The AI is `galaxy/sim/bots.lua` - the same code the server runs. An AI that
+-- only existed in this harness would be the one nobody plays against, and the
+-- one that ships would be the one nobody tests.
 
 local census = systems.census(galaxy)
 if not quiet then
@@ -93,13 +57,7 @@ local winner, decided_turn = nil, nil
 local events_total = 0
 
 for turn = 1, max_turns do
-	local orders = {}
-	for p = 1, #state.players do
-		if state.players[p].alive then
-			for _, o in ipairs(ai_orders(p)) do orders[#orders + 1] = o end
-		end
-	end
-
+	local orders = bots.all_orders(galaxy, state)
 	local events = res.turn(galaxy, state, orders, lengths)
 	events_total = events_total + #events
 
@@ -128,8 +86,8 @@ local needed = regions.needed(galaxy)
 
 print()
 for i = 1, #state.players do
-	print(string.format("  AI %-2d %-9s regions %2d/%-2d  systems %3d  captain at %4d",
-		i, state.players[i].race, tally[i] or 0, needed,
+	print(string.format("  %-19s %-9s regions %2d/%-2d  systems %3d  captain at %4d",
+		state.players[i].name, state.players[i].race, tally[i] or 0, needed,
 		st.holdings_of(state, i), st.captains_of(state, i)[1].at))
 end
 

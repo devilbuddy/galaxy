@@ -163,6 +163,7 @@ function M.project(galaxy, state, player)
 			name = state.players[i].name,
 			race = state.players[i].race,
 			alive = state.players[i].alive,
+			bot = state.players[i].bot and true or nil,
 			capital = state.players[i].capital,
 		}
 	end

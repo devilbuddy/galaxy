@@ -1,0 +1,213 @@
+--- Setting up a game: choosing who you are, and who you are up against.
+--
+-- One screen for two jobs, because they ask the same question. Creating a game
+-- picks your race and fills the other seats; joining one picks your race and
+-- shows you the seats already taken. Splitting them would have meant two
+-- screens that were mostly the same list.
+--
+-- It exists at all because the race picker used to live at the top of the
+-- lobby, above the games - the largest, first thing on screen, and inert until
+-- you were actually creating or joining something. A choice belongs where it is
+-- being made.
+
+local druid = require("druid.druid")
+local monarch = require("monarch.monarch")
+local store = require("main.store")
+local ui = require("main.ui")
+local backend = require("main.backend")
+local races = require("galaxy.sim.races")
+
+local PAD = 24
+-- Opponent counts a player can pick from. Four is the shape the game is
+-- designed around: enough for politics, few enough to resolve.
+local SEAT_CHOICES = { 1, 2, 3 }
+
+local function screen()
+	return store.screen.width, store.screen.height
+end
+
+--- The race grid. The blurb underneath changes with the selection rather than
+--- each tile carrying its own, which keeps the tiles the same size.
+local function build_races(self, x, y, width)
+	local columns = 2
+	local gap = 12
+	local tile_w = (width - gap) / columns
+	local ids = races.ids()
+	self.race_tiles = {}
+
+	for i = 1, #ids do
+		local id = ids[i]
+		local race = races.by_id(id)
+		local col = (i - 1) % columns
+		local row = math.floor((i - 1) / columns)
+		local tx = x + col * (tile_w + gap)
+		local ty = y - row * (64 + gap)
+		local chosen = store.race == id
+		local tile = ui.panel(tx, ty, tile_w, 64,
+			chosen and ui.ACCENT_SOFT or ui.CARD_ALT)
+		if chosen then ui.panel_line(tx, ty, tile_w, 64, ui.ACCENT) end
+		ui.dot(tx + 18, ty - 24, 16, ui.race_colour(id))
+		ui.body(tx + 46, ty - 32, race.label, chosen and ui.TEXT or ui.DIM)
+		self.race_tiles[#self.race_tiles + 1] = tile
+		self.body_druid:new_button(tile, function()
+			store.race = id
+			self.dirty = true
+		end)
+	end
+
+	local rows = math.ceil(#ids / columns)
+	return y - rows * (64 + gap) - 6
+end
+
+local function build(self)
+	local w, h = screen()
+	local pad = ui.inset()
+	local mode = (self.data and self.data.mode) or "create"
+	local joining = mode == "join"
+
+	ui.shade()
+	self.body_druid = druid.new(self)
+
+	local width = w - pad.left - pad.right
+	local top = h - pad.top
+
+	ui.h1(pad.left + 6, top - 34, joining and "Join game" or "New game")
+	ui.small(pad.left + 6, top - 82,
+		joining and "Choose who you will be" or "Choose who you are, and who you face",
+		ui.DIM, { width = width - 20, anchor_top = true })
+	ui.icon_button(self.body_druid, w - pad.right - 60, top, 60, "icon_close",
+		function() monarch.hide(hash("setup")) end)
+
+	local y = top - 130
+	ui.caps(pad.left + 6, y, "your people")
+	y = build_races(self, pad.left, y - 24, width)
+
+	local race = races.by_id(store.race)
+	ui.small(pad.left + 6, y - 10, race.blurb, ui.DIM,
+		{ width = width - 20, anchor_top = true })
+	y = y - 56
+
+	if joining then
+		local game = self.data and self.data.game
+		if game then
+			ui.caps(pad.left + 6, y, "already here")
+			y = y - 30
+			for i = 1, #(game.players or {}) do
+				local p = game.players[i]
+				ui.body(pad.left + 6, y - 20,
+					p.name .. (p.bot and "  (bot)" or ""), ui.DIM)
+				y = y - 34
+			end
+		end
+	else
+		-- Opponents. Bots are the default because the alternative is waiting for
+		-- three people, and an empty seat is only worth leaving if somebody is
+		-- actually coming.
+		ui.caps(pad.left + 6, y, "opponents")
+		y = y - 30
+		local gap = 12
+		local tile_w = (width - gap * (#SEAT_CHOICES - 1)) / #SEAT_CHOICES
+		for i = 1, #SEAT_CHOICES do
+			local n = SEAT_CHOICES[i]
+			local chosen = self.bots == n
+			local tx = pad.left + (i - 1) * (tile_w + gap)
+			local tile = ui.panel(tx, y, tile_w, 72,
+				chosen and ui.ACCENT_SOFT or ui.CARD_ALT)
+			if chosen then ui.panel_line(tx, y, tile_w, 72, ui.ACCENT) end
+			ui.value(tx + tile_w * 0.5, y - 26, tostring(n), ui.H2,
+				chosen and ui.TEXT or ui.DIM, { pivot = gui.PIVOT_CENTER })
+			ui.small(tx + tile_w * 0.5, y - 52, n == 1 and "bot" or "bots",
+				chosen and ui.ACCENT or ui.FAINT, { pivot = gui.PIVOT_CENTER })
+			self.body_druid:new_button(tile, function()
+				self.bots = n
+				self.dirty = true
+			end)
+		end
+		y = y - 96
+		ui.small(pad.left + 6, y, "Bots take their turn the moment you take yours.",
+			ui.FAINT, { width = width - 20, anchor_top = true })
+	end
+
+	self.status = ui.small(pad.left + 6, pad.bottom + ui.CONTROL + 44, "", ui.WARN,
+		{ width = width - 20, anchor_top = true })
+
+	local label = joining and "JOIN" or "CREATE"
+	ui.button(self.body_druid, pad.left, pad.bottom + ui.CONTROL, width, ui.CONTROL,
+		label, function() self:submit() end,
+		{ style = "primary", size = ui.CAPS })
+end
+
+local function relayout(self)
+	ui.region(self.body_druid, self.nodes)
+	self.body_druid = nil
+	self.nodes = {}
+	local previous = ui.collect(self.nodes)
+	build(self)
+	ui.collect(previous)
+	self.dirty = false
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	ui.install_druid_picking()
+	self.nodes = {}
+	self.bots = 3
+	self.data = monarch.data(hash("setup"))
+	store.race = store.race or races.DEFAULT
+
+	self.submit = function()
+		local joining = (self.data and self.data.mode) == "join"
+		gui.set_text(self.status, joining and "Joining..." or "Creating...")
+		gui.set_color(self.status, ui.DIM)
+		if joining then
+			backend.game_join(self.data.game.id, { race = store.race },
+				function(_, err)
+					if err then
+						gui.set_text(self.status, "Could not join: " .. tostring(err))
+						gui.set_color(self.status, ui.BAD)
+						return
+					end
+					monarch.hide(hash("setup"))
+				end)
+		else
+			backend.game_create({
+				name = "Game " .. tostring(math.random(1000, 9999)),
+				max_players = self.bots + 1,
+				bots = self.bots,
+				race = store.race,
+				-- Short turns while the game is a prototype; a real one uses
+				-- the twelve-hour default.
+				turn_interval = 60,
+				star_count = 160,
+			}, function(_, err)
+				if err then
+					gui.set_text(self.status, "Could not create: " .. tostring(err))
+					gui.set_color(self.status, ui.BAD)
+					return
+				end
+				monarch.hide(hash("setup"))
+			end)
+		end
+	end
+
+	relayout(self)
+end
+
+function final(self)
+	if self.body_druid then self.body_druid:final() end
+end
+
+function update(self, dt)
+	if self.dirty then relayout(self) end
+	if self.body_druid then self.body_druid:update(dt) end
+end
+
+function on_input(self, action_id, action)
+	return ui.modal_input(self.body_druid, action_id, action)
+end
+
+function on_message(self, message_id, message, sender)
+	if self.body_druid then
+		self.body_druid:on_message(message_id, message, sender)
+	end
+end

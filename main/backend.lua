@@ -138,6 +138,8 @@ function M.game_list(done)
 	M.rpc("game.list", {}, done)
 end
 
+--- Create a game. `options.bots` fills that many seats with bots, which is
+--- what makes a game playable without finding three other people.
 function M.game_create(options, done)
 	M.rpc("game.create", options or {}, done)
 end

@@ -24,6 +24,7 @@ local resolve = require("galaxy.sim.resolve")
 local modifiers = require("galaxy.sim.modifiers")
 local view = require("galaxy.sim.view")
 local races = require("galaxy.sim.races")
+local bots = require("galaxy.sim.bots")
 local rng = require("galaxy.rng")
 
 local M = {}
@@ -128,7 +129,11 @@ local function public_game(game)
 			for i = 1, #game.players do
 				-- Race is public from the lobby onwards: knowing what you are
 				-- about to be up against is part of choosing your own.
-				out[i] = { name = game.players[i].name, race = game.players[i].race }
+				out[i] = {
+					name = game.players[i].name,
+					race = game.players[i].race,
+					bot = game.players[i].bot and true or nil,
+				}
 			end
 			return out
 		end)(),
@@ -150,7 +155,10 @@ local function everyone_submitted(game, turn)
 	local waiting = 0
 	for i = 1, #game.players do
 		local player = game.players[i]
-		if player.alive ~= false then
+		-- A bot decides at resolution time and never submits, so it is always
+		-- ready. Waiting on one would mean a solo game against bots never
+		-- resolved early, which is most of the value of having them.
+		if player.alive ~= false and not player.bot then
 			local submitted = read_one(ORDERS, game.id .. ":" .. turn, player.id)
 			if not submitted then waiting = waiting + 1 end
 		end
@@ -202,6 +210,12 @@ local function catch_up(game, game_version)
 				end
 			end
 		end
+
+		-- Bots decide here rather than submitting, from the state as it stands
+		-- at the moment of resolution - the same information a human had when
+		-- they submitted, since nothing has moved since the last turn ended.
+		local bot_orders = bots.all_orders(entry.galaxy, state)
+		for k = 1, #bot_orders do orders[#orders + 1] = bot_orders[k] end
 
 		local events = resolve.turn(entry.galaxy, state, orders, entry.lengths)
 		write_one(EVENTS, game.id .. ":" .. turn, nil, { turn = turn, events = events })
@@ -295,6 +309,32 @@ local function rpc_create(context, payload)
 		created_at = os.time(),
 	}
 
+	-- Bots fill seats at creation. They take a race and a name like anyone else
+	-- and the simulation cannot tell them apart; the only difference is that
+	-- their orders are decided at resolution instead of submitted.
+	local wanted_bots = math.floor(tonumber(input.bots) or 0)
+	if wanted_bots < 0 then wanted_bots = 0 end
+	if wanted_bots > max_players - 1 then wanted_bots = max_players - 1 end
+	-- Bots take races nobody has claimed, so a four-player game is four
+	-- different peoples rather than two Terran Concords staring at each other.
+	local race_ids = races.ids()
+	local taken = {}
+	for i = 1, #game.players do taken[game.players[i].race] = true end
+	local free = {}
+	for i = 1, #race_ids do
+		if not taken[race_ids[i]] then free[#free + 1] = race_ids[i] end
+	end
+	for b = 1, wanted_bots do
+		game.players[#game.players + 1] = {
+			-- A stable pseudo-id: bots never authenticate, but the orders
+			-- collection is keyed by player id and the roster is compared by it.
+			id = "bot:" .. game.id .. ":" .. b,
+			name = bots.name(b),
+			race = free[((b - 1) % math.max(1, #free)) + 1] or races.DEFAULT,
+			bot = true,
+		}
+	end
+
 	write_one(GAMES, game.id, nil, game)
 	nk.logger_info(string.format("game %s created by %s (seed %d, %d players max)",
 		game.id, user_id, seed, max_players))
@@ -343,6 +383,15 @@ local function rpc_join(context, payload)
 		return nk.json_encode({ game = public_game(game), already = true })
 	end
 	if #game.players >= game.max_players then fail("that game is full") end
+	-- A human joining takes the newest bot's seat rather than being refused,
+	-- so a game left open for friends does not have to be recreated when one
+	-- turns up.
+	for i = #game.players, 1, -1 do
+		if game.players[i].bot then
+			table.remove(game.players, i)
+			break
+		end
+	end
 
 	game.players[#game.players + 1] = {
 		id = user_id,
@@ -362,6 +411,8 @@ local function rpc_start(context, payload)
 	if not game then fail("no such game") end
 	if not player_index(game, user_id) then fail("you are not in that game") end
 	if game.status ~= "lobby" then fail("that game has already started") end
+	-- Bots count towards the minimum: a game against three of them is a game,
+	-- and it is the only way to play one without finding three other people.
 	if #game.players < MIN_PLAYERS then fail("need at least " .. MIN_PLAYERS .. " players") end
 
 	local entry = galaxy_cache.get(game.seed)
