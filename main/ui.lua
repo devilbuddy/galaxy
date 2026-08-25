@@ -231,6 +231,28 @@ function M.dot(x, y, size, colour)
 	return M.sprite(x, y, size, size, "pill", colour)
 end
 
+--- A rounded bar of any thickness: a progress track, a meter, a rule with caps.
+--
+-- **Composed, not 9-sliced**, because neither slice in this kit survives a node
+-- much thinner than the texture it is cut from:
+--
+--   * `panel`'s margins are clamped to half the node (`set_slice`), and the
+--     clamped corner lands partway up the rounded curve - so the body draws
+--     shorter than the node and tapers away to nothing at each end;
+--   * `pill`'s caps are drawn at their own 31px width whatever the node's
+--     height, so a twelve-unit track tapers over thirty-one units at each end.
+--
+-- Both come out as a **lens** - pointed at both ends, fattest in the middle -
+-- which is exactly what the playback's progress bar looked like until it was
+-- drawn this way instead. A circle at each end and a solid rectangle between
+-- them is exact at every size, and costs two extra nodes.
+function M.bar(x, y, w, h, colour)
+	if w <= h then return M.dot(x, y, h, colour) end
+	M.dot(x, y, h, colour)
+	M.dot(x + w - h, y, h, colour)
+	return M.sprite(x + h * 0.5, y, w - h, h, "solid", colour)
+end
+
 --- The outline that pairs with panel().
 function M.panel_line(x, y, w, h, colour)
 	return set_slice(M.sprite(x, y, w, h, "panel_line", colour), w, h, M.RADIUS + 2)

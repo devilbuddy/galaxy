@@ -1122,6 +1122,14 @@ corner radius or the type scale happens once rather than in four scripts.
   those transparent corners across the middle and the node came out as a cross.
   Anything as tall as it is wide is a dot (`ui.dot`) and a plain scale is already
   right.
+- **Neither slice survives a node much thinner than its own texture, so a thin
+  bar is composed instead** (`ui.bar`). `panel`'s margins clamp to half the node
+  and the clamped corner lands partway up the rounded curve, so the body draws
+  shorter than the node and tapers away; `pill`'s caps are drawn at their own
+  31px width whatever the node's height, so a twelve-unit track tapers over
+  thirty-one units at each end. Both produce a **lens** — pointed at both ends,
+  fattest in the middle — which is what the playback's progress bar was until it
+  was drawn as two `ui.dot` caps with a `solid` rectangle between them.
 - **Type sizes are design pixels.** Both faces are distance fields baked at one
   size, so a size is just a scale factor and any size stays crisp.
 

@@ -903,24 +903,39 @@ local function build_playback_bar(self, w, h, pad)
 	-- A scrubbable line rather than a progress bar: the point of a replay is
 	-- being able to go back to the turn something happened on, and forty turns
 	-- across a phone is a comfortable target.
-	local track_y = top - 110
-	local track = ui.panel(inner, track_y, width - 44, 8, ui.CARD_ALT)
+	-- `ui.bar`, not `ui.panel` or `ui.pill`: at twelve units tall both of those
+	-- 9-slices draw a lens rather than a bar. See the note on M.bar.
+	local track_h = 12
+	local track_w = width - 44
+	local track_y = top - 106
+	-- Against the card rather than on it: CARD_ALT on CARD is a few percent and
+	-- at twelve units reads as nothing at all. A groove is darker than what it
+	-- is cut into.
+	ui.bar(inner, track_y, track_w, track_h, ui.BG)
+
 	local fraction = (#p.steps > 1) and ((p.index - 1) / (#p.steps - 1)) or 1
-	ui.panel(inner, track_y, math.max(8, (width - 44) * fraction), 8, ui.ACCENT)
-	-- Every turn that had a fight gets a tick, so a player can aim at one.
+	local filled = math.max(track_h, track_w * fraction)
+	ui.bar(inner, track_y, filled, track_h, ui.ACCENT)
+	-- Where the playback has got to, and the thing that says the track can be
+	-- dragged at all.
+	ui.dot(inner + filled - track_h * 0.5, track_y - 2, track_h + 4, ui.ACCENT)
+
+	-- Every turn that had a fight gets a tick above the track, so a player can
+	-- aim at one rather than scrubbing until they find it.
 	for i = 1, #p.steps do
 		if #p.steps[i].battles > 0 then
 			local at = (#p.steps > 1) and ((i - 1) / (#p.steps - 1)) or 0
-			ui.dot(inner + (width - 44) * at - 3, track_y + 6, 7, ui.WARN)
+			ui.dot(inner + track_w * at - 3, track_y + 12, 7, ui.WARN)
 		end
 	end
-	-- A hit area taller than the line it scrubs: eight units is four dp.
-	local grab = ui.panel(inner, track_y + 20, width - 44, 48, ui.CLEAR)
+	-- A hit area far taller than the line it scrubs: twelve units is seven dp,
+	-- and the tap target floor is forty-eight.
+	local grab = ui.panel(inner - 10, track_y + 22, track_w + 20, 56, ui.CLEAR)
 	self.pb_druid:new_button(grab, function(_, _, event)
 		local x = event and event.x
 		if not x then return end
 		local a = ui.gui_action({ x = x, y = 0 })
-		local at = (a.x - inner) / math.max(1, width - 44)
+		local at = (a.x - inner) / math.max(1, track_w)
 		playback_seek(self, math.floor(at * (#p.steps - 1) + 1.5))
 	end)
 
