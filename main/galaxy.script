@@ -48,7 +48,17 @@ local function knowledge(self, id)
 	if not view then return ALPHA_LIVE, 0 end
 	local entry = view.systems[tostring(id)]
 	if not entry then return ALPHA_UNKNOWN, 0 end
-	return entry.live and ALPHA_LIVE or ALPHA_REMEMBERED, entry.owner or 0
+	-- While a digest is being played back the map shows the turn being
+	-- replayed, not today. This is the only place ownership colour is decided,
+	-- so the override here moves the wash, the borders and the star tints
+	-- together - which is the whole point of watching it rather than reading it.
+	--
+	-- Fog is *not* rewound with it. What a player could see forty turns ago is
+	-- not in the digest, and dimming half the map to guess at it would hide the
+	-- very movement the playback exists to show.
+	local past = store.playback_owners
+	local owner = past and (past[id] or 0) or (entry.owner or 0)
+	return entry.live and ALPHA_LIVE or ALPHA_REMEMBERED, owner
 end
 
 local function player_colour(index)
@@ -205,6 +215,18 @@ end
 
 --- Upload a galaxy to the mesh layers and hand it to the rest of the game.
 -- `source` is "server" or "local", purely so the HUD can say which.
+--- Recolour just the layers that encode who owns what.
+--
+-- A playback step changes ownership and nothing else, so the nebula, the dust,
+-- the lanes and the glow are all still correct - and rebuilding six layers
+-- forty times to change two would make the transport controls feel like a
+-- slideshow. Neither of these touches `store.revision` either: a repaint is not
+-- a new galaxy and must not clear a selection or re-frame the camera.
+local function repaint(self, g)
+	build_wash(self, g, g.world_size)
+	build_owners(self, g, g.world_size)
+end
+
 --- Build every mesh for a galaxy and hand the camera its extent.
 --
 -- Called for a new galaxy *and* whenever a turn resolves, because the fog and
@@ -315,7 +337,14 @@ local function load_game(self, game_id, silent)
 					-- overview offers it, and opening it is what marks it read.
 					store.pending_report = digest
 				else
-					monarch.show(hash("report"), nil, digest)
+					-- Arriving at the map, so there is nobody mid-read to
+					-- interrupt: the digest is offered straight away. *How* it
+					-- is offered - played back on the map or listed - is the
+					-- HUD's decision and not this script's, so it goes through
+					-- the same handoff as a held one and is marked read here
+					-- rather than on a tap.
+					store.pending_report = digest
+					store.report_now = true
 					store.seen_turn = turn
 					seen.set(game_id, turn)
 				end
@@ -416,9 +445,19 @@ local BACKDROP_GONE_ZOOM = 2.2   -- at or above this, it has faded out entirely
 local WASH_MIN_STRENGTH = 0.45
 
 function update(self, dt)
+	-- A playback step has changed what the map should be showing.
+	if self.repainted ~= store.playback_revision then
+		self.repainted = store.playback_revision
+		if store.galaxy then repaint(self, store.galaxy) end
+	end
+
 	-- While a game is open, keep asking: a turn may resolve at any moment, and
 	-- the request is also what drives the server's lazy turn resolution.
-	if self.game and store.game_id then
+	--
+	-- Not during a playback: a turn landing mid-replay would rebuild the meshes
+	-- underneath it and jump the map back to today, and the digest the player is
+	-- watching would be superseded by one they have not seen.
+	if self.game and store.game_id and not store.playback_active then
 		-- Advance the sampled server clock so the countdown ticks smoothly
 		-- between polls rather than jumping every ten seconds.
 		store.now_estimate = store.now_estimate + dt

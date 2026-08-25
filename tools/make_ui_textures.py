@@ -329,6 +329,23 @@ def icon_frame():
     return img
 
 
+def icon_play():
+    """Solid triangle, optically centred - a play glyph balanced on its
+    bounding box reads as sitting too far left, because the mass is."""
+    img, d = canvas(ICON)
+    d.polygon([(26 * SS, 16 * SS), (58 * SS, 36 * SS), (26 * SS, 56 * SS)],
+              fill=white())
+    return img
+
+
+def icon_pause():
+    img, d = canvas(ICON)
+    for x in (22, 40):
+        d.rounded_rectangle([x * SS, 16 * SS, (x + 10) * SS, 56 * SS],
+                            radius=3 * SS, fill=white())
+    return img
+
+
 ICONS = {
     "icon_metal": icon_metal,
     "icon_fuel": icon_fuel,
@@ -355,6 +372,8 @@ ICONS = {
     "icon_plus": icon_plus,
     "icon_minus": icon_minus,
     "icon_frame": icon_frame,
+    "icon_play": icon_play,
+    "icon_pause": icon_pause,
 }
 
 

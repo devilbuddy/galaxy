@@ -86,6 +86,26 @@ M.leave_requested = nil
 -- who is in the middle of reading the map; the overview offers it instead.
 M.pending_report = nil
 
+-- Playback: the digest being watched rather than read (main/playback.lua).
+--
+-- `playback_owners` is who held what at the turn currently being replayed,
+-- keyed by system id. When it is set the map draws *that* instead of today -
+-- `knowledge()` in main/galaxy.script is the single place ownership colour is
+-- decided, so overriding it there recolours the wash, the borders and the
+-- stars together. `playback_revision` is bumped whenever the step changes, and
+-- is what tells the map to repaint; nil owners means the playback is over and
+-- the live view is correct again.
+-- Set alongside `pending_report` when the digest should be opened immediately
+-- rather than offered on the turn card - which is the case on arrival at the
+-- map, where there is nobody mid-read to interrupt. Whether it opens as a
+-- playback or as a list is the HUD's decision, so both routes hand over the
+-- same way.
+M.report_now = false
+
+M.playback_owners = nil
+M.playback_revision = 0
+M.playback_active = false
+
 -- Currently selected captain id, or nil. A captain and a system can be selected
 -- at once: the system is what the card describes, the captain is what an order
 -- will move.

@@ -424,6 +424,13 @@ function on_message(self, message_id, message)
 		zoom_fit(self)
 		return
 	end
+	if message_id == hash("zoom_level") then
+		-- An absolute level, for the one caller that has a reason to pick one:
+		-- a replay has to frame what it is showing, and the fit zoom - where a
+		-- captain is four pixels wide - is where the map always starts.
+		set_zoom_target(self, message.zoom)
+		return
+	end
 	if message_id == hash("map_ready") then
 		local w = math.max(1, message.content_width)
 		local h = math.max(1, message.content_height)

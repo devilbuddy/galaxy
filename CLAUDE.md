@@ -154,6 +154,7 @@ luajit tools/verify_determinism.lua   # a seed reproduces exactly, across proces
 luajit tools/test_sim.lua             # turn resolution, combat, fog of war
 luajit tools/test_wire.lua            # client/server wire format round-trips
 luajit tools/test_gestures.lua        # pan / pinch / tap recognition
+luajit tools/test_playback.lua        # the past, rebuilt from the event log
 luajit tools/test_plan.lua            # staged orders survive a send; a turn consumes them
 luajit tools/lint_shared.lua          # no idioms gopher-lua miscompiles
 ```
@@ -914,6 +915,67 @@ and it is capped at the forty turns `MAX_DIGEST_TURNS` will actually send,
 because a game left for a month sits on turn 166 and offering "166 new turns"
 promises a read the player cannot have.
 
+### Watching the turn, not reading it
+
+**The digest plays back on the map.** A list of forty turns is a changelog; what
+a player wants after two days away is *where the war moved*, and that is a shape
+on a map. Opening a digest replays it: markers walk the lanes they walked,
+territory recolours as it changed hands, and a transport bar sits where the
+order bar does — play, speed, a scrub track with a tick on every turn that had a
+fight, and LOG to read it as a list instead.
+
+**The past is rebuilt, not stored.** The client has never been told who held
+what forty turns ago and the server does not keep it — state is one current
+record, deliberately. It does not have to: **the event log is reversible.**
+`claimed` says a system was unowned before it and `battle` names who it was
+taken from, so winding today's ownership backwards through the digest gives the
+ownership at any earlier turn *exactly*. `main/playback.lua` does that and
+nothing else; `tools/test_playback.lua` plays a real game, snapshots who owned
+what at the start of every turn, and checks the reconstruction against those
+snapshots system by system.
+
+Three things this needed from elsewhere, and would silently be wrong without:
+
+- **`captain_moved` carries the path actually walked.** A captain crossing its
+  own territory changed nothing and so emitted nothing at all, which meant the
+  one thing worth watching was the one thing the log did not contain.
+- **`contact_moved` is what a rival's march looked like from here** — only the
+  part inside your detection range, so a fleet crosses your border, is watched
+  for a lane or two, and is lost again in the dark.
+- **`knowledge()` in `main/galaxy.script` is the single place ownership colour
+  is decided**, so overriding it with `store.playback_owners` moves the wash,
+  the borders and the star tints together. Only those two layers are rebuilt per
+  step (`repaint`); the nebula, dust, lanes and glow do not depend on ownership,
+  and rebuilding six layers to change two would make the transport a slideshow.
+
+**Fog is not rewound with it.** What a player could see forty turns ago is not
+in the digest, and dimming half the map to guess at it would hide the very
+movement the playback exists to show.
+
+**A replay is the one place a marker may animate between systems.** The live map
+must not: a fleet gliding along a lane would be claiming a position the
+simulation says it never had, and where it can be intercepted is decided at the
+turn boundary. In a replay the turn is over, the captain really did cross those
+lanes in that order, and the only thing invented is how the seconds were spread
+across them.
+
+**It frames what it is showing.** The map opens at the fit zoom where a marker is
+four pixels wide, so a playback zooms to `PLAYBACK_ZOOM` and eases the camera to
+the average of everywhere something happened that turn — then returns to the
+whole map when it ends, because leaving the player zoomed into the last turn's
+corner ends every digest somewhere they did not choose to be.
+
+**A digest with nothing in it goes back to being a list.** Forty turns of
+"nothing moved" is the changelog this replaced, only slower.
+
+**The transport owns its own Druid region**, so a relayout — a window change, or
+the safe-area insets arriving a couple of hundred milliseconds in — does not
+rebuild it and it would otherwise stay positioned against the old insets.
+`build_chrome` clears `pb_layout` for that reason. Its control row also leaves
+the same clearance below it that the order bar's does; six units against the
+bar's sixteen reads as the replay being jammed against the bottom of the screen
+while nothing else is.
+
 **A turn that lands while the map is open is held, not shown.** A popup must not
 drop on top of somebody mid-read, but the digest must not be lost either — and
 advancing `seen_turn` on a background poll is exactly how it was being lost: the
@@ -1376,12 +1438,15 @@ will bite whoever touches them.
   gets there, because `victory_region_fraction` asks any one of six players for
   half the galaxy. Territory does change hands throughout, so this is a
   threshold that should probably scale with the player count - not a stall.
-- **The turn digest is a list, not a playback.** The log now carries everything a
-  replay needs - `captain_moved` records the exact path walked each turn, and
-  `battle` carries who defended and with what - but nothing animates it. The
-  movement events are on the wire and deliberately *not* rendered in the list,
-  because one row per captain per turn across a forty-turn digest would bury
-  everything that actually happened.
+- **A battle is one comparison, so there is nothing to play back inside it.**
+  The turn digest replays on the map, but a battle resolves instantly and has no
+  internal timeline - so a battle-summary screen (fleets closing, reinforcements,
+  a retreat, a scrubber) has nothing to animate until armies have a shape.
+  `battle` already carries who defended and with what, which is the part that
+  would otherwise have to be retrofitted.
+- **The playback shows movement but not the fighting.** A battle recolours the
+  system it happened at and gets a tick on the scrub track; it does not get a
+  moment of its own, which is the turn a player would most want to stop on.
 - **Existing games from before the rebuild are dead.** Their stored state has no
   capitals or captains, so `holds_capital` is false for everyone and they end on
   the next resolution. There is no migration and there should not be one.

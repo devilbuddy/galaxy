@@ -28,6 +28,7 @@ local monarch = require("monarch.monarch")
 local druid = require("druid.druid")
 local config = require("galaxy.config")
 local sim_systems = require("galaxy.sim.systems")
+local playback = require("main.playback")
 
 local STAR_LABEL_POOL = 70
 local REGION_LABEL_POOL = 12
@@ -100,6 +101,24 @@ local STATUS_ROW_H = 30
 local SHEET_MIN = 200
 local SHEET_MAX = 640
 
+-- Playback. The transport sits where the order bar does, because it replaces
+-- it: while a digest is playing there is nothing to order.
+-- Tall enough for what it holds: a turn label, a caption that can wrap to two
+-- lines, the scrub track, and a row of full-size controls. The first pass was
+-- 150 and the buttons hung off the bottom of the screen - a card sized by
+-- guesswork rather than by adding up what is in it.
+local PLAYBACK_H = 236
+-- Seconds a turn is held at 1x, before playback.duration weights it by what
+-- happened. Slow enough to follow a marker across a lane, brisk enough that
+-- forty turns is under a minute at 1x and a few seconds at 4x.
+local PLAYBACK_BASE = 0.9
+local PLAYBACK_SPEEDS = { 1, 2, 4 }
+-- Close enough that a captain crossing a lane is a thing you can watch. The map
+-- opens at the fit zoom, where the whole galaxy is on screen and a marker is
+-- four pixels wide - which is fine for reading borders and useless for
+-- following a march.
+local PLAYBACK_ZOOM = 1.5
+
 local STAR_COLOUR = ui.rgb(0xC2CCDE)
 local SELECTED_COLOUR = ui.rgb(0xFFE79E)
 
@@ -142,8 +161,145 @@ local function publish_zones(self)
 	if self.bar_zone then zones[#zones + 1] = self.bar_zone end
 	if self.captain_zone then zones[#zones + 1] = self.captain_zone end
 	if self.zoom_zone then zones[#zones + 1] = self.zoom_zone end
+	if self.pb_zone then zones[#zones + 1] = self.pb_zone end
 	if self.sheet_zone then zones[#zones + 1] = self.sheet_zone end
 	store.hud_zones = zones
+end
+
+-- Playback -----------------------------------------------------------------------
+
+--- What the turn being replayed should be captioned with.
+--
+-- One line, chosen by what a player would lead with rather than by event order:
+-- a region changing hands outranks a system, which outranks walking into empty
+-- space. A quiet turn says so - that the front has stalled is information, and
+-- skipping it silently would make the timeline lie about how long nothing
+-- happened.
+local function step_caption(step, you, name_of, place_of)
+	local best, rank = nil, -1
+	local function offer(r, text) if r > rank then best, rank = text, r end end
+	local events = step.events or {}
+	for i = 1, #events do
+		local e = events[i]
+		if e.kind == "victory" then
+			offer(6, e.player == you and "You won" or (name_of(e.player) .. " won"))
+		elseif e.kind == "eliminated" then
+			offer(5, name_of(e.player) .. " lost their capital")
+		elseif e.kind == "region_control" then
+			offer(4, (e.player == you and "You took " or
+				((e.player ~= 0 and name_of(e.player) or "Nobody") .. " holds "))
+				.. (e.name or "a region"))
+		elseif e.kind == "captain_broken" then
+			offer(3, (e.name or "A captain") .. " was broken at " .. place_of(e.lost))
+		elseif e.kind == "battle" then
+			offer(2, (e.player == you and (e.name or "You") or name_of(e.player))
+				.. " took " .. place_of(e.at))
+		elseif e.kind == "claimed" then
+			offer(1, (e.player == you and "You claimed " or (name_of(e.player)
+				.. " claimed ")) .. place_of(e.at))
+		elseif e.kind == "contact_moved" then
+			offer(0, (e.rank or "A rival") .. " was sighted near " .. place_of(e.at))
+		end
+	end
+	return best or "Nothing moved"
+end
+
+--- Point the camera at whatever this turn was about.
+--
+-- The average of everywhere something happened, which for the usual turn - one
+-- captain, one lane - is that lane. A turn with fighting at both ends of the
+-- map pulls to the middle and shows neither well; that is the honest answer at
+-- one camera, and the scrub track is how a player goes back and looks properly.
+local function playback_look(self, step)
+	local g = store.galaxy
+	if not g then return end
+	local sx, sy, n = 0, 0, 0
+	local function add(id)
+		local star = id and g.stars[id]
+		if star then sx, sy, n = sx + star.x, sy + star.y, n + 1 end
+	end
+	for i = 1, #step.moves do
+		add(step.moves[i].from)
+		add(step.moves[i].path[#step.moves[i].path])
+	end
+	for i = 1, #step.changes do add(step.changes[i].at) end
+	if n == 0 then return end
+	msg.post("camera#camera_script", "focus", { x = sx / n, y = sy / n })
+end
+
+local function playback_publish(self)
+	local p = self.pb
+	local step = p and p.steps[p.index]
+	store.playback_owners = step and step.owners or (p and p.final) or nil
+	store.playback_revision = store.playback_revision + 1
+	if step then playback_look(self, step) end
+end
+
+local function playback_stop(self)
+	if not self.pb then return end
+	self.pb = nil
+	store.playback_active = false
+	-- Back to today. The live view has been correct the whole time; only the
+	-- two ownership layers were being drawn from the past.
+	store.playback_owners = nil
+	store.playback_revision = store.playback_revision + 1
+	-- And back to the whole map, which is where the player was before the
+	-- replay took the camera. Leaving them zoomed into the last turn's corner
+	-- would mean every digest ends somewhere they did not choose to be.
+	msg.post("camera#camera_script", "zoom_fit")
+	ui.region(self.pb_druid, self.pb_nodes)
+	self.pb_druid, self.pb_nodes = nil, {}
+	self.pb_zone = nil
+	self.captain_key = nil
+	self.label_dirty = true
+	publish_zones(self)
+end
+
+--- Begin watching a digest. Returns false if there is nothing to watch.
+local function playback_start(self, digest)
+	local view = store.game_view
+	if not view then return false end
+	local steps, final = playback.build(digest, view.systems)
+	if #steps == 0 then return false end
+	-- Forty turns of "nothing moved" is the list this replaces, only slower.
+	-- A playback has to have something in it to be worth watching, so a digest
+	-- where nothing crossed a lane or changed hands goes back to being read.
+	local worth_watching = false
+	for i = 1, #steps do
+		if not steps[i].quiet then worth_watching = true break end
+	end
+	if not worth_watching then return false end
+
+	-- Playback is a mode, so everything that belongs to *now* stands down: the
+	-- sheet describes a system as it is today, and the order bar offers moves
+	-- for a turn that has not happened yet.
+	store.selected = nil
+	store.aiming = nil
+	self.sheet_dirty = true
+	self.pb = {
+		steps = steps, final = final, index = 1, elapsed = 0,
+		playing = true, speed = 1, you = digest.you or (view and view.you) or 0,
+		-- Kept so the transport can hand it to the list. A replay is better at
+		-- "where did the war move"; the log is better at "what exactly did that
+		-- battle cost", and there is no reason to make the player choose once.
+		digest = digest,
+	}
+	store.playback_active = true
+	msg.post("camera#camera_script", "zoom_level", { zoom = PLAYBACK_ZOOM })
+	playback_publish(self)
+	self.captain_key = nil
+	self.label_dirty = true
+	self.pb_layout = nil
+	return true
+end
+
+local function playback_seek(self, index)
+	local p = self.pb
+	if not p then return end
+	p.index = math.max(1, math.min(#p.steps, index))
+	p.elapsed = 0
+	playback_publish(self)
+	self.label_dirty = true
 end
 
 --- The always-visible numbers: what the empire has, and when the turn lands.
@@ -194,7 +350,15 @@ local function build_overview(self, w, h, pad)
 		-- for the same window so nothing is lost if the player never taps.
 		store.seen_turn = digest.turn or store.seen_turn
 		seen.set(store.game_id, store.seen_turn)
-		monarch.show(hash("report"), nil, digest)
+		-- Watched, not read. A list of forty turns is a changelog; what a player
+		-- wants after two days away is where the war moved, and that is a shape
+		-- on a map. The list is still the fallback for a digest with nothing to
+		-- animate - and for a first turn, where there is no movement yet.
+		self.pending_digest = digest
+		if not playback_start(self, digest) then
+			self.pending_digest = nil
+			monarch.show(hash("report"), nil, digest)
+		end
 	end)
 	self.report_button:set_enabled(false)
 
@@ -330,7 +494,9 @@ local function build_captains(self, w, h, pad)
 	self.captain_nodes = {}
 
 	local view = store.game_view
-	local fleets = (view and view.captains) or {}
+	-- Nobody is in the field during a replay: the strip is today's roster, and
+	-- the markers on the map are the ones the log recorded.
+	local fleets = (not self.pb and view and view.captains) or {}
 	self.captain_zone = nil
 	self.captain_w, self.captain_h = w, h
 	if #fleets == 0 then
@@ -532,6 +698,9 @@ local function build_sheet(self, w, pad)
 	-- one moment it must not be in the way; the order bar carries the captain
 	-- and the origin instead.
 	if store.aiming then return 0 end
+	-- And a replay has the bottom of the screen, and describes a past the sheet
+	-- would be reporting today's numbers over.
+	if self.pb then return 0 end
 
 	self.sheet_druid = druid.new(self)
 
@@ -687,6 +856,155 @@ local function build_sheet(self, w, pad)
 	return height
 end
 
+--- The transport: play, speed, scrub, and the way out.
+--
+-- Its own Druid instance because it is a region that gets rebuilt - the caption
+-- and the progress change every step, and per-component bookkeeping is exactly
+-- what leaves stale components pointing at deleted nodes (see main/ui.lua).
+local function build_playback_bar(self, w, h, pad)
+	ui.region(self.pb_druid, self.pb_nodes)
+	self.pb_druid, self.pb_nodes, self.pb_zone = nil, {}, nil
+	local p = self.pb
+	if not p then return end
+
+	local previous = ui.collect(self.pb_nodes)
+	self.pb_druid = druid.new(self)
+
+	local width = w - pad.left - pad.right
+	local top = pad.bottom + PLAYBACK_H
+	-- Opaque, and built after the order bar, so it covers it rather than
+	-- needing the bar to be taken apart and put back.
+	ui.panel(pad.left, top, width, PLAYBACK_H, ui.CARD)
+	ui.panel_line(pad.left, top, width, PLAYBACK_H, ui.BORDER)
+
+	local step = p.steps[p.index]
+	local first, last = p.steps[1].turn, p.steps[#p.steps].turn
+	local inner = pad.left + 22
+
+	ui.caps(inner, top - 24, "turn " .. tostring(step.turn))
+	ui.small(w - pad.right - 22, top - 24,
+		string.format("%d of %d", p.index, #p.steps), ui.FAINT,
+		{ pivot = gui.PIVOT_E })
+
+	local g = store.galaxy
+	local view = store.game_view
+	local function name_of(i)
+		local who = view and view.players and view.players[i]
+		return (who and who.name) or ("Player " .. tostring(i))
+	end
+	local function place_of(id)
+		local star = id and g and g.stars[id]
+		return (star and star.name) or "deep space"
+	end
+	ui.body(inner, top - 52, step_caption(step, p.you, name_of, place_of),
+		step.quiet and ui.FAINT or ui.TEXT,
+		{ width = width - 44, anchor_top = true })
+
+	-- A scrubbable line rather than a progress bar: the point of a replay is
+	-- being able to go back to the turn something happened on, and forty turns
+	-- across a phone is a comfortable target.
+	local track_y = top - 110
+	local track = ui.panel(inner, track_y, width - 44, 8, ui.CARD_ALT)
+	local fraction = (#p.steps > 1) and ((p.index - 1) / (#p.steps - 1)) or 1
+	ui.panel(inner, track_y, math.max(8, (width - 44) * fraction), 8, ui.ACCENT)
+	-- Every turn that had a fight gets a tick, so a player can aim at one.
+	for i = 1, #p.steps do
+		if #p.steps[i].battles > 0 then
+			local at = (#p.steps > 1) and ((i - 1) / (#p.steps - 1)) or 0
+			ui.dot(inner + (width - 44) * at - 3, track_y + 6, 7, ui.WARN)
+		end
+	end
+	-- A hit area taller than the line it scrubs: eight units is four dp.
+	local grab = ui.panel(inner, track_y + 20, width - 44, 48, ui.CLEAR)
+	self.pb_druid:new_button(grab, function(_, _, event)
+		local x = event and event.x
+		if not x then return end
+		local a = ui.gui_action({ x = x, y = 0 })
+		local at = (a.x - inner) / math.max(1, width - 44)
+		playback_seek(self, math.floor(at * (#p.steps - 1) + 1.5))
+	end)
+
+	-- The control row leaves the same clearance below it that the order bar's
+	-- does. It was six units, against the bar's sixteen, and on a phone that
+	-- reads as the replay controls being jammed against the bottom of the
+	-- screen while everything else is not - which is exactly what a safe area
+	-- is for even when the device reports no inset at all.
+	local row_y = top - 132
+	local size = ui.CONTROL
+	local play = ui.icon_button(self.pb_druid, inner, row_y, size,
+		p.playing and "icon_pause" or "icon_play",
+		function()
+			p.playing = not p.playing
+			self.pb_layout = nil
+		end, { background = ui.CARD_ALT, colour = ui.TEXT })
+	self.pb_speed = ui.button(self.pb_druid, inner + size + 12, row_y, 96, size,
+		tostring(p.speed) .. "x",
+		function()
+			for i = 1, #PLAYBACK_SPEEDS do
+				if PLAYBACK_SPEEDS[i] == p.speed then
+					p.speed = PLAYBACK_SPEEDS[(i % #PLAYBACK_SPEEDS) + 1]
+					break
+				end
+			end
+			self.pb_layout = nil
+		end, { size = ui.CAPS })
+
+	local done_w = 150
+	ui.button(self.pb_druid, w - pad.right - 22 - done_w, row_y, done_w, size,
+		p.index >= #p.steps and "DONE" or "SKIP",
+		function() playback_stop(self) end,
+		{ style = p.index >= #p.steps and "primary" or "secondary", size = ui.CAPS })
+
+	local log_w = 120
+	ui.button(self.pb_druid, w - pad.right - 34 - done_w - log_w, row_y,
+		log_w, size, "LOG",
+		function()
+			local digest = p.digest
+			playback_stop(self)
+			if digest then monarch.show(hash("report"), nil, digest) end
+		end, { size = ui.CAPS })
+
+	ui.collect(previous)
+	self.pb_zone = { pad.left, top - PLAYBACK_H, w - pad.right, top }
+	self.pb_first, self.pb_last = first, last
+	publish_zones(self)
+	return play
+end
+
+--- Advance the replay. Returns true while it is still running.
+local function playback_update(self, dt)
+	local p = self.pb
+	if not p then return false end
+	if p.playing then
+		p.elapsed = p.elapsed + dt * p.speed
+		local held = playback.duration(p.steps[p.index], PLAYBACK_BASE)
+		if p.elapsed >= held then
+			p.elapsed = 0
+			if p.index >= #p.steps then
+				-- Stop on the last turn rather than closing: the player has
+				-- just been shown something and may want to scrub back through
+				-- it. DONE is how they leave.
+				p.playing = false
+				self.pb_layout = nil
+			else
+				p.index = p.index + 1
+				playback_publish(self)
+				self.label_dirty = true
+				self.pb_layout = nil
+			end
+		end
+	end
+	-- Rebuilt on a change, not per frame: the caption, the scrub position and
+	-- the button captions are the only things that move, and all of them change
+	-- exactly when the step, the speed or the play state does.
+	local key = table.concat({ p.index, p.speed, tostring(p.playing) }, ":")
+	if key ~= self.pb_layout then
+		self.pb_layout = key
+		build_playback_bar(self, store.screen.width, store.screen.height, self.pad)
+	end
+	return true
+end
+
 --- World position to screen, the same relationship the render script builds its
 --- projection from. Everything the HUD draws over the map goes through this.
 local function project(cam, w, h, wx, wy)
@@ -819,16 +1137,28 @@ local function update_captains(self, g, cam, w, h)
 	local used = 0
 	if view then
 
-		local function place(at, next_hop, label, colour, mine)
+		--- @param frac  how far along the lane toward `next_hop`, for a replay
+		local function place(at, next_hop, label, colour, mine, frac)
 			if used >= CAPTAIN_POOL then return end
 			local a = g.stars[at]
 			if not a then return end
 			-- On the system, pointed at the one it leaves for next. Movement is
-			-- whole lanes now, so there is no partway position to draw.
+			-- whole lanes, so on the live map there is no partway position to
+			-- draw - and drawing one would be a lie about where a fleet can be
+			-- intercepted, which is decided at the turn boundary.
+			--
+			-- A *replay* is the one place `frac` is honest: the turn is over,
+			-- the captain really did cross those lanes in that order, and the
+			-- only thing invented is how the seconds were spread across them.
 			local angle = nil
 			local b = next_hop and g.stars[next_hop]
 			if b then angle = math.atan2(b.y - a.y, b.x - a.x) end
-			local sx, sy = project(cam, w, h, a.x, a.y)
+			local wx, wy = a.x, a.y
+			if b and frac then
+				wx = a.x + (b.x - a.x) * frac
+				wy = a.y + (b.y - a.y) * frac
+			end
+			local sx, sy = project(cam, w, h, wx, wy)
 			if sx < -60 or sx > w + 60 or sy < self.floor_y or sy > self.ceiling_y then
 				return
 			end
@@ -878,6 +1208,32 @@ local function update_captains(self, g, cam, w, h)
 				scale = scale * (1 + 0.09 * math.sin(phase))
 			end
 			gui.set_scale(marker.box, vmath.vector3(scale, scale, 1))
+		end
+
+		-- During a replay the markers are the ones the log recorded, not the
+		-- ones standing on the map today.
+		local p = self.pb
+		if p then
+			local step = p.steps[p.index]
+			local held = playback.duration(step, PLAYBACK_BASE)
+			local through = math.min(1, p.elapsed / math.max(0.0001, held))
+			for i = 1, #step.moves do
+				local m = step.moves[i]
+				-- Spread the turn's whole path across the step, so a
+				-- three-lane march reads as three lanes and not one jump.
+				local legs = #m.path
+				local along = through * legs
+				local leg = math.min(legs, math.floor(along) + 1)
+				local from = (leg == 1) and m.from or m.path[leg - 1]
+				local label = m.mine and (m.name or "") or (m.rank or "")
+				place(from, m.path[leg], label, player_colour(m.player),
+					m.mine, along - (leg - 1))
+			end
+			for i = used + 1, CAPTAIN_POOL do
+				gui.set_enabled(self.captain_markers[i].box, false)
+				gui.set_enabled(self.captain_markers[i].text, false)
+			end
+			return
 		end
 
 		local mine_colour = player_colour(view.you)
@@ -1260,6 +1616,11 @@ local function build_chrome(self, w, h)
 
 	self.sheet_height = 0
 	self.sheet_dirty = true
+	-- The transport owns its own Druid region, so `ui.region` above does not
+	-- touch it and it would otherwise survive a relayout still positioned
+	-- against the old insets. The safe area is not known for the first couple
+	-- of hundred milliseconds, so that is not a corner case.
+	self.pb_layout = nil
 	publish_zones(self)
 end
 
@@ -1506,6 +1867,8 @@ function update(self, dt)
 	self.chrome_druid:update(dt)
 	if self.captain_druid then self.captain_druid:update(dt) end
 	if self.sheet_druid then self.sheet_druid:update(dt) end
+	if self.pb_druid then self.pb_druid:update(dt) end
+	playback_update(self, dt)
 
 	if self.flash then
 		self.flash_timer = self.flash_timer + dt
@@ -1528,6 +1891,18 @@ function update(self, dt)
 	self.clock = (self.clock or 0) + dt
 	automation.update(dt)
 
+	-- A digest handed over on arrival at the map. Held for a frame rather than
+	-- opened by galaxy.script, so the choice between watching it and reading it
+	-- is made in one place.
+	if store.report_now and store.pending_report and not self.pb then
+		local digest = store.pending_report
+		store.report_now = false
+		store.pending_report = nil
+		if not playback_start(self, digest) then
+			monarch.show(hash("report"), nil, digest)
+		end
+	end
+
 	-- Leaving the game. The menu popup sets this rather than navigating itself,
 	-- because a screen being torn down cannot reliably do it.
 	if store.leave_requested then
@@ -1546,6 +1921,7 @@ function update(self, dt)
 			store.sent_signature = nil
 			store.turn_ended = nil
 			store.pending_report = nil
+			store.report_now = false
 		end)
 		return
 	end
@@ -1605,7 +1981,9 @@ function update(self, dt)
 		build_captains(self, w, h, self.pad)
 	end
 
-	self.floor_y = self.pad.bottom + BAR_H + bar_extra(self) + self.sheet_height
+	self.floor_y = self.pb
+		and (self.pad.bottom + PLAYBACK_H)
+		or (self.pad.bottom + BAR_H + bar_extra(self) + self.sheet_height)
 	self.ceiling_y = h - self.pad.top - TOP_H - (self.captain_h or 0)
 	store.hud_band.floor = self.floor_y
 	store.hud_band.ceiling = self.ceiling_y
@@ -1659,6 +2037,9 @@ function on_input(self, action_id, action)
 		handled = true
 	end
 	if self.sheet_druid and self.sheet_druid:on_input(action_id, converted) then
+		handled = true
+	end
+	if self.pb_druid and self.pb_druid:on_input(action_id, converted) then
 		handled = true
 	end
 

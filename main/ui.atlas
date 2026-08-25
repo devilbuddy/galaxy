@@ -71,6 +71,14 @@ images {
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
+  image: "/main/assets/ui/icon_pause.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/ui/icon_play.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
   image: "/main/assets/ui/icon_plus.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
