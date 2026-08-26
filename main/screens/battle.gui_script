@@ -26,6 +26,7 @@ local monarch = require("monarch.monarch")
 local store = require("main.store")
 local ui = require("main.ui")
 local playback = require("main.playback")
+local sim_units = require("galaxy.sim.units")
 
 local PAD = 26
 -- A unit is drawn as a pip rather than a ship: at this size a glyph is a smudge,
@@ -108,7 +109,11 @@ local function build(self, data)
 	local w, h = store.screen.width, store.screen.height
 	local event = (data and data.battle) or {}
 	local me = (data and data.you) or (store.game_view and store.game_view.you) or 0
-	local types = (store.game_view and store.game_view.units) or {}
+	-- The catalogue comes over the wire so the client never carries a second
+	-- copy of the prices - but it is the *same module* on both sides, so falling
+	-- back to it directly cannot drift. That fallback is what lets this screen
+	-- be opened from the lobby, where there is no game view at all.
+	local types = (store.game_view and store.game_view.units) or sim_units.CATALOGUE
 	local pad = ui.inset()
 	local width = w - pad.left - pad.right
 	local inner = pad.left + PAD
@@ -213,12 +218,16 @@ local function build(self, data)
 	ui.bar(inner, track_y, math.max(12, track_w * fraction), 12, ui.ACCENT)
 	ui.dot(inner + track_w * fraction - 8, track_y - 2, 16, ui.ACCENT)
 
+	-- **Druid hands a click callback `(context, params, button)` and no touch
+	-- position at all**, so a scrubber has to remember where the finger was
+	-- itself - `on_input` below keeps the last one. Reading a position off the
+	-- third argument silently gets the button component, and the whole track
+	-- does nothing, which is exactly what it did.
 	local grab = ui.panel(inner - 10, track_y + 22, track_w + 20, 56, ui.CLEAR)
-	self.body_druid:new_button(grab, function(_, _, touch)
-		local at = touch and touch.x
+	self.body_druid:new_button(grab, function()
+		local at = self.touch_x
 		if not at then return end
-		local a = ui.gui_action({ x = at, y = 0 })
-		local pick = (a.x - inner) / math.max(1, track_w)
+		local pick = (at - inner) / math.max(1, track_w)
 		self.index = math.floor(pick * (#frames - 1) + 1.5)
 		self.rebuild = true
 	end)
@@ -264,6 +273,10 @@ function on_input(self, action_id, action)
 	-- A full-screen popup claims every action, so the map behind it neither
 	-- pans nor changes selection while this is up.
 	local converted = ui.gui_action(action)
+	-- Kept for the scrub track: Druid's click callback carries no position.
+	local x = converted.x
+	if converted.touch and converted.touch[1] then x = converted.touch[1].x end
+	if x then self.touch_x = x end
 	if self.body_druid then self.body_druid:on_input(action_id, converted) end
 	return ui.modal_input(self.druid, action_id, action)
 end

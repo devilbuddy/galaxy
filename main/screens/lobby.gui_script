@@ -16,6 +16,7 @@ local store = require("main.store")
 local ui = require("main.ui")
 local safearea = require("main.safearea")
 local races = require("galaxy.sim.races")
+local dev = require("main.dev")
 
 local PAD = 26
 -- How many turns of digest the server is willing to send back, from
@@ -209,6 +210,26 @@ local function build(self)
 		{ style = "primary", size = ui.CAPS })
 
 	local y = top - 132
+
+	-- **The back door**, debug builds only. Two of this game's screens mark
+	-- themselves read or need a war to reach; see main/dev.lua for why that is
+	-- a problem for looking at them rather than for playing.
+	if dev.enabled() then
+		local bh = 56
+		local half = (card_w - 12) * 0.5
+		ui.button(self.druid, pad.left, y, half, bh, "REPLAY DIGESTS",
+			function()
+				seen.forget()
+				self:set_status("Read markers cleared - every game replays in full")
+				self:refresh()
+			end, { size = ui.CAPS })
+		ui.button(self.druid, pad.left + half + 12, y, half, bh, "SAMPLE BATTLE",
+			function()
+				monarch.show(hash("battle"), nil,
+					{ battle = dev.sample_battle(), you = 1 })
+			end, { size = ui.CAPS })
+		y = y - bh - ui.GAP
+	end
 
 	self.list_width = card_w
 	self.list_height = y - (footer_top + ui.GAP)

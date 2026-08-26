@@ -1208,12 +1208,15 @@ local function build_playback_bar(self, w, h, pad)
 
 	-- A hit area far taller than the line it scrubs: twelve units is seven dp,
 	-- and the tap target floor is forty-eight.
+	-- **Druid hands a click callback `(context, params, button)` and no touch
+	-- position**, so the scrubber has to remember where the finger was itself -
+	-- `on_input` keeps the last one. Reading a position off the third argument
+	-- gets the button component instead, silently, and the track does nothing.
 	local grab = ui.panel(inner - 10, track_y + 22, track_w + 20, 56, ui.CLEAR)
-	self.pb_druid:new_button(grab, function(_, _, event)
-		local x = event and event.x
+	self.pb_druid:new_button(grab, function()
+		local x = self.touch_x
 		if not x then return end
-		local a = ui.gui_action({ x = x, y = 0 })
-		local at = (a.x - inner) / math.max(1, track_w)
+		local at = (x - inner) / math.max(1, track_w)
 		playback_seek(self, math.floor(at * (#p.steps - 1) + 1.5))
 	end)
 
@@ -2387,6 +2390,13 @@ end
 function on_input(self, action_id, action)
 	if not self.chrome_druid then return false end
 	local converted = ui.gui_action(action)
+	-- Kept for the playback's scrub track: Druid's click callback carries no
+	-- position, so anything that needs one has to have been told.
+	local touch_x = converted.x
+	if converted.touch and converted.touch[1] then
+		touch_x = converted.touch[1].x
+	end
+	if touch_x then self.touch_x = touch_x end
 	local handled = self.chrome_druid:on_input(action_id, converted)
 	if self.captain_druid and self.captain_druid:on_input(action_id, converted) then
 		handled = true

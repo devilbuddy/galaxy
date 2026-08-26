@@ -82,4 +82,23 @@ function M.set(game_id, turn)
 	end
 end
 
+--- Forget everything that has been read.
+--
+-- A digest marks itself read when it is opened, which is right for playing and
+-- wrong for looking: the playback worth watching cannot be watched twice. This
+-- puts every game back to turn zero so the next open replays the whole window
+-- the server is willing to send.
+--
+-- Debug-only in practice (see main/dev.lua), but it lives here because this is
+-- the module that owns the file.
+function M.forget()
+	data = { games = {}, seq = 0 }
+	dirty_seq = 0
+	if not sys.save(path(), data) then
+		print("galaxy: could not clear how far the digest has been read")
+		return false
+	end
+	return true
+end
+
 return M
