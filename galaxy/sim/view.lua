@@ -145,7 +145,8 @@ function M.project(galaxy, state, player)
 			-- What a system pays its owner, and what a colony has ready. Both
 			-- public where you can see the system: the yield is derived from
 			-- the star, and stock is already visible in the defence above.
-			yield = systems.yield(galaxy, id),
+			yield = systems.yield(galaxy, id,
+				sys.capital_of ~= 0 and sys.capital_of == sys.owner),
 			stock = systems.is_colony(galaxy, id) and (sys.stock or 0) or nil,
 			stock_cap = systems.is_colony(galaxy, id)
 				and buildings.stock_cap(sys) or nil,
@@ -280,7 +281,8 @@ function M.project(galaxy, state, player)
 				local total = 0
 				for id, sys in pairs(state.systems) do
 					if sys.owner == player then
-						total = total + systems.yield(galaxy, id)
+						total = total + systems.yield(galaxy, id,
+							sys.capital_of == player)
 					end
 				end
 				return total

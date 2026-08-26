@@ -490,7 +490,10 @@ do
 	local after_one = s.players[1].supply
 	check("holding ground pays every turn", after_one > 0, after_one)
 	check("and it is what the systems are worth",
-		after_one == systems.yield(GALAXY, capital), after_one)
+		after_one == systems.yield(GALAXY, capital, true), after_one)
+	check("the capital pays its seat bonus on top",
+		after_one == systems.yield(GALAXY, capital) + rules.capital_yield,
+		after_one)
 
 	-- A colony makes a unit ready on the cadence, whether or not anyone visits.
 	local was = s.systems[capital].stock
@@ -505,16 +508,20 @@ do
 		s.systems[capital].stock == rules.colony_stock_cap,
 		s.systems[capital].stock)
 
-	-- A waypoint is terrain that pays a little; a colony pays best. Every kind
-	-- is worth taking, for a different reason.
+	-- **Road pays nothing.** Colonies are towns and outposts are mines; the
+	-- lane between them is terrain. `regions.lua` has always counted only the
+	-- first two towards victory, and the economy now agrees with it.
 	local kinds = { colony = nil, outpost = nil, waypoint = nil }
 	for id = 1, #GALAXY.stars do
 		local k = systems.kind(GALAXY, id)
 		if kinds[k] == nil then kinds[k] = systems.yield(GALAXY, id) end
 	end
-	check("every kind of place pays something",
-		(kinds.waypoint or 0) > 0 and (kinds.outpost or 0) > 0
-			and (kinds.colony or 0) > 0)
+	check("a colony and an outpost both pay",
+		(kinds.outpost or 0) > 0 and (kinds.colony or 0) > 0)
+	check("and a waypoint pays nothing at all", kinds.waypoint == 0,
+		kinds.waypoint)
+	check("a colony is worth more than an outpost",
+		(kinds.colony or 0) >= (kinds.outpost or 0))
 end
 
 print("strength is bought, not waited for")

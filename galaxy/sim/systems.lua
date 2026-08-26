@@ -138,13 +138,23 @@ end
 -- nothing, which is why it survived the rebuild: it is exactly the number a
 -- system's worth should be priced against.
 --
--- A whole number, and never less than one, so every system a player holds is
--- worth holding and the sheet can state it without a decimal.
-function M.yield(galaxy, id)
+-- A whole number, and never less than one where a kind pays at all, so the
+-- sheet can state it without a decimal. **A waypoint pays nothing** - see
+-- `rules.supply_yield`.
+--
+-- `capital` is the one input that is not map data, exactly as it is for
+-- `defence`: whose capital this is, which the state knows and the galaxy does
+-- not. The bonus is flat rather than scaled, because it is a civic fact about
+-- being somebody's seat and not a fact about the star.
+function M.yield(galaxy, id, capital)
 	local profile = M.profile(galaxy, id)
 	local base = rules.supply_yield[profile.kind] or 0
-	if base <= 0 then return 0 end
-	return math.max(1, math.floor(base * profile.industry + 0.5))
+	local total = 0
+	if base > 0 then
+		total = math.max(1, math.floor(base * profile.industry + 0.5))
+	end
+	if capital then total = total + rules.capital_yield end
+	return total
 end
 
 function M.is_colony(galaxy, id)

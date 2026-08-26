@@ -34,10 +34,20 @@ local units = require("galaxy.sim.units")
 
 local M = {}
 
--- How a bot picks among equally-near targets. Colonies are worth more than
--- empty rock even with nothing to produce yet, because they are what regions
--- are counted in.
-local KIND_BONUS = { colony = 2.0, outpost = 1.0, waypoint = 0 }
+-- How a bot picks among equally-near targets: **by what the ground actually
+-- pays it**. Not a table of its own - `systems.yield` is the number, so a bot
+-- values a place exactly the way the economy does and follows it automatically
+-- when the economy is retuned.
+--
+-- It matters more than it did. A waypoint used to pay 1 a turn for ever, which
+-- was a small but real reason to walk to one; it now pays nothing and is worth
+-- taking only as passage - and passage is free, because the resolver claims
+-- unclaimed ground *in passing* along a route. So a bot aimed at a colony three
+-- lanes off sweeps up the road on the way without ever having chosen it.
+--
+-- The capital bonus is deliberately not included: a bot cannot take a capital
+-- and keep it paying, and pricing one as though it could would send captains at
+-- the one target they are least able to hold.
 
 -- Taking something off somebody is worth more than walking into empty space -
 -- it is the only thing that moves a border - but it costs strength that would
@@ -176,10 +186,9 @@ local function nearest_depot(galaxy, state, player, from)
 	return nil
 end
 
---- Score a candidate. Near beats far, and something worth holding beats rock.
+--- Score a candidate. Near beats far, and something that pays beats rock.
 local function score(galaxy, candidate, jitter)
-	local kind = systems.kind(galaxy, candidate.id)
-	return (KIND_BONUS[kind] or 0)
+	return systems.yield(galaxy, candidate.id)
 		+ (candidate.cost > 0 and CONTESTED_BONUS or 0)
 		- candidate.hops * 1.5
 		+ jitter

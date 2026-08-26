@@ -86,10 +86,36 @@ return {
 	-- colony, and a captain has to walk there.
 	--
 	-- Per system per turn, scaled by the star's own `industry` and rounded to a
-	-- whole number, so every kind of place is worth taking for a different
-	-- reason: a waypoint is terrain that pays a little, an outpost pays better,
-	-- a colony pays best *and* builds.
-	supply_yield = { waypoint = 1, outpost = 2, colony = 3 },
+	-- whole number.
+	--
+	-- **Road pays nothing.** A waypoint used to pay 1, which meant walking a
+	-- captain down an empty chain was income for the rest of the game - and the
+	-- map had already decided that was the wrong measure. `regions.lua` counts
+	-- only colonies and outposts towards victory, so waypoints were already
+	-- terrain for the purpose of *winning* and still wages for the purpose of
+	-- *paying*. This closes that.
+	--
+	-- Colonies are towns and outposts are mines, which is the shape this is
+	-- lifted from. **It is a redistribution rather than a cut**: measured over
+	-- five seeds, waypoints were 45% of the systems and 22% of the income, and
+	-- moving that onto the other two at these rates leaves whole-galaxy income
+	-- within a percent of what it was. What changes is not how much an empire
+	-- earns but what it is worth going to get - a colony now averages 4.7 a
+	-- turn and an outpost 3.2, and the road between them averages nothing.
+	supply_yield = { waypoint = 0, outpost = 2.5, colony = 4 },
+
+	-- What a player's capital pays on top of its own yield.
+	--
+	-- **This is what makes the opening work.** With road paying nothing, a
+	-- player who has taken two systems and a stretch of lane earns almost
+	-- exactly what they earned on turn one - and the capital is the only thing
+	-- anybody is guaranteed to hold. Without it the first stretch of a game is
+	-- a player watching a number that does not move.
+	--
+	-- It is a shape rather than a decision: the capital is placed by the
+	-- generator, so there is nothing to choose. The version with a choice in it
+	-- is a building that pays, and there is no room for one at four slots.
+	capital_yield = 12,
 
 	-- What a colony holds ready, and how often another becomes available.
 	-- Availability accumulates whether or not anyone visits and does not decay,

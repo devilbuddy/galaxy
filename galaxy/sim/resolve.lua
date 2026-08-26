@@ -608,8 +608,11 @@ local function economy(galaxy, state, summaries)
 	local earned = {}
 	for id, sys in pairs(state.systems) do
 		if sys.owner ~= 0 then
+			-- The capital's bonus goes to whoever is sitting in their own
+			-- seat, which `capital_of` already says - no second lookup, and no
+			-- way for a captured seat to keep paying its former owner.
 			earned[sys.owner] = (earned[sys.owner] or 0)
-				+ systems_mod.yield(galaxy, id)
+				+ systems_mod.yield(galaxy, id, sys.capital_of == sys.owner)
 			-- Cadence and cap are the colony's own, not the rules': Works makes
 			-- one ready every turn and Yards holds more of them.
 			if systems_mod.is_colony(galaxy, id)

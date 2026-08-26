@@ -367,20 +367,57 @@ driven by the roll.
 
 #### The economy: one currency, and one thing it cannot buy
 
-**Supply is fungible; units are not.** Every system you hold pays supply each
-turn, scaled by the star's own `industry` — a number the generator has computed
-since it was written and nothing read until now. Units accumulate *only* at
-colonies, up to `colony_stock_cap`, and become strength *only* where a captain
-is standing. So wealth alone never wins a front: it converts to force at a
-colony, and somebody has to walk there.
+**Supply is fungible; units are not.** A system pays supply each turn, scaled by
+the star's own `industry` — a number the generator has computed since it was
+written and nothing read until now. Units accumulate *only* at colonies, up to
+`colony_stock_cap`, and become strength *only* where a captain is standing. So
+wealth alone never wins a front: it converts to force at a colony, and somebody
+has to walk there.
 
 | | pays | builds |
 |---|---|---|
-| waypoint | a little | — |
-| outpost | more, by `industry` | — |
-| colony | most | units, to a cap |
+| waypoint | **nothing** | — |
+| outpost | by `industry`, ~3.2 | — |
+| colony | by `industry`, ~4.7 | units, to a cap |
+| a capital, on top | `rules.capital_yield` | |
 
-That is the first time the three kinds of place mean three different things.
+**Road pays nothing, because the map had already decided that.**
+`regions.lua:31` counts only colonies and outposts towards victory, so a
+waypoint was already terrain for the purpose of *winning* and still wages for
+the purpose of *paying*. Walking a captain down an empty chain was income for
+the rest of the game, in a design whose whole point is that "systems owned" is a
+poor measure. Colonies are towns, outposts are mines, the lane between them is
+road.
+
+**It is a redistribution, not a cut.** Measured across five seeds, waypoints
+were 45% of the systems and 22% of the income; at these rates whole-galaxy
+income lands within a percent of what it was. What changed was not how much an
+empire earns but what is worth going to get — and the pacing shows exactly that.
+Ten seeds, four players, before and after:
+
+| | median | range |
+|---|---|---|
+| before | 134 | 83–182 |
+| after | 143 | **106–182** |
+
+The median barely moved; the *fast* outliers went. An 83-turn game was somebody
+snowballing on cheap road, and expansion into empty space no longer compounds.
+
+**The capital's bonus is what makes the opening work.** With road paying
+nothing, a player who has taken two systems and a stretch of lane earns almost
+what they earned on turn one, and the capital is the only thing anyone is
+guaranteed to hold. It is a shape rather than a decision — the generator places
+the capital, so there is nothing to choose; the version with a choice in it is a
+building that pays, and there is no room for one at four slots.
+
+**A bot values ground at what it pays**, not from a table of its own:
+`bots.lua`'s `score` calls `systems.yield` directly, so a bot follows the
+economy automatically whenever it is retuned and there is no parallel ranking to
+drift. It deliberately ignores the capital bonus — a bot cannot take a capital
+and keep it paying, and pricing one as though it could would aim captains at the
+target they are least able to hold. This had to land *with* the rate change:
+until a bot knows road is worthless, every number `play.lua` produces is a bot
+playing the old economy.
 
 **Availability accumulates whether or not you visit, and does not decay.** A
 distant colony is not wasted production - it is a reason to march. That is
