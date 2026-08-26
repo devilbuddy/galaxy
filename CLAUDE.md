@@ -2013,19 +2013,16 @@ will bite whoever touches them.
 - **The system sheet has no scroll.** It is capped at `SHEET_MAX` and content
   past that is drawn over the order bar. A colony of yours with an embarkation,
   four buildings, a captain and a rival in sight is close to the cap already.
-- **A boxed-in player has no way back.** Combat means a border can be pushed and
-  a fallen empire's ground falls open again, which is most of the old version of
-  this problem - but nothing rubber-bands, and income is still linear in
-  territory.
 - **Half of each race is still inert.** `modifiers.of` now folds speed, hops,
   vision, attack and defence, so races differ meaningfully - but growth,
   industry, research, capacity and the cost keys are read by nothing until
   production returns.
-- **Six-player games rarely finish.** Two, three and four-player games decide in
-  70-300 turns across every seed tried. Six needs 400-1000 and sometimes never
-  gets there, because `victory_region_fraction` asks any one of six players for
-  half the galaxy. Territory does change hands throughout, so this is a
-  threshold that should probably scale with the player count - not a stall.
+- **A boxed-in player still has no way back.** Combat means a border can be
+  pushed and a fallen empire's ground falls open again, which is most of the old
+  version of this - but nothing rubber-bands and income is linear in territory,
+  so falling behind still compounds. The sweep did not touch it; what it changed
+  is that money now runs out for *everyone*, so a leader cannot bank an
+  insurmountable purse.
 - **A battle is one comparison, so there is nothing to play back inside it.**
   The turn digest replays on the map, but a battle resolves instantly and has no
   internal timeline - so a battle-summary screen (fleets closing, reinforcements,
