@@ -106,7 +106,7 @@ local SHEET_MIN = 200
 -- simply drawn over the order bar. The camera clamps against `store.hud_band`
 -- rather than the window, so a taller sheet costs visible map but never traps
 -- the selected system behind itself.
-local SHEET_MAX = 880
+local SHEET_MAX = 960
 
 -- Playback. The transport sits where the order bar does, because it replaces
 -- it: while a digest is playing there is nothing to order.
@@ -202,7 +202,7 @@ local function step_caption(step, you, name_of, place_of)
 			offer(2, (e.player == you and (e.name or "You") or name_of(e.player))
 				.. " took " .. place_of(e.at))
 		elseif e.kind == "resupplied" then
-			offer(2, (e.name or "A captain") .. " embarked "
+			offer(2, (e.name or "A captain") .. " took aboard "
 				.. tostring(e.units or 0) .. " at " .. place_of(e.at))
 		elseif e.kind == "claimed" then
 			offer(1, (e.player == you and "You claimed " or (name_of(e.player)
@@ -426,6 +426,23 @@ local function refresh_zoom(self)
 	self.zoom_out.set_enabled(can_out)
 end
 
+-- **The two halves get an icon each, everywhere they appear.** "1 vs walls
+-- 1 vs ships" was a sentence a player had to parse three times over on one card
+-- and could not scan at all; a shield and a hull say the same thing at a glance
+-- and tie the unit rows, the captain and the target together.
+local FORT_ICON, FLEET_ICON = "icon_defence", "icon_warship"
+
+--- Draw "<shield> n  <hull> n" and return how wide it came out.
+local function draw_halves(x, y, walls, ships, tone)
+	local size = 22
+	ui.icon(x, y + 11, size, FORT_ICON, tone or ui.FAINT)
+	ui.small(x + size + 4, y, tostring(walls), tone or ui.DIM)
+	local mid = x + size + 8 + ui.text_width(tostring(walls), ui.SMALL) + 14
+	ui.icon(mid, y + 11, size, FLEET_ICON, tone or ui.FAINT)
+	ui.small(mid + size + 4, y, tostring(ships), tone or ui.DIM)
+	return (mid + size + 8 + ui.text_width(tostring(ships), ui.SMALL)) - x
+end
+
 --- The most any one of the player's captains could bring to either half.
 --
 -- The best of each, not the best captain: a player looking at a fortress wants
@@ -476,8 +493,8 @@ local function describe_order(o)
 			local n = (type(o.units) == "table") and (o.units[spec.id] or 0) or 0
 			if n > 0 then parts[#parts + 1] = n .. " " .. spec.name end
 		end
-		if #parts == 0 then return who .. " embarks nothing" end
-		return string.format("%s embarks %s", who, table.concat(parts, ", "))
+		if #parts == 0 then return who .. " takes nothing aboard" end
+		return string.format("%s takes %s aboard", who, table.concat(parts, ", "))
 	elseif o.kind == "build" then
 		return string.format("%s at %s", tostring(o.label or o.building),
 			star_name(o.at))
@@ -540,6 +557,23 @@ local function stage_unit(self, captain_id, type_id)
 		kind = "resupply", captain = captain_id, units = mix,
 	}
 	self.sheet_dirty = true
+end
+
+--- Take one unit of a type back off a staged embarkation.
+--
+-- The order goes with the last unit: an empty mix is not a decision, and
+-- leaving one behind would spend an order on nothing.
+local function unstage_unit(self, captain_id, type_id)
+	if not captain_id or not type_id then return end
+	for i = 1, #store.orders do
+		local o = store.orders[i]
+		if o.kind == "resupply" and o.captain == captain_id then
+			o.units[type_id] = math.max(0, (o.units[type_id] or 0) - 1)
+			if sim_units.count(o.units) == 0 then store.plan_remove(i) end
+			self.sheet_dirty = true
+			return
+		end
+	end
 end
 
 --- How much of a captain's embarkation is already staged.
@@ -870,110 +904,170 @@ local function build_sheet(self, w, pad)
 			ui.small(inner, y, "Last seen turn " .. tostring(info.seen), ui.WARN)
 		end
 
-		-- **The two comparisons, and this is the whole of combat.** Siege power
-		-- against the walls, fleet power against whoever is standing on them.
-		-- Beat both and you take it - and both numbers are here, next to your
-		-- own, because the alternative is finding out twelve hours later that a
+		-- **The captain comes first.** Everything below is either about
+		-- taking this place or about loading somebody, and both read
+		-- differently depending on whether one of yours is standing here.
+		local here = {}
+		for i = 1, #((view and view.captains) or {}) do
+			local c = view.captains[i]
+			if c.at == id and (c.eta or 0) == 0 then here[#here + 1] = c end
+		end
+		if #here > 0 then
+			y = y - 42
+			ui.caps(inner, y, "captains here")
+			for k = 1, #here do
+				local captain = here[k]
+				local chosen = store.selected_captain == captain.id
+				y = y - 58
+				local row = ui.panel(inner, y + 48, text_w, 54,
+					chosen and ui.ACCENT_SOFT or ui.CARD_ALT)
+				ui.portrait(inner + 8, y + 43, 38, captain.portrait,
+					{ ring_colour = chosen and ui.ACCENT or ui.BORDER })
+				ui.body(inner + 56, y + 27, captain.name, ui.TEXT)
+				ui.small(inner + 56, y + 6, captain.rank or "", ui.FAINT)
+				draw_halves(inner + 56 + ui.text_width(captain.rank or "", ui.SMALL) + 18,
+					y + 6, captain.siege_power or 0, captain.fleet_power or 0)
+				ui.small(inner + text_w - 14, y + 21, "tap to move", ui.FAINT,
+					{ pivot = gui.PIVOT_E })
+				self.sheet_druid:new_button(row, function()
+						if chosen then
+							store.selected_captain = nil
+							store.aiming = nil
+						else
+							store.selected_captain = captain.id
+							store.aiming = { kind = "move", captain = captain.id }
+						end
+						self.sheet_dirty = true
+					end)
+			end
+		end
+
+
+		-- **What it takes to hold, or to take.**
+		--
+		-- Your own colony gets one sentence, because "DEFENDS AT / Fortification
+		-- 9" was a label nobody could read a meaning off: it is a number an
+		-- *enemy* has to beat, so it should say so.
+		--
+		-- Somebody else's gets the two comparisons, which are the whole of
+		-- combat - your guns against their walls, your ships against their
+		-- ships. Beat both and you take it, and both numbers sit next to your
+		-- own because the alternative is finding out twelve hours later that a
 		-- captain was turned back.
 		if (info.owner or 0) ~= 0 then
 			local fortification = info.fortification or 0
 			local fleet = info.fleet or 0
-			local best = best_powers()
 
-			-- The label column is wide enough for the longest word in it:
-			-- "Fortification" is 210 units at SMALL, and a value tucked in at
-			-- 128 sat inside the last two letters of it.
-			local VALUE_X = 220
-			local function line(label, need, have)
-				y = y - 34
-				local enough = have >= need
-				ui.small(inner, y, label, ui.FAINT)
-				ui.body(inner + VALUE_X, y, tostring(need),
-					mine and ui.DIM or (enough and ui.GOOD or ui.WARN))
-				if not mine then
+			if mine then
+				y = y - 38
+				ui.icon(inner, y + 14, 26, FORT_ICON, ui.DIM)
+				ui.body(inner + 34, y,
+					"Takes " .. fortification .. " to capture", ui.DIM)
+			else
+				local best = best_powers()
+				y = y - 44
+				ui.caps(inner, y, "to take it, you need")
+
+				local function need(icon, label, want, have)
+					y = y - 36
+					local enough = have >= want
+					local tone = enough and ui.GOOD or ui.WARN
+					ui.icon(inner, y + 12, 24, icon, tone)
+					ui.body(inner + 32, y, tostring(want), tone)
+					ui.small(inner + 76, y, label, ui.FAINT)
 					ui.small(inner + text_w, y,
-						string.format("you bring %d", have),
-						enough and ui.GOOD or ui.WARN, { pivot = gui.PIVOT_E })
+						enough and ("you bring " .. have)
+							or ("you bring only " .. have),
+						tone, { pivot = gui.PIVOT_E })
 				end
+				need(FORT_ICON, "against its defences", fortification, best.siege)
+				need(FLEET_ICON, "against its ships", fleet, best.fleet)
 			end
-
-			y = y - 46
-			ui.caps(inner, y, mine and "defends at" or "to take it")
-			line("Fortification", fortification, best.siege)
-			if fleet > 0 or not mine then
-				line("Fleet", fleet, best.fleet)
-			end
-			y = y - 14
+			y = y - 16
 		end
 
 		-- **Buying, where the units are.** A colony of yours with anything ready
 		-- and a captain standing on it is the only place strength comes back,
 		-- so the whole transaction is stated here: what is in stock, what it
 		-- costs, and what the purse holds.
-		if mine and (info.stock or 0) > 0 and view then
-			-- A captain of yours standing here, and what it could take on.
-			local aboard
-			for i = 1, #(view.captains or {}) do
-				local c = view.captains[i]
-				if c.at == id and (c.eta or 0) == 0 then aboard = c break end
-			end
+		if mine and sim_systems.is_colony(g, id) and view then
+			-- A captain of yours standing here is what makes any of this
+			-- possible, so it is stated before the shop rather than after it.
+			local aboard = here[1]
 
-			y = y - 44
-			ui.caps(inner, y, string.format("%d ready to embark", info.stock))
-
+			y = y - 46
+			ui.caps(inner, y, "shipyard")
+			ui.small(inner + text_w, y, string.format("%s ready   %s in the purse",
+				ui.plural(info.stock or 0, "unit"),
+				ui.number(view.supply or 0)), ui.DIM, { pivot = gui.PIVOT_E })
 			if not aboard then
-				y = y - 34
-				ui.small(inner, y, "A captain has to be here to load them", ui.FAINT)
-				y = y - 14
-			else
-				-- **One row per type, one unit a tap.** A stepper for each would
-				-- be three widgets and most of the card; adding to the same
-				-- order instead keeps the mix to one row each, and the whole
-				-- embarkation costs a single order however elaborate it gets.
-				local staged = staged_mix(aboard.id)
-				local mixed = staged and sim_units.count(staged) or 0
-				local room = (aboard.max_units or 0) - (aboard.carried or 0) - mixed
-				local left = (view.supply or 0)
-					- (staged and sim_units.price(staged) or 0)
-				local berths = (info.stock or 0) - mixed
-
-				for k = 1, #(view.units or {}) do
-					local spec = view.units[k]
-					local picked = (staged and staged[spec.id]) or 0
-					local afford = left >= (spec.cost or 0)
-					local can = afford and room > 0 and berths > 0
-					y = y - 58
-					local row = ui.panel(inner, y + 50, text_w, 52,
-						picked > 0 and ui.ACCENT_SOFT or ui.CARD_ALT)
-					ui.body(inner + 14, y + 30,
-						picked > 0 and (picked .. "x " .. spec.name) or spec.name,
-						can and ui.TEXT or ui.FAINT)
-					-- What it is worth against each half, which is the only
-					-- reason to pick one over another.
-					ui.small(inner + 14, y + 8, string.format(
-						"%d vs walls   %d vs ships", spec.fortification, spec.fleet),
-						ui.FAINT)
-					ui.small(inner + text_w - 14, y + 26, tostring(spec.cost or 0),
-						afford and ui.GOOD or ui.WARN,
-						{ pivot = gui.PIVOT_E, bold = true })
-					if can then
-						self.sheet_druid:new_button(row, function()
-							stage_unit(self, aboard.id, spec.id)
-						end)
-					end
-				end
-
-				if mixed > 0 then
-					y = y - 30
-					ui.small(inner, y, string.format(
-						"%s staged   %d supply", ui.plural(mixed, "unit"),
-						sim_units.price(staged)), ui.ACCENT)
-				elseif room <= 0 then
-					y = y - 30
-					ui.small(inner, y, "No room aboard", ui.WARN)
-				end
-				y = y - 14
+				y = y - 28
+				ui.small(inner, y,
+					"Bring a captain here to load them aboard", ui.WARN)
 			end
+
+			local staged = aboard and staged_mix(aboard.id) or nil
+			local mixed = staged and sim_units.count(staged) or 0
+			local room = aboard
+				and ((aboard.max_units or 0) - (aboard.carried or 0) - mixed) or 0
+			local left = (view.supply or 0)
+				- (staged and sim_units.price(staged) or 0)
+			local berths = (info.stock or 0) - mixed
+
+			for k = 1, #(view.units or {}) do
+				local spec = view.units[k]
+				local picked = (staged and staged[spec.id]) or 0
+				local can_add = aboard and left >= (spec.cost or 0)
+					and room > 0 and berths > 0
+				y = y - 68
+				ui.panel(inner, y + 60, text_w, 62,
+					picked > 0 and ui.ACCENT_SOFT or ui.CARD_ALT)
+				ui.body(inner + 14, y + 40, spec.name,
+					can_add and ui.TEXT or ui.DIM)
+				-- What it is worth against each half, as the same two icons the
+				-- target above is measured in.
+				draw_halves(inner + 14, y + 12, spec.fortification, spec.fleet)
+				ui.small(inner + 150, y + 12,
+					(spec.cost or 0) .. " each", ui.FAINT)
+
+				-- **Plus and minus, not a row you tap.** Tapping a row added one
+				-- and there was no way to take one back short of dropping the
+				-- whole order; a stepper says both what it does and that there
+				-- is a number here to change.
+				-- Sized against the thumb, not the glyph. A design unit is about
+				-- 0.57 dp, so the 44 these started at was 25 dp - a target you
+				-- have to aim at, on the one control in the sheet a player uses
+				-- repeatedly.
+				local step = 60
+				local plus_x = inner + text_w - 12 - step
+				local minus_x = plus_x - step - 52
+				local minus = ui.icon_button(self.sheet_druid, minus_x, y + 60,
+					step, "icon_minus", function()
+						unstage_unit(self, aboard and aboard.id, spec.id)
+					end, { background = ui.CARD, colour = ui.TEXT })
+				if picked <= 0 then minus.set_enabled(false) end
+				ui.value(minus_x + step + 26, y + 30, tostring(picked), ui.BODY,
+					picked > 0 and ui.ACCENT or ui.FAINT,
+					{ pivot = gui.PIVOT_CENTER })
+				local plus = ui.icon_button(self.sheet_druid, plus_x, y + 60,
+					step, "icon_plus", function()
+						stage_unit(self, aboard and aboard.id, spec.id)
+					end, { background = ui.CARD, colour = ui.TEXT })
+				if not can_add then plus.set_enabled(false) end
+			end
+
+			if mixed > 0 then
+				y = y - 34
+				ui.small(inner, y, string.format("%s aboard next turn",
+					ui.plural(mixed, "unit")), ui.ACCENT)
+				ui.small(inner + text_w, y,
+					sim_units.price(staged) .. " supply", ui.ACCENT,
+					{ pivot = gui.PIVOT_E })
+			elseif aboard and room <= 0 then
+				y = y - 30
+				ui.small(inner, y, "No room aboard", ui.WARN)
+			end
+			y = y - 16
 		end
 
 		-- **What this colony can be made into.** Two slots against four
@@ -987,7 +1081,10 @@ local function build_sheet(self, w, pad)
 			local purse = view.supply or 0
 
 			y = y - 46
-			ui.caps(inner, y, string.format("built  %d of %d", #built, slots))
+			ui.caps(inner, y, "upgrades")
+			ui.small(inner + text_w, y, string.format(
+				"%d of %d slots used", #built, slots), ui.DIM,
+				{ pivot = gui.PIVOT_E })
 
 			for b = 1, #built do
 				local spec
@@ -1008,11 +1105,11 @@ local function build_sheet(self, w, pad)
 					end
 					if not have then
 						local afford = purse >= (spec.cost or 0)
-						y = y - 60
-						local row = ui.panel(inner, y + 52, text_w, 54, ui.CARD_ALT)
-						ui.body(inner + 14, y + 30, spec.name,
+						y = y - 62
+						local row = ui.panel(inner, y + 54, text_w, 56, ui.CARD_ALT)
+						ui.body(inner + 14, y + 38, spec.name,
 							afford and ui.TEXT or ui.FAINT)
-						ui.small(inner + 14, y + 8, spec.blurb or "", ui.FAINT)
+						ui.small(inner + 14, y + 12, spec.blurb or "", ui.FAINT)
 						ui.small(inner + text_w - 14, y + 26,
 							tostring(spec.cost or 0),
 							afford and ui.GOOD or ui.WARN,
@@ -1057,42 +1154,6 @@ local function build_sheet(self, w, pad)
 			y = y - 14
 		end
 
-		-- Captains standing here, and what can be asked of them.
-		local here = {}
-		for i = 1, #((view and view.captains) or {}) do
-			local c = view.captains[i]
-			if c.at == id and (c.eta or 0) == 0 then here[#here + 1] = c end
-		end
-		if #here > 0 then
-			y = y - 42
-			ui.caps(inner, y, "captains here")
-			for k = 1, #here do
-				local captain = here[k]
-				local chosen = store.selected_captain == captain.id
-				y = y - 58
-				local row = ui.panel(inner, y + 48, text_w, 54,
-					chosen and ui.ACCENT_SOFT or ui.CARD_ALT)
-				ui.portrait(inner + 8, y + 43, 38, captain.portrait,
-					{ ring_colour = chosen and ui.ACCENT or ui.BORDER })
-				ui.body(inner + 56, y + 27, captain.name, ui.TEXT)
-				ui.small(inner + 56, y + 6, string.format("%s   %d walls / %d ships",
-					captain.rank or "", captain.siege_power or 0,
-					captain.fleet_power or 0), ui.FAINT)
-				ui.small(inner + text_w - 14, y + 21, "tap to move", ui.FAINT,
-					{ pivot = gui.PIVOT_E })
-				self.sheet_druid:new_button(row, function()
-						if chosen then
-							store.selected_captain = nil
-							store.aiming = nil
-						else
-							store.selected_captain = captain.id
-							store.aiming = { kind = "move", captain = captain.id }
-						end
-						self.sheet_dirty = true
-					end)
-			end
-		end
-
 		-- Rival captains in sight here.
 		if view then
 			for c = 1, #view.contacts do
@@ -1106,8 +1167,12 @@ local function build_sheet(self, w, pad)
 						{ ring_colour = player_colour(rival.owner) })
 					ui.small(inner + 46, y + 24, rival.rank or "A rival captain",
 						ui.BAD)
-					ui.small(inner + 46, y + 4, tostring(rival.fleet_power or 0)
-						.. " defending", ui.FAINT)
+					-- Only what they would defend with: a rival's siege power is
+					-- not something you can see, and inventing a zero for it
+					-- would read as "harmless".
+					ui.icon(inner + 46, y + 15, 22, FLEET_ICON, ui.FAINT)
+					ui.small(inner + 72, y + 4,
+						tostring(rival.fleet_power or 0), ui.FAINT)
 				end
 			end
 		end
@@ -1256,16 +1321,6 @@ local function build_playback_bar(self, w, h, pad)
 			mine_here = step.battles[i]
 		end
 	end
-	if mine_here then
-		ui.button(self.pb_druid, inner + size + 12 + 96 + 12, row_y, 220, size,
-			"SEE THE FIGHT",
-			function()
-				p.playing = false
-				monarch.show(hash("battle"), nil,
-					{ battle = mine_here, you = p.you })
-			end, { size = ui.CAPS })
-	end
-
 	local done_w = 150
 	ui.button(self.pb_druid, w - pad.right - 22 - done_w, row_y, done_w, size,
 		p.index >= #p.steps and "DONE" or "SKIP",
@@ -1273,13 +1328,30 @@ local function build_playback_bar(self, w, h, pad)
 		{ style = p.index >= #p.steps and "primary" or "secondary", size = ui.CAPS })
 
 	local log_w = 120
-	ui.button(self.pb_druid, w - pad.right - 34 - done_w - log_w, row_y,
-		log_w, size, "LOG",
+	local log_x = w - pad.right - 34 - done_w - log_w
+	ui.button(self.pb_druid, log_x, row_y, log_w, size, "LOG",
 		function()
 			local digest = p.digest
 			playback_stop(self)
 			if digest then monarch.show(hash("report"), nil, digest) end
 		end, { size = ui.CAPS })
+
+	-- Whatever is left between the speed control and LOG. A fixed 220 ran under
+	-- LOG and the caption came out as "SEE THE FIG", which is the sort of thing
+	-- that reads as a broken build rather than a tight layout.
+	if mine_here then
+		local fight_x = inner + size + 12 + 96 + 12
+		local fight_w = log_x - 12 - fight_x
+		if fight_w >= 120 then
+			ui.button(self.pb_druid, fight_x, row_y, fight_w, size,
+				fight_w >= 210 and "SEE THE FIGHT" or "BATTLE",
+				function()
+					p.playing = false
+					monarch.show(hash("battle"), nil,
+						{ battle = mine_here, you = p.you })
+				end, { size = ui.CAPS })
+		end
+	end
 
 	ui.collect(previous)
 	self.pb_zone = { pad.left, top - PLAYBACK_H, w - pad.right, top }
@@ -2212,11 +2284,85 @@ function final(self)
 	store.hud_zones = {}
 end
 
+--- A title card over the map, held for a moment and then gone.
+--
+-- **Arriving is not a changelog.** The digest used to open as a list the moment
+-- a player came back to a game, which is a wall of forty rows in front of a map
+-- they have not seen yet - and the thing they actually want to know, where the
+-- war moved, is a shape rather than a sentence. So the list is no longer the
+-- greeting: this says what is about to happen, then the replay says what
+-- happened.
+--
+-- Its own node list, deleted rather than hidden: it exists for a second and a
+-- half of the session and should not survive a relayout in the wrong place.
+local TITLE_SECONDS = 1.5
+local TITLE_FADE = 0.4
+
+local function title_clear(self)
+	if self.title_nodes then ui.region(nil, self.title_nodes) end
+	self.title_nodes = nil
+	self.title_alpha = nil
+	self.title_timer = nil
+	self.title_then = nil
+end
+
+local function title_card(self, w, h, heading, detail, then_do)
+	title_clear(self)
+	self.title_nodes = {}
+	self.title_alpha = {}
+	local previous = ui.collect(self.title_nodes)
+	-- **A scrim, because the map is behind it.** Region names are set large and
+	-- pale and land exactly where a centred caption does; without something to
+	-- sit on, the two read as one sentence.
+	local scrim = ui.sprite(0, h, w, h, "solid", ui.BG)
+	gui.set_color(scrim, vmath.vector4(ui.BG.x, ui.BG.y, ui.BG.z, 0.82))
+	local y = h * 0.5
+	ui.text(w * 0.5, y + 18, heading:upper(), ui.H2, ui.TEXT,
+		{ pivot = gui.PIVOT_CENTER, bold = true, tracking = 0.10 })
+	if detail then
+		ui.small(w * 0.5, y - 26, detail, ui.DIM, { pivot = gui.PIVOT_CENTER })
+	end
+	ui.collect(previous)
+	for i = 1, #self.title_nodes do
+		self.title_alpha[i] = gui.get_color(self.title_nodes[i]).w
+	end
+	self.title_timer = 0
+	self.title_then = then_do
+end
+
+local function title_update(self, dt)
+	if not self.title_timer then return end
+	self.title_timer = self.title_timer + dt
+	-- Faded out on the way, so the replay does not start behind a caption. Each
+	-- node fades from whatever it was, or the scrim would brighten to full on
+	-- its way out.
+	local left = TITLE_SECONDS - self.title_timer
+	if left < TITLE_FADE then
+		local k = math.max(0, left / TITLE_FADE)
+		for i = 1, #self.title_nodes do
+			local c = gui.get_color(self.title_nodes[i])
+			gui.set_color(self.title_nodes[i],
+				vmath.vector4(c.x, c.y, c.z, (self.title_alpha[i] or 1) * k))
+		end
+	end
+	if self.title_timer >= TITLE_SECONDS then
+		local then_do = self.title_then
+		title_clear(self)
+		if then_do then then_do() end
+	end
+end
+
 function update(self, dt)
 	local w, h = store.screen.width, store.screen.height
 	if w ~= self.layout_w or h ~= self.layout_h
 		or self.layout_safe ~= store.safe_revision then
 		build_chrome(self, w, h)
+		-- The caption is positioned against the screen it was made for, and the
+		-- insets arrive a couple of hundred milliseconds in - which is exactly
+		-- when it is on screen.
+		local interrupted = self.title_then
+		title_clear(self)
+		if interrupted then interrupted() end
 		gui.set_position(self.status_text, vmath.vector3(w * 0.5, h * 0.5, 0))
 		self.layout_w, self.layout_h = w, h
 		self.layout_safe = store.safe_revision
@@ -2227,6 +2373,7 @@ function update(self, dt)
 	if self.sheet_druid then self.sheet_druid:update(dt) end
 	if self.pb_druid then self.pb_druid:update(dt) end
 	playback_update(self, dt)
+	title_update(self, dt)
 
 	if self.flash then
 		self.flash_timer = self.flash_timer + dt
@@ -2252,13 +2399,30 @@ function update(self, dt)
 	-- A digest handed over on arrival at the map. Held for a frame rather than
 	-- opened by galaxy.script, so the choice between watching it and reading it
 	-- is made in one place.
-	if store.report_now and store.pending_report and not self.pb then
+	--
+	-- **Arriving never opens the list.** A player coming back to a game gets a
+	-- caption and then the replay; a digest with nothing to animate is left
+	-- pending instead, so the turn card offers it in its own time rather than
+	-- a screen of rows being the first thing they see.
+	if store.report_now and store.pending_report and not self.pb
+		and not self.title_timer then
 		local digest = store.pending_report
 		store.report_now = false
-		store.pending_report = nil
-		if not playback_start(self, digest) then
-			monarch.show(hash("report"), nil, digest)
-		end
+		local from = math.max((digest.since_turn or 0) + 1, digest.from_turn or 1)
+		local to = digest.turn or from
+		local span = (to > from)
+			and string.format("Turns %d to %d", from, to)
+			or string.format("Turn %d", to)
+		title_card(self, w, h, "Since you were away", span, function()
+			-- Re-read rather than captured: a poll may have replaced it in the
+			-- second and a half this was on screen.
+			local held = store.pending_report
+			if not held then return end
+			store.pending_report = nil
+			if not playback_start(self, held) then
+				store.pending_report = held
+			end
+		end)
 	end
 
 	-- Leaving the game. The menu popup sets this rather than navigating itself,

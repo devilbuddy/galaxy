@@ -57,12 +57,12 @@ function M.sample_battle()
 			{ captain = 9, name = "Vantor", rank = "Commander", power = 12 },
 		},
 		exchanges = {
-			{ lost = { line = 3 }, shield = 2 },
-			{ lost = { line = 2, lance = 1 }, shield = 2 },
+			{ lost = { escort = 3 }, shield = 2 },
+			{ lost = { escort = 2, interceptor = 1 }, shield = 2 },
 			{ lost = {}, shield = 2 },
 		},
-		lost = units.normalise({ line = 5, lance = 1 }),
-		hold = units.normalise({ line = 1, lance = 1, siege = 2 }),
+		lost = units.normalise({ escort = 5, interceptor = 1 }),
+		hold = units.normalise({ escort = 1, interceptor = 1, bombard = 2 }),
 	}
 end
 

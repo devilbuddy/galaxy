@@ -37,9 +37,9 @@ local PIP_GAP = 6
 local PIPS_PER_ROW = 12
 
 local TYPE_COLOUR = {
-	line = ui.TEXT,
-	lance = ui.ACCENT,
-	siege = ui.WARN,
+	escort = ui.TEXT,
+	interceptor = ui.ACCENT,
+	bombard = ui.WARN,
 }
 
 local function star_name(id)

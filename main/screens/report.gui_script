@@ -80,7 +80,7 @@ local function describe(event, me)
 		end
 		return {
 			icon = "icon_industry", tone = ui.GOOD,
-			title = (event.name or "A captain") .. " embarked "
+			title = (event.name or "A captain") .. " took aboard "
 				.. (#mix > 0 and table.concat(mix, ", ")
 					or ui.plural(event.units or 0, "unit")),
 			subtitle = string.format("%s for %d supply - %d vs walls, %d vs ships",

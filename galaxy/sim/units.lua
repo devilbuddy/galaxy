@@ -7,9 +7,15 @@
 -- is standing on it. A type that is good against one is poor against the other,
 -- so an army is aimed rather than merely large.
 --
---   Line    the front rank. Equal against both, and what dies first.
---   Lance   ships. Three times itself against a fleet, ordinary against walls.
---   Siege   guns. Three times itself against walls, ordinary against a fleet.
+--   Escort        takes the hits. Equal against both, and what dies first.
+--   Interceptor   hunts ships. Three times itself against a fleet.
+--   Bombard       breaks defences. Three times itself against fortification.
+--
+-- **The names have to do the explaining.** They were Line, Lance and Siege,
+-- which are only meaningful to somebody who already knows the rule - a player
+-- reading the sheet for the first time could not tell which of them to buy for
+-- what. A name that says what the thing is for is worth more than a name that
+-- sounds like a warship.
 --
 -- **The weights are small integers on purpose.** A player has to be able to add
 -- their army up in their head and compare it against two numbers on the sheet -
@@ -27,25 +33,25 @@ M.FLEET = "fleet"
 
 M.CATALOGUE = {
 	{
-		id = "line",
-		name = "Line",
-		blurb = "The front rank. Dies first, so the rest do not.",
+		id = "escort",
+		name = "Escort",
+		blurb = "Takes the hits so the rest do not.",
 		cost = 20,
 		fortification = 1,
 		fleet = 1,
 	},
 	{
-		id = "lance",
-		name = "Lance",
-		blurb = "Three times itself against ships.",
+		id = "interceptor",
+		name = "Interceptor",
+		blurb = "Hunts ships.",
 		cost = 34,
 		fortification = 1,
 		fleet = 3,
 	},
 	{
-		id = "siege",
-		name = "Siege",
-		blurb = "Three times itself against walls.",
+		id = "bombard",
+		name = "Bombard",
+		blurb = "Breaks defences.",
 		cost = 34,
 		fortification = 3,
 		fleet = 1,
@@ -82,6 +88,12 @@ function M.empty()
 	return out
 end
 
+-- What the three used to be called. A hold in storage is keyed by id, so a
+-- rename has to carry the old keys across or every captain in flight comes back
+-- empty - which is not a migration anybody would notice until their army had
+-- quietly evaporated.
+local RENAMED = { line = "escort", lance = "interceptor", siege = "bombard" }
+
 --- Repair a complement read back from storage.
 function M.normalise(hold)
 	local out = M.empty()
@@ -91,6 +103,10 @@ function M.normalise(hold)
 		local n = tonumber(hold[id]) or 0
 		if n < 0 then n = 0 end
 		out[id] = math.floor(n)
+	end
+	for was, now in pairs(RENAMED) do
+		local n = tonumber(hold[was])
+		if n and n > 0 then out[now] = out[now] + math.floor(n) end
 	end
 	return out
 end
@@ -129,9 +145,9 @@ end
 
 --- Take `n` units off a complement, cheapest rank first.
 --
--- **Line dies first**, which is what makes it worth buying: it is the only type
--- whose job is to still be there when the shooting stops. Then Lance, then
--- Siege - a battery is the last thing a fleet gives up.
+-- **The Escort dies first**, which is what makes it worth buying: it is the only
+-- type whose job is to still be there when the shooting stops. Then the
+-- Interceptor, then the Bombard - a battery is the last thing a fleet gives up.
 --
 -- Returns what was actually removed, which is fewer than asked for when the
 -- hold runs out.

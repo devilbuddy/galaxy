@@ -224,13 +224,13 @@ local function compose(galaxy, state, mods, player, captain, berths, purse)
 
 	local take = units.empty()
 	local spent = 0
-	-- Half the berths to the line, the rest to whichever answer the border
+	-- Half the berths to escorts, the rest to whichever answer the border
 	-- actually needs. A bot with no border at all is expanding into empty space
 	-- and wants bulk.
 	local line = math.floor(berths / 2)
 	if line < 1 then line = 1 end
-	local second = (ships > walls) and "lance" or "siege"
-	for _, plan in ipairs({ { "line", line }, { second, berths - line } }) do
+	local second = (ships > walls) and "interceptor" or "bombard"
+	for _, plan in ipairs({ { "escort", line }, { second, berths - line } }) do
 		local spec = units.by_id(plan[1])
 		local n = plan[2]
 		local afford = math.floor((purse - spent) / spec.cost)
@@ -255,7 +255,7 @@ end
 -- is, and Yards where it is not.
 local function spend(galaxy, state, player)
 	local purse = state.players[player].supply or 0
-	local reserve = RESERVE_UNITS * units.by_id("line").cost
+	local reserve = RESERVE_UNITS * units.by_id("escort").cost
 
 	-- Colonies in id order: `pairs` is unspecified and two runtimes have to
 	-- agree on what this bot did.
@@ -369,7 +369,7 @@ function M.orders(galaxy, state, player)
 			local carried = commanders.carried(captain)
 			local purse = state.players[player].supply or 0
 			local here = state.systems[captain.at]
-			local cheapest = units.by_id("line").cost
+			local cheapest = units.by_id("escort").cost
 
 			-- **Refit, then go - never both in one turn.** A captain buys where
 			-- it *ends* the turn, so issuing a purchase and a march together

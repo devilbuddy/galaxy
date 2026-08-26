@@ -1218,6 +1218,23 @@ alone, the turn card in the overview goes accent and reads "new — tap to read"
 and **opening it is what marks it read**. Nothing is lost if the player never
 taps: the poll keeps returning the same window.
 
+**Arriving is a title card, then a replay - never a list.** Coming back to a game
+used to open the digest as a screen of rows, which is a changelog in front of a
+map the player has not seen yet; what they actually want to know is where the
+war moved, and that is a shape. `title_card` in `main/hud.gui_script` holds
+"SINCE YOU WERE AWAY" and the turn range over the map for a second and a half,
+then `playback_start` runs. Three details it needs:
+
+- **A scrim.** Region names are set large and pale and land exactly where a
+  centred caption does; without something to sit on the two read as one
+  sentence. Each node fades from the alpha it was given, or the scrim brightens
+  to full on its way out.
+- **A relayout must not swallow the replay.** The safe-area insets arrive a
+  couple of hundred milliseconds in - which is exactly when the card is up - so
+  the layout branch fires the pending callback rather than dropping it.
+- **A digest with nothing to animate is left pending**, not listed. The turn
+  card still offers it, in the player's own time.
+
 **The chrome gets out of the way of the thing it describes.** Three rules, each
 of which was learned by watching the interface fail at them:
 
@@ -1236,12 +1253,49 @@ of which was learned by watching the interface fail at them:
   galaxy fits the *window* at fit zoom, the camera is pinned by
   `clamp_position`, and a system under the sheet can never be lifted out.
 
-**A count on the garrison, not a hidden default.** Launching used to send half
-the garrison, silently, with no way to ask for another number - so "take that
-waypoint with twenty" and "commit everything" were both impossible, though
-`launch` has carried an optional `ships` count all along. The sheet's button is
-`LAUNCH`, not `SEND`: `SEND` is the turn commit, and having both on screen in
-the same accent blue was the one genuine ambiguity in the interface.
+**The system sheet is read top to bottom, in the order a player thinks.** It was
+rebuilt from a playtest whose verdict was "way too incomprehensible", and every
+rule below came out of one specific thing on it that could not be read:
+
+| in order | and why |
+|---|---|
+| name, kind, region | what this place is |
+| whose it is | colour on the map says it too, but not who |
+| **the captain standing here** | everything under it reads differently with one |
+| what it takes to capture | see below |
+| SHIPYARD | what can be bought, and with what |
+| UPGRADES | what it can be built into |
+
+- **A number needs a sentence, not a label.** "DEFENDS AT / Fortification 9" was
+  a heading and a number with no verb between them. Your own world now says
+  "Takes 21 to capture" - the same number, as the thing an enemy has to beat.
+  Somebody else's keeps the two comparisons, because those *are* combat, and
+  spells them out: "to take it, you need 16 against its defences - you bring
+  only 6".
+- **The two halves of a fight get an icon each, everywhere.** "1 vs walls 1 vs
+  ships" is a sentence a player parses three times over on one card and cannot
+  scan at all. `draw_halves` in `main/hud.gui_script` draws a shield and a hull
+  instead, and the unit rows, the captain, the rival contact and the target are
+  all measured in the same two marks.
+- **Buying is a stepper, not a row you tap.** Tapping a row added one and there
+  was no way to take one back short of dropping the whole order. `−  n  +` says
+  both what it does and that there is a number here to change - and it is 60
+  design units, because the 44 it started at is 25 dp, which is a target you
+  have to aim at.
+- **Both controls grey out for their own reason.** `+` when the purse, the
+  berths or the hold cannot take another; `−` at zero. A disabled control that
+  still animates a press is indistinguishable from a broken one, which is what
+  `ui.icon_button`'s `set_enabled` exists for.
+- **The unit names say what the unit is for.** They were Line, Lance and Siege,
+  which mean something only to somebody who already knows the rule. Escort,
+  Interceptor and Bombard say which one to buy for what. A hold in storage is
+  keyed by id, so `units.normalise` carries the old keys across - without that
+  every captain in flight comes back empty, and nobody notices until their army
+  has quietly evaporated.
+- **`SHEET_MAX` is a real ceiling, not a guess.** The sheet has no scroll, so
+  content past it is drawn over the order bar. A capital with an embarkation
+  staged, four things it could be built into and a captain on it is ~930 units;
+  the cap is 960. Adding a row to this sheet means checking that sum.
 
 **The map has three interactive layers.** The *system sheet* is rebuilt whenever
 the selection changes, because its content varies enormously — a waypoint you

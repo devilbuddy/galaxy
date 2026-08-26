@@ -261,13 +261,13 @@ end
 print("an army is aimed, not just large")
 do
 	local hold = units.empty()
-	hold.line, hold.lance, hold.siege = 4, 3, 2
-	check("line counts the same against both",
-		units.by_id("line").fortification == units.by_id("line").fleet)
-	check("lance is for ships", units.by_id("lance").fleet
-		> units.by_id("lance").fortification)
-	check("siege is for walls", units.by_id("siege").fortification
-		> units.by_id("siege").fleet)
+	hold.escort, hold.interceptor, hold.bombard = 4, 3, 2
+	check("an escort counts the same against both",
+		units.by_id("escort").fortification == units.by_id("escort").fleet)
+	check("an interceptor is for ships", units.by_id("interceptor").fleet
+		> units.by_id("interceptor").fortification)
+	check("a bombard is for walls", units.by_id("bombard").fortification
+		> units.by_id("bombard").fleet)
 	check("so the same hold is worth different amounts to each",
 		units.power(hold, units.FORTIFICATION) ~= units.power(hold, units.FLEET),
 		units.power(hold, units.FORTIFICATION) .. " vs "
@@ -281,24 +281,30 @@ do
 		return true
 	end)())
 
-	check("the line is what dies first", (function()
+	check("the escort is what dies first", (function()
 		local h = units.empty()
-		h.line, h.lance, h.siege = 2, 2, 2
+		h.escort, h.interceptor, h.bombard = 2, 2, 2
 		units.strip(h, 3)
-		return h.line == 0 and h.lance == 1 and h.siege == 2
+		return h.escort == 0 and h.interceptor == 1 and h.bombard == 2
 	end)())
 	check("and a hold that runs out simply runs out", (function()
 		local h = units.empty()
-		h.line = 1
+		h.escort = 1
 		units.strip(h, 9)
 		return units.count(h) == 0
 	end)())
 
 	-- A round trip flattens a sparse table; the hold has to come back dense.
 	check("a hold survives storage", (function()
-		local back = units.normalise({ line = "3", siege = 2.9, nonsense = 5 })
-		return back.line == 3 and back.siege == 2 and back.lance == 0
+		local back = units.normalise({ escort = "3", bombard = 2.9, nonsense = 5 })
+		return back.escort == 3 and back.bombard == 2 and back.interceptor == 0
 			and back.nonsense == nil
+	end)())
+	-- The three were renamed once. A hold in storage is keyed by id, so a
+	-- captain in flight would otherwise come back empty.
+	check("and a hold written under the old names still arrives", (function()
+		local back = units.normalise({ line = 2, lance = 1, siege = 3 })
+		return back.escort == 2 and back.interceptor == 1 and back.bombard == 3
 	end)())
 end
 
@@ -312,11 +318,11 @@ do
 
 	-- Guns only: fine against the walls, useless against a fleet.
 	captain.units = units.empty()
-	captain.units.siege = 6
+	captain.units.bombard = 6
 	s.captains[2].at = target
 	s.captains[2].level = rules.commander_max_level
 	s.captains[2].units = units.empty()
-	s.captains[2].units.lance = 8
+	s.captains[2].units.interceptor = 8
 
 	local ev = res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1, route = { target } },
@@ -353,7 +359,7 @@ do
 		return nil, captain
 	end
 
-	local overwhelming = assault({ siege = 8, line = 4 }, false)
+	local overwhelming = assault({ bombard = 8, escort = 4 }, false)
 	check("an overwhelming assault is reported", overwhelming ~= nil)
 	check("and runs in exchanges, not turns",
 		overwhelming and #overwhelming.exchanges >= 1
@@ -363,7 +369,7 @@ do
 	for _, n in pairs(overwhelming.lost) do spent = spent + n end
 	check("overwhelming force is cheap", spent <= 2, spent)
 
-	local even = assault({ line = 5 }, true)
+	local even = assault({ escort = 5 }, true)
 	if even then
 		local cost = 0
 		for _, n in pairs(even.lost) do cost = cost + n end
@@ -377,8 +383,8 @@ do
 
 	-- The guarantee the whole design rests on.
 	check("a fight the sheet said was winnable is one you survive", (function()
-		for _, hold in ipairs({ { line = 3 }, { line = 1, siege = 2 },
-			{ siege = 4 }, { line = 6, lance = 2, siege = 2 } }) do
+		for _, hold in ipairs({ { escort = 3 }, { escort = 1, bombard = 2 },
+			{ bombard = 4 }, { escort = 6, interceptor = 2, bombard = 2 } }) do
 			local battle, captain = assault(hold, true)
 			if battle and commanders.carried(captain) < 0 then return false end
 		end
@@ -455,7 +461,7 @@ do
 	-- empty attacker would simply be turned back.
 	local target = GALAXY.adjacency[s.captains[1].at][1]
 	s.systems[target].owner = 2
-	s.captains[1].units = units.normalise({ line = 6, lance = 4 })
+	s.captains[1].units = units.normalise({ escort = 6, interceptor = 4 })
 	s.captains[2].at = target
 	s.captains[2].units = units.empty()
 	s.captains[2].level = 3
@@ -531,16 +537,16 @@ do
 	local before_stock = s.systems[capital].stock
 	local ev = res.turn(GALAXY, s, {
 		{ player = 1, kind = "resupply", captain = captain.id,
-		  units = { line = 2, siege = 1 } },
+		  units = { escort = 2, bombard = 1 } },
 	}, LENGTHS)
 	local bought
 	for i = 1, #ev do if ev[i].kind == "resupplied" then bought = ev[i] end end
 	check("a captain on its own colony loads the mix it asked for",
 		bought and bought.units == 3, bought and bought.units)
 	check("and it is the mix, not just the count",
-		bought and bought.took.line == 2 and bought.took.siege == 1)
+		bought and bought.took.escort == 2 and bought.took.bombard == 1)
 	check("the hold is what it loaded",
-		captain.units.line == 2 and captain.units.siege == 1)
+		captain.units.escort == 2 and captain.units.bombard == 1)
 	check("guns are worth more against walls than against ships",
 		commanders.power(captain, mods, units.FORTIFICATION)
 			> commanders.power(captain, mods, units.FLEET))
@@ -551,7 +557,7 @@ do
 		s.systems[capital].stock == before_stock - 3 + accrued,
 		s.systems[capital].stock)
 	check("and the purse paid catalogue prices",
-		bought.cost == 2 * units.by_id("line").cost + units.by_id("siege").cost,
+		bought.cost == 2 * units.by_id("escort").cost + units.by_id("bombard").cost,
 		bought.cost)
 
 	-- Rank does not cap what a captain carries; it sets where they start.
@@ -574,7 +580,7 @@ do
 		prepare(s, captain)
 		local ev = res.turn(GALAXY, s, {
 			{ player = 1, kind = "resupply", captain = captain.id,
-			  units = { line = 4 } },
+			  units = { escort = 4 } },
 		}, LENGTHS)
 		for i = 1, #ev do
 			if ev[i].kind == "resupplied" then return "bought", ev[i] end
@@ -707,7 +713,7 @@ do
 		commanders.base_strength({ level = 1 }, mine) .. " vs " .. defence)
 	check("but can once they have loaded enough guns", (function()
 		local full = { level = 1, units = units.empty() }
-		full.units.siege = commanders.max_units(full, mine)
+		full.units.bombard = commanders.max_units(full, mine)
 		return commanders.power(full, mine, units.FORTIFICATION) >= defence
 	end)())
 end
@@ -1053,7 +1059,7 @@ do
 			-- the bot has not got.
 			if fortify then u.systems[n].buildings = { "bastion" } end
 		end
-		u.captains[2].units = units.normalise({ line = 4, siege = 4 })
+		u.captains[2].units = units.normalise({ escort = 4, interceptor = 4 })
 		u.players[2].supply = 0
 		return u, bots.all_orders(GALAXY, u)
 	end
