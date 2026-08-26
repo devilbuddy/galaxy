@@ -45,10 +45,17 @@ return {
 	-- no dice, and nothing to misjudge - which is the only way an attack can be
 	-- a decision rather than a gamble in a game checked twice a day.
 	-- What the officer brings on their own, before anything is bought. It is
-	-- never spent below - a broken captain reforms with their own command and
-	-- nothing else.
-	captain_strength = 12,
-	strength_per_level = 3,
+	-- never *spent* - a battle takes units, and an officer with none loses
+	-- nothing - which is precisely why it has to stay small.
+	--
+	-- It was 12 and +3 a level, and that made an army optional: a level-four
+	-- officer's own command out-fought any colony on the map and could do it
+	-- again every turn, for ever, at no cost at all. Six and +1 keeps a bare
+	-- captain able to walk into empty space and take a waypoint or an outpost -
+	-- which is what early expansion is - while a colony at 9 needs something
+	-- aboard and a capital at 21 needs a real army.
+	captain_strength = 6,
+	strength_per_level = 1,
 
 	-- And how many bought units they can lead on top of that. **Rank must not
 	-- cap what a captain can carry**, only what they start with: capping the

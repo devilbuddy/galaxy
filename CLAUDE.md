@@ -285,9 +285,16 @@ pays less, which is where composition earns its keep.
 | | |
 |---|---|
 | `rules.defence` | `waypoint 2, outpost 5, colony 9`, plus `capital_defence 12` |
-| `rules.captain_strength` | 12 at level one, `+3` a level |
+| `rules.captain_strength` | 6 at level one, `+1` a level - see below |
 | `rules.exchange_depth` | how drawn-out an even fight is |
 | `rules.shield_per_levels` | what a captain's own rank absorbs each exchange |
+
+**An officer's own command is deliberately small.** It is never *spent* - a
+battle takes units, and a captain with none loses nothing - so at 12 and `+3` a
+level a level-four officer out-fought any colony on the map and could do it again
+every turn, for ever, at no cost. Six and `+1` keeps a bare captain able to sweep
+empty terrain, which is what early expansion is, while a colony at 9 needs
+something aboard and a capital at 21 needs a real army.
 
 **The captain's shield only ever reduces losses, never the outcome.** That is
 what makes it safe to have at all: a veteran wins the same fights and comes out
@@ -1078,6 +1085,37 @@ and it is capped at the forty turns `MAX_DIGEST_TURNS` will actually send,
 because a game left for a month sits on turn 166 and offering "166 new turns"
 promises a read the player cannot have.
 
+### One battle, exchange by exchange
+
+`main/screens/battle.gui_script` is the receipt for a fight, opened from the
+digest's battle rows or from the playback's SEE THE FIGHT. Only *your* battles:
+somebody else's is a line in a list, because you were not there to count their
+exchanges.
+
+**It is not a reveal.** The sheet's two comparisons said the fight was winnable
+before the order was given, and a captain that cannot beat both halves does not
+attack - so the screen answers "what did it cost", which in an asynchronous game
+is the part that decides the next turn.
+
+**It does not draw ships manoeuvring.** The mock-up it was built from has a
+tactical map; there is no spatial simulation inside a battle - exchanges are a
+trade of damage, not positions - so formations moving would be the first thing in
+this project that shows a player something the game does not know. Two facing
+columns that *thin out* instead: your hold unit by unit, because it is yours and
+you know it in detail, and theirs as a wall and a name, because that is all a
+rival ever shows you.
+
+`playback.battle` winds the exchanges backwards from the hold the fight ended
+with, which is exact for the same reason the digest rewind is: the log records
+what was lost, so it is reversible. `tools/test_playback.lua` checks the rewind
+lands on the recorded hold, that a hold only ever thins, and that what went in
+equals what was lost plus what came out.
+
+**The `hold` on a `battle` event is a snapshot, taken at the moment.** It was
+`captain.units` - the live table - so a captain that marched on and loaded at a
+colony before the turn was serialised left the event reporting the hold it ended
+the *turn* with, and the screen unwound its exchanges from the wrong end.
+
 ### Watching the turn, not reading it
 
 **The digest plays back on the map.** A list of forty turns is a changelog; what
@@ -1608,10 +1646,9 @@ The game is a foundation being built back up, so most of what is missing is
 missing on purpose. These are the things that are *not* on that plan, or that
 will bite whoever touches them.
 
-- **A battle has no screen of its own yet.** The resolver records every
-  exchange - what was lost in each, and what the officer's own command absorbed -
-  and the turn digest states them in a sentence. Nothing animates them. That is
-  the battle-summary screen, and it is the last step of the plan.
+- **The battle screen has only been seen on a one-exchange fight.** It renders
+  and reads correctly, and the reconstruction behind it is exactly tested, but a
+  multi-exchange log and a hold with pips in it have not been eyeballed.
 - **Nothing is ever lost at the border.** A captain that cannot beat both halves
   does not attack, so there are no failed assaults - only battles that were not
   started. That keeps the sheet's arithmetic honest but means the map has no

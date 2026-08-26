@@ -1039,18 +1039,21 @@ do
 	-- Fenced in by somebody else's ground. It used to have no answer to this at
 	-- all and would simply stop for the rest of the game, which is most of what
 	-- made the old skeleton unresolvable.
+	-- **With an army aboard.** An officer's own command is deliberately too
+	-- small to crack a colony now, so a bare captain being fenced in is the
+	-- correct outcome rather than a bug - the test has to hand it the thing the
+	-- economy exists to provide.
 	local function fenced_game(fortify)
 		local u = new_game(2)
 		u.players[2].bot = true
 		local cap = u.players[2].capital
 		for _, n in ipairs(GALAXY.adjacency[cap]) do
 			u.systems[n].owner = 1
-			-- A wall a fresh officer's own command cannot breach, so the only
-			-- way through is an army the bot has not got.
-			if fortify and systems.is_colony(GALAXY, n) then
-				u.systems[n].buildings = { "bastion" }
-			end
+			-- A wall no army this size can breach, so the only way out is one
+			-- the bot has not got.
+			if fortify then u.systems[n].buildings = { "bastion" } end
 		end
+		u.captains[2].units = units.normalise({ line = 4, siege = 4 })
 		u.players[2].supply = 0
 		return u, bots.all_orders(GALAXY, u)
 	end

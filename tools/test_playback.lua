@@ -147,6 +147,89 @@ do
 	end)())
 end
 
+print("a battle, unwound")
+do
+	local units = require("galaxy.sim.units")
+	-- Play until a real battle turns up, so the shape under test is one the
+	-- resolver actually produces rather than one written to suit the test.
+	local state = new_game(4)
+	local battle
+	for _ = 1, 120 do
+		local produced = res.turn(GALAXY, state,
+			bots.all_orders(GALAXY, state), LENGTHS)
+		for i = 1, #produced do
+			if produced[i].kind == "battle" and #produced[i].exchanges > 1
+				and not battle then
+				battle = produced[i]
+			end
+		end
+		if battle then break end
+	end
+	check("a battle with more than one exchange happens", battle ~= nil)
+
+	local frames = playback.battle(battle, units.CATALOGUE)
+	check("a frame per exchange", #frames == #battle.exchanges,
+		#frames .. " vs " .. #battle.exchanges)
+
+	-- The last frame minus its own losses has to be what the captain came out
+	-- with, or the rewind has drifted.
+	local last = frames[#frames]
+	local ends = {}
+	for i = 1, #units.CATALOGUE do
+		local id = units.CATALOGUE[i].id
+		ends[id] = last.hold[id] - (last.lost[id] or 0)
+	end
+	local drift = nil
+	for i = 1, #units.CATALOGUE do
+		local id = units.CATALOGUE[i].id
+		if ends[id] ~= (battle.hold[id] or 0) then drift = id end
+	end
+	check("winding back through the losses lands on the hold it ended with",
+		drift == nil, drift)
+
+	check("and it only ever thins out", (function()
+		for e = 2, #frames do
+			for i = 1, #units.CATALOGUE do
+				local id = units.CATALOGUE[i].id
+				if frames[e].hold[id] > frames[e - 1].hold[id] then return false end
+			end
+		end
+		return true
+	end)())
+
+	check("the first frame is what went in", (function()
+		local went_in = 0
+		for i = 1, #units.CATALOGUE do
+			went_in = went_in + frames[1].hold[units.CATALOGUE[i].id]
+		end
+		local lost = 0
+		for _, n in pairs(battle.lost) do lost = lost + n end
+		local came_out = 0
+		for _, n in pairs(battle.hold) do came_out = came_out + n end
+		return went_in == lost + came_out
+	end)(), "went in should be lost + came out")
+
+	check("an event with no exchanges yields no frames",
+		#playback.battle({}, units.CATALOGUE) == 0)
+
+	-- The hold on the event has to be a snapshot. It used to be the captain's
+	-- live table, so a captain that marched on and loaded at a colony before
+	-- the turn was serialised left the battle reporting the hold it ended the
+	-- *turn* with - and the screen unwound its exchanges from the wrong end.
+	check("the hold on the event is a snapshot, not the captain's own table",
+		(function()
+			local before = 0
+			for _, n in pairs(battle.hold) do before = before + n end
+			-- Play on. If `hold` were live this would drift.
+			for _ = 1, 6 do
+				res.turn(GALAXY, state, bots.all_orders(GALAXY, state), LENGTHS)
+			end
+			local after = 0
+			for _, n in pairs(battle.hold) do after = after + n end
+			return before == after
+		end)())
+end
+
 print("through the fog")
 do
 	-- What a player is actually handed: their own projection, and only the

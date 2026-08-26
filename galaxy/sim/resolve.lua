@@ -401,7 +401,13 @@ local function movement(galaxy, state, mods, events)
 					siege = siege, fleet_power = against_fleet,
 					garrison = garrison,
 					exchanges = exchanges, lost = lost,
-					hold = captain.units,
+					-- **A copy, taken now.** `captain.units` is the live table:
+					-- the captain goes on to march, and may load at a colony,
+					-- before the turn is serialised - so the event recorded
+					-- whatever the hold ended the *turn* with rather than what
+					-- came out of the fight, and the battle screen unwound its
+					-- exchanges from the wrong end.
+					hold = units.normalise(captain.units),
 					promoted = (now_rank ~= was_rank) and now_rank or nil,
 				})
 			end

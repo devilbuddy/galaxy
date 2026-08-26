@@ -151,10 +151,11 @@ function M.build(digest, systems)
 					mine = e.kind == "captain_moved",
 				}
 			elseif e.kind == "battle" then
-				step.battles[#step.battles + 1] = {
-					at = e.at, player = e.player, against = e.against,
-					resistance = e.resistance, name = e.name,
-				}
+				-- The whole event, not a summary of it. A battle has a screen
+				-- of its own now, and copying out four fields here meant the
+				-- exchanges - the only thing that screen is *for* - were the
+				-- ones left behind.
+				step.battles[#step.battles + 1] = e
 			end
 		end
 		-- Applied to a copy, because `step.owners` *is* `opening[turn]` and has
@@ -172,6 +173,59 @@ function M.build(digest, systems)
 	for i = 1, #order do apply_turn(final, turns[order[i]]) end
 
 	return steps, final
+end
+
+--- One battle, unwound into the state it was in at each exchange.
+--
+-- The resolver records what was *lost* in every exchange and what the hold
+-- ended with; a screen wants the opposite - what was still standing when each
+-- one began. So this runs the losses backwards from the final hold, which is
+-- exact rather than approximate for the same reason the digest rewind is: the
+-- log is reversible.
+--
+-- An **exchange** is a trade of damage inside one turn. The whole battle
+-- happened during the turn that reported it; there is no game time between the
+-- frames below, and a scrubber over them is scrubbing a single moment.
+--
+-- @param event  a `battle` event
+-- @param types  the unit catalogue, in the order the client draws them
+-- @return frames, oldest first:
+--   hold     what was still aboard when this exchange opened
+--   lost     what it took off
+--   shield   what the officer's own command absorbed
+function M.battle(event, types)
+	local frames = {}
+	if not event or not event.exchanges then return frames end
+
+	local function copy_hold(from)
+		local out = {}
+		for i = 1, #types do
+			local id = types[i].id
+			out[id] = (from and from[id]) or 0
+		end
+		return out
+	end
+
+	-- Wind back from what came out to what went in, newest exchange first.
+	local standing = copy_hold(event.hold)
+	local opening = {}
+	for e = #event.exchanges, 1, -1 do
+		local lost = event.exchanges[e].lost or {}
+		for i = 1, #types do
+			local id = types[i].id
+			standing[id] = standing[id] + (lost[id] or 0)
+		end
+		opening[e] = copy_hold(standing)
+	end
+
+	for e = 1, #event.exchanges do
+		frames[e] = {
+			hold = opening[e],
+			lost = event.exchanges[e].lost or {},
+			shield = event.exchanges[e].shield or 0,
+		}
+	end
+	return frames
 end
 
 --- How long a step should be held on screen, in seconds.

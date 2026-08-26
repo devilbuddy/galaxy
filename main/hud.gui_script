@@ -1205,6 +1205,7 @@ local function build_playback_bar(self, w, h, pad)
 			ui.dot(inner + track_w * at - 3, track_y + 12, 7, ui.WARN)
 		end
 	end
+
 	-- A hit area far taller than the line it scrubs: twelve units is seven dp,
 	-- and the tap target floor is forty-eight.
 	local grab = ui.panel(inner - 10, track_y + 22, track_w + 20, 56, ui.CLEAR)
@@ -1240,6 +1241,27 @@ local function build_playback_bar(self, w, h, pad)
 			end
 			self.pb_layout = nil
 		end, { size = ui.CAPS })
+
+	-- **A fight of yours on this turn opens its own screen.** The amber ticks
+	-- on the track were already pointing at these; a separate control elsewhere
+	-- would be a second way of saying the same thing. Somebody else's battle is
+	-- a line in the digest and nothing more - you were not there to count their
+	-- exchanges.
+	local mine_here = nil
+	for i = 1, #step.battles do
+		if step.battles[i].player == p.you and step.battles[i].exchanges then
+			mine_here = step.battles[i]
+		end
+	end
+	if mine_here then
+		ui.button(self.pb_druid, inner + size + 12 + 96 + 12, row_y, 220, size,
+			"SEE THE FIGHT",
+			function()
+				p.playing = false
+				monarch.show(hash("battle"), nil,
+					{ battle = mine_here, you = p.you })
+			end, { size = ui.CAPS })
+	end
 
 	local done_w = 150
 	ui.button(self.pb_druid, w - pad.right - 22 - done_w, row_y, done_w, size,
