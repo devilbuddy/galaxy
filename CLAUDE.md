@@ -1085,6 +1085,28 @@ and it is capped at the forty turns `MAX_DIGEST_TURNS` will actually send,
 because a game left for a month sits on turn 166 and offering "166 new turns"
 promises a read the player cannot have.
 
+### Getting at the one-shot screens
+
+Two screens are one-shot **by design**, which is right for playing and wrong for
+looking at them: a turn digest marks itself read the moment it is opened, and a
+battle screen needs a battle — which needs an army, a target and several turns of
+economy first.
+
+`main/dev.lua` is the back door, gated on `sys.get_engine_info().is_debug` — the
+same gate the automation bridge uses, so none of it reaches a release build. The
+lobby grows two buttons:
+
+- **REPLAY DIGESTS** clears every read marker (`seen.forget`), so every game
+  replays its whole window again.
+- **SAMPLE BATTLE** opens the battle screen on a hand-written fight. Its numbers
+  are self-consistent — what went in equals what was lost plus what came out — so
+  `playback.battle` unwinds it exactly the way it unwinds a real one, and the
+  screen exercises its own arithmetic rather than being handed a picture.
+
+It paid for itself on the first tap: the multi-exchange view had never been
+reachable without playing a war first, and opening it surfaced both scrub tracks
+being dead.
+
 ### One battle, exchange by exchange
 
 `main/screens/battle.gui_script` is the receipt for a fight, opened from the
@@ -1329,6 +1351,13 @@ liability. Turning it off is the supported switch, not a workaround.
   a row button being created and Druid's first update over it — which an async
   `game.list` response lands in whenever two arrive close together. The empire screen's tab body and
   the HUD's system sheet each own one.
+- **A Druid click callback carries no touch position.** It is
+  `on_click:trigger(context, params, button)` — the third argument is the button
+  component, so reading `event.x` off it gets nil and the handler quietly does
+  nothing. Anything that needs to know *where* a control was touched, like a
+  scrub track, must have the position kept for it by `on_input`. Both scrubbers
+  in this project were written the wrong way and did nothing at all, silently,
+  from the day they were added.
 - **Never return `druid:on_input`'s verdict verbatim from a scene that shares
   input with the world.** Druid reports a touch as handled whenever one of its
   hover components tracked it, which is *every* touch anywhere on screen. The
@@ -1637,6 +1666,12 @@ python3 tools/drive.py tapstar "Rigel VI"
 **Select by meaning, never by coordinates.** Hardcoded taps rot: RESUME moved the
 moment the lobby held seven games, and a stale constant silently clicks nothing.
 
+**`tap` takes framebuffer pixels, top-down — and the editor's window changes size
+between runs.** Half a session's worth of "the button did not respond" was
+coordinates computed against a framebuffer that had been 1440×2560 two builds ago
+and was 1440×2102 by the time they were used. Re-read the size from a fresh
+screenshot every time rather than carrying one forward.
+
 **`main/automation.lua` exists because the bridge's own GUI bounds are the wrong
 space here.** It reports node positions against Defold's *configured* display,
 and this project renders through a GUI projection the render script builds
@@ -1666,9 +1701,10 @@ The game is a foundation being built back up, so most of what is missing is
 missing on purpose. These are the things that are *not* on that plan, or that
 will bite whoever touches them.
 
-- **The battle screen has only been seen on a one-exchange fight.** It renders
-  and reads correctly, and the reconstruction behind it is exactly tested, but a
-  multi-exchange log and a hold with pips in it have not been eyeballed.
+- **The debug strip in the lobby is a back door, not a feature.** `main/dev.lua`
+  gates it on `sys.get_engine_info().is_debug`, so it costs a release build
+  nothing — but it is the thing most likely to be deleted wholesale one day, and
+  it should come out in one piece when it is.
 - **Nothing is ever lost at the border.** A captain that cannot beat both halves
   does not attack, so there are no failed assaults - only battles that were not
   started. That keeps the sheet's arithmetic honest but means the map has no
