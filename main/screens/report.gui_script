@@ -221,8 +221,8 @@ local function build(self, data)
 	local pad = ui.inset()
 	local card_w = w - pad.left - pad.right
 
-	-- Newest last is how the log arrives and how it reads, so a trim has to
-	-- drop the *oldest*.
+	-- Newest last is how the log *arrives*, whatever order it is displayed in
+	-- below, so a trim still has to drop from the front.
 	local events, dropped = all_events, 0
 	if #all_events > MAX_ROWS then
 		events = {}
@@ -230,10 +230,21 @@ local function build(self, data)
 		for i = dropped + 1, #all_events do events[#events + 1] = all_events[i] end
 	end
 
+	-- Two orderings, and they are not the same one.
+	--
+	-- **Turns run newest first.** A digest is read from the top and the reader
+	-- has just come back to it, so the first thing on screen has to be the most
+	-- recent turn - not the oldest one in a forty-turn window they have to
+	-- scroll past to find out what happened last night.
+	--
+	-- **Events inside a turn keep the order they happened in.** They are a
+	-- sequence - a captain sets out, is turned back - and reversing them within
+	-- the turn would make each one read as the cause of the one above it.
+	--
 	-- The resolver appends each turn's summary *after* that turn's events (it is
 	-- written in the aftermath phase), so read top-down the log said "fleet out
 	-- of fuel" and only then "TURN 544" - the heading closed a turn instead of
-	-- opening it. Regroup so a turn's heading comes first.
+	-- opening it. Regroup so a turn's heading still opens its own group.
 	local order, groups = {}, {}
 	for i = 1, #events do
 		local turn = events[i].turn or 0
@@ -248,7 +259,7 @@ local function build(self, data)
 			rest[#rest + 1] = events[i]
 		end
 	end
-	table.sort(order)
+	table.sort(order, function(a, b) return a > b end)
 	local ordered = {}
 	for i = 1, #order do
 		local g = groups[order[i]]
