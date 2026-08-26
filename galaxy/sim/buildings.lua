@@ -27,6 +27,19 @@
 -- not an errand, and requiring an officer to stand there would make the whole
 -- economy hostage to one captain's touring speed.
 --
+-- **`every` is the single most load-bearing number in the economy**, and it was
+-- measured rather than argued. Twenty seeds at four players: at every-other-turn
+-- the median game ran 181 turns and every surviving player finished sitting on
+-- ~8,300 supply they could not spend; at every turn it is 128 and ~2,500.
+-- Halving the *prices* instead moved the median the wrong way and raised the
+-- idle pile to 8,800 - money was never the constraint, throughput was.
+--
+-- That reverses an older rule, which said making stock accrue every turn was
+-- worse than either cadence and left seeds running past 1500 turns. It was
+-- true, of a pooled stock that every colony got for free. Once production is
+-- gated behind a building you spend an order and a slot on, "every turn" only
+-- means the colonies somebody actually developed.
+--
 -- Ordered, never keyed: `pairs` order is unspecified and both runtimes have to
 -- agree on what a turn contained.
 
@@ -42,7 +55,7 @@ M.CATALOGUE = {
 		cost = 60,
 		makes = "escort",
 		ready = 2,          -- how many accumulate, at most
-		every = 2,          -- and how often another does, in turns
+		every = 1,          -- and how often another does, in turns
 	},
 	{
 		id = "interceptor_bay",
@@ -51,7 +64,7 @@ M.CATALOGUE = {
 		cost = 140,
 		makes = "interceptor",
 		ready = 2,
-		every = 3,
+		every = 1,
 	},
 	{
 		id = "foundry",
@@ -60,7 +73,7 @@ M.CATALOGUE = {
 		cost = 160,
 		makes = "bombard",
 		ready = 2,
-		every = 3,
+		every = 1,
 	},
 	{
 		id = "bastion",

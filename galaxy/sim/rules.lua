@@ -102,7 +102,15 @@ return {
 	-- within a percent of what it was. What changes is not how much an empire
 	-- earns but what it is worth going to get - a colony now averages 4.7 a
 	-- turn and an outpost 3.2, and the road between them averages nothing.
-	supply_yield = { waypoint = 0, outpost = 2.5, colony = 4 },
+	--
+	-- **The rates are what stops supply being meaningless by the midgame.**
+	-- Every sink in this game is capped - four slots a colony, six units in a
+	-- garrison, two of a type ready at a time - so income that outruns them
+	-- just piles up. At 4 and 2.5 a four-player game ended with each surviving
+	-- player holding ~2,500 supply they could not spend; at 2.5 and 1.5 it is
+	-- ~415, and the median game is *faster* rather than slower. Money running
+	-- out is what keeps the economy a decision all game.
+	supply_yield = { waypoint = 0, outpost = 1.5, colony = 2.5 },
 
 	-- What a player's capital pays on top of its own yield.
 	--

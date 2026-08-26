@@ -377,8 +377,8 @@ has to walk there.
 | | pays | builds |
 |---|---|---|
 | waypoint | **nothing** | — |
-| outpost | by `industry`, ~3.2 | — |
-| colony | by `industry`, ~4.7 | only what it has dwellings for |
+| outpost | by `industry`, ~2 | — |
+| colony | by `industry`, ~3 | only what it has dwellings for |
 | a capital, on top | `rules.capital_yield` | |
 
 **Road pays nothing, because the map had already decided that.**
@@ -389,19 +389,12 @@ the rest of the game, in a design whose whole point is that "systems owned" is a
 poor measure. Colonies are towns, outposts are mines, the lane between them is
 road.
 
-**It is a redistribution, not a cut.** Measured across five seeds, waypoints
-were 45% of the systems and 22% of the income; at these rates whole-galaxy
-income lands within a percent of what it was. What changed was not how much an
-empire earns but what is worth going to get — and the pacing shows exactly that.
-Ten seeds, four players, before and after:
-
-| | median | range |
-|---|---|---|
-| before | 134 | 83–182 |
-| after | 143 | **106–182** |
-
-The median barely moved; the *fast* outliers went. An 83-turn game was somebody
-snowballing on cheap road, and expansion into empty space no longer compounds.
+It began as a pure redistribution — waypoints were 45% of the systems and 22%
+of the income, and moving that onto the other two left whole-galaxy income
+within a percent of where it was. **The sweep then took a third of it away**,
+and the game got faster. See the pricing sweep below: every sink in this design
+is capped, so income beyond what the sinks can absorb is not wealth, it is a
+number going up.
 
 **The capital's bonus is what makes the opening work.** With road paying
 nothing, a player who has taken two systems and a stretch of lane earns almost
@@ -478,17 +471,53 @@ handing its conqueror an instant army would pay for taking it twice over, so
 `available` is emptied and the garrison dies in the fight that took the world.
 The dwellings do not: they are the prize.
 
-Ten seeds, four players, through the whole redesign:
+#### Pricing it: `tools/sweep.lua`
 
-| | median | range |
-|---|---|---|
-| before any of it | 134 | 83–182 |
-| road pays nothing | 143 | 106–182 |
-| dwellings and garrisons | 159 | 114–261 |
+One variant per process, because the modules are cached and mutating `rules` in
+place leaks into every later run in the same VM. Overrides are assignments -
+`rules.garrison_cap=8`, `foundry.every=2`, `rules.supply_yield.colony=3` - and
+what it reports is deliberately more than how long a game takes:
 
-Slower, because production is gated behind a building and worlds can be walled.
-Prices are still guesses - the dwellings were costed against an economy where
-units were free - and pinning them is a sweep of its own.
+    decided 20/20  median 125  range 71-191  first fight 30  idle 415  built 122
+    raised: berths 767  interceptor_bay 675  foundry 585  bastion 325  admiralty 103
+
+**`idle` is the number that found everything.** It is the supply a surviving
+player is still holding when the game ends, and at the shipped prices it was
+**8,316** - fifty turns of income nobody could spend. Every sink here is capped
+(four slots, six in a garrison, two of a type ready), so past a point the
+economy simply stopped being a decision.
+
+What the sweep established, in order:
+
+- **Money was never the constraint; throughput was.** Halving every dwelling
+  price moved the median the *wrong* way (181 → 167) and pushed idle supply to
+  8,800. Raising the stockpile cap did nothing either. Only the cadence moved
+  it: `every = 1` on all three took the median to 128 and idle to 2,500.
+- **That reverses an older rule** which said every-turn production never
+  decides. True of a pooled stock every colony got free; not true once
+  production is gated behind a building bought with an order and a slot.
+- **Then income came down 38%**, and the game got *faster* again — 125, with
+  idle at 415. Money running out is what keeps the economy a decision all game.
+- **Two prices I expected to be wrong were not.** The Admiralty is reachable —
+  players finish with a median of two to three captains against a ceiling of
+  four — and Bastion gets built. Doubling `bastion_defence` made games *slower*
+  and left more supply idle, so 8 is not a placeholder.
+- **The four-slot cap does bind.** Five slots is ~9 turns faster with less idle
+  supply. Keeping four is a deliberate cost, now a measured one.
+- **The captain ceiling earns its place.** Capping at two rather than four cost
+  9 turns and doubled idle supply — parallel officers are how an empire spends.
+
+Twenty seeds, every player count, before the sweep and after:
+
+| | 2p | 3p | 4p | 6p |
+|---|---|---|---|---|
+| before | 93 | 127 | 181 | 217 |
+| **after** | **92** | **129** | **125** | **170** |
+| idle before | 1313 | 4133 | 8316 | 6308 |
+| **idle after** | **213** | **308** | **415** | **602** |
+
+All twenty decide at every count. That also closes a listed gap: six-player
+games used to need 400–1000 turns and sometimes never got there.
 
 **Rank sets where a captain starts, not what they can carry.** `base_strength`
 is the officer's own command and where a broken one reforms; `max_units` is what
