@@ -2038,7 +2038,9 @@ will bite whoever touches them.
 - **Combat is unverified on a device.** The sim, the server and the full RPC
   round trip are covered, and the desktop client has been driven through a
   battle, but the strength badge, the "N to take" line and the battle rows in
-  the digest have only been seen on desktop.
+  the digest have only been seen on desktop. The *economy* is device-verified —
+  a build → buy → garrison → transfer loop has been driven on hardware through
+  the real RPCs — so what is left unseen there is the fighting.
 - **`drive.py` cannot see the system sheet's own buttons.** The bridge's element
   query returns star labels and the top bar but not the sheet, so those still
   have to be tapped by position. `state` and `tapstar` are unaffected.
