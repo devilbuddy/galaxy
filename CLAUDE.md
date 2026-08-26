@@ -1211,8 +1211,23 @@ liability. Turning it off is the supported switch, not a workaround.
   carefully removed *its* buttons still left those behind, pointing at nodes it
   had just deleted, and the next touch anywhere on screen threw
   `druid/base/hover.lua: Deleted node`. `ui.region(instance, nodes)` finals the
-  instance and *then* deletes the nodes, in that order: a component whose node is
-  already gone throws from its own teardown too. The empire screen's tab body and
+  instance and *then* deletes the nodes, in that order.
+
+  **`druid:remove()` is not an alternative, because it is usually deferred.**
+  `DruidInstance:update` and `:on_input` both set `_is_late_remove_enabled`, and
+  while it is set `remove()` queues the component and returns `false` without
+  touching it. Anything rebuilt from an update, an input callback or an async
+  response — which is all of them — therefore deletes its nodes and leaves the
+  components registered until the *end* of that call. `late_init()` runs before
+  that, pops the still-registered component, and `on_late_init` walks the node's
+  parents looking for a stencil:
+
+      druid/helper.lua:338: Deleted node
+        get_parent → get_closest_stencil_node → button.on_late_init → late_init
+
+  The lobby's game list did exactly this, and the race window is the gap between
+  a row button being created and Druid's first update over it — which an async
+  `game.list` response lands in whenever two arrive close together. The empire screen's tab body and
   the HUD's system sheet each own one.
 - **Never return `druid:on_input`'s verdict verbatim from a scene that shares
   input with the world.** Druid reports a touch as handled whenever one of its

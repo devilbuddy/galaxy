@@ -70,11 +70,20 @@ end
 
 --- Rebuild the list from the last server response.
 local function render_games(self)
-	ui.clear(self.rows)
-	-- Druid components attached to deleted nodes must go too, or they keep
-	-- responding to input against nodes that no longer exist.
-	for i = 1, #self.row_buttons do self.druid:remove(self.row_buttons[i]) end
-	self.row_buttons = {}
+	-- **Its own Druid instance, dropped wholesale.** This used to delete the row
+	-- nodes and *then* remove the components pointing at them, which is the
+	-- inversion `ui.region` exists to prevent: a component whose node is already
+	-- gone throws from its own teardown, and anything after it in the loop stays
+	-- registered. The next `late_init` then walks a deleted node's parents and
+	-- throws `druid/helper.lua: Deleted node` from somewhere with no connection
+	-- to the list at all.
+	--
+	-- It bites here in particular because the list is rebuilt from an async
+	-- response, which can land between a button being created and Druid's first
+	-- update over it - so the component is torn down before it was ever fully
+	-- set up.
+	ui.region(self.rows_druid, self.rows)
+	self.rows_druid = druid.new(self)
 
 	local out = self.rows
 	local function keep(node) out[#out + 1] = node; return node end
@@ -124,7 +133,7 @@ local function render_games(self)
 		local can_start = g.status == "lobby" and #g.players >= 2
 		local running = g.status ~= "lobby"
 		local bw = 210
-		local handle = ui.button(self.druid, w - PAD - bw, y - 56, bw, ui.CONTROL,
+		local handle = ui.button(self.rows_druid, w - PAD - bw, y - 56, bw, ui.CONTROL,
 			running and "RESUME" or "START",
 			function()
 				if running then
@@ -139,7 +148,6 @@ local function render_games(self)
 			end,
 			{ style = "primary", size = ui.CAPS })
 		keep(handle.fill); keep(handle.border); keep(handle.label)
-		if handle.component then self.row_buttons[#self.row_buttons + 1] = handle.component end
 		if not running and not can_start then handle.set_enabled(false) end
 
 		y = y - h - ui.GAP
@@ -164,13 +172,12 @@ local function render_games(self)
 		keep(ui.small(PAD, y - 80, roster_line(g), ui.DIM))
 
 		local bw = 170
-		local handle = ui.button(self.druid, w - PAD - bw, y - 22, bw, ui.CONTROL, "JOIN",
+		local handle = ui.button(self.rows_druid, w - PAD - bw, y - 22, bw, ui.CONTROL, "JOIN",
 			function()
 				monarch.show(hash("setup"), nil, { mode = "join", game = g })
 			end,
 			{ style = "secondary", size = ui.CAPS })
 		keep(handle.fill); keep(handle.border); keep(handle.label)
-		if handle.component then self.row_buttons[#self.row_buttons + 1] = handle.component end
 
 		y = y - h - ui.GAP
 	end
@@ -216,7 +223,6 @@ function init(self)
 	ui.install_druid_picking()
 	self.druid = druid.new(self)
 	self.rows = {}
-	self.row_buttons = {}
 	self.games = {}
 	self.mine = {}
 	self.since_refresh = 0
@@ -253,6 +259,8 @@ function init(self)
 end
 
 function final(self)
+	ui.region(self.rows_druid, self.rows)
+	self.rows_druid = nil
 	self.druid:final()
 end
 
@@ -269,6 +277,7 @@ function update(self, dt)
 	end
 
 	self.druid:update(dt)
+	if self.rows_druid then self.rows_druid:update(dt) end
 	-- A lobby is inherently multiplayer: poll so a second player appearing shows
 	-- up without the first having to prod it.
 	self.since_refresh = self.since_refresh + dt
@@ -289,9 +298,17 @@ end
 function on_input(self, action_id, action)
 	if not self.built then return false end
 	-- Druid hit-tests with the action it is given; it must be in GUI space.
-	return self.druid:on_input(action_id, ui.gui_action(action))
+	local converted = ui.gui_action(action)
+	local handled = self.druid:on_input(action_id, converted)
+	if self.rows_druid and self.rows_druid:on_input(action_id, converted) then
+		handled = true
+	end
+	return handled
 end
 
 function on_message(self, message_id, message, sender)
 	self.druid:on_message(message_id, message, sender)
+	if self.rows_druid then
+		self.rows_druid:on_message(message_id, message, sender)
+	end
 end
