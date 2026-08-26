@@ -72,12 +72,20 @@ local function describe(event, me)
 		}
 
 	elseif kind == "resupplied" then
+		local mix = {}
+		for i = 1, #((store.game_view and store.game_view.units) or {}) do
+			local spec = store.game_view.units[i]
+			local n = (event.took or {})[spec.id] or 0
+			if n > 0 then mix[#mix + 1] = n .. " " .. spec.name end
+		end
 		return {
 			icon = "icon_industry", tone = ui.GOOD,
 			title = (event.name or "A captain") .. " embarked "
-				.. ui.plural(event.units or 0, "unit"),
-			subtitle = string.format("%s for %d supply, now at %d strength",
-				system_name(event.at), event.cost or 0, event.strength or 0),
+				.. (#mix > 0 and table.concat(mix, ", ")
+					or ui.plural(event.units or 0, "unit")),
+			subtitle = string.format("%s for %d supply - %d vs walls, %d vs ships",
+				system_name(event.at), event.cost or 0,
+				event.siege or 0, event.fleet_power or 0),
 		}
 
 	elseif kind == "built" then
@@ -116,10 +124,15 @@ local function describe(event, me)
 		-- player needs to know exactly what it would have taken; without it the
 		-- only way to find out is to try again next turn and be turned back
 		-- again.
+		-- **Which half turned them back**, because that is the whole of what a
+		-- player does next: bring guns, or bring ships.
 		local detail = system_name(event.blocked_by) .. " is held by " .. who
-		if event.resistance then
-			detail = detail .. string.format("  -  %s against %s",
-				tostring(event.strength or 0), tostring(event.resistance))
+		if (event.siege or 0) < (event.fortification or 0) then
+			detail = detail .. string.format("  -  walls %d, brought %d",
+				event.fortification, event.siege)
+		elseif (event.fleet or 0) > 0 then
+			detail = detail .. string.format("  -  ships %d, brought %d",
+				event.fleet, event.fleet_power or 0)
 		end
 		return {
 			icon = "icon_close", tone = ui.WARN,
@@ -139,17 +152,21 @@ local function describe(event, me)
 		for i = 1, #(event.garrison or {}) do
 			local g = event.garrison[i]
 			defended[#defended + 1] = (g.rank and (g.rank .. " ") or "")
-				.. tostring(g.name) .. " (" .. tostring(g.strength) .. ")"
+				.. tostring(g.name) .. " (" .. tostring(g.power) .. ")"
 		end
 		local detail
 		if #defended > 0 then
-			detail = string.format("%s defences and %s",
-				tostring(event.defence or 0), table.concat(defended, ", "))
+			detail = string.format("%s of walls and %s",
+				tostring(event.fortification or 0), table.concat(defended, ", "))
 		else
-			detail = tostring(event.resistance or 0) .. " defences broken"
+			detail = tostring(event.fortification or 0) .. " of walls broken"
 		end
-		if mine and event.strength then
-			detail = detail .. "  -  " .. tostring(event.strength) .. " left"
+		if mine and event.exchanges then
+			local lost = 0
+			for _, n in pairs(event.lost or {}) do lost = lost + n end
+			detail = detail .. string.format("  -  %s, %s lost",
+				ui.plural(#event.exchanges, "exchange"),
+				ui.plural(lost, "unit"))
 		end
 		if event.promoted then
 			detail = detail .. "  -  promoted to " .. event.promoted

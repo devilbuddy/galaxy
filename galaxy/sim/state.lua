@@ -22,6 +22,7 @@ local rules = require("galaxy.sim.rules")
 local races = require("galaxy.sim.races")
 local systems = require("galaxy.sim.systems")
 local commanders = require("galaxy.sim.commanders")
+local units = require("galaxy.sim.units")
 
 local M = {}
 
@@ -180,15 +181,10 @@ function M.add_captain(state, owner, at)
 		-- carries nothing it can compute.
 		level = 1,
 		xp = 0,
-		-- Strength in hand. Left nil rather than filled in, because the ceiling
-		-- depends on the player's race and this is called from places that do
-		-- not have their modifiers; `commanders.strength` reads a missing value
-		-- as full, which is what a newly raised officer is.
-		--
-		-- It no longer comes back on its own. A captain that has spent itself
-		-- has to reach a colony with units in stock and an empire that can pay
-		-- for them, which is what turns an economy into a map problem.
-		strength = nil,
+		-- An empty hold. A newly raised officer has their own command and
+		-- nothing aboard; everything else is bought at a colony, which is what
+		-- turns an economy into a map problem.
+		units = units.empty(),
 		at = at,
 		route = {},
 	}
@@ -366,7 +362,12 @@ function M.normalise(state)
 		-- Deliberately allowed to stay nil: `commanders.strength` reads that as
 		-- a full complement, which is what every captain in a game that
 		-- predates strength should come back as.
-		c.strength = tonumber(c.strength)
+		-- The hold, dense and integer again. A record from before types carried
+		-- a single `strength` number instead; there is no honest way to split
+		-- that into three, so it becomes an empty hold and the officer keeps
+		-- their own command.
+		c.units = units.normalise(c.units)
+		c.strength = nil
 		-- Transient: set when an order is read and consumed the same turn in
 		-- the logistics phase. A value that survived a round trip would have a
 		-- captain buying again on a turn nobody asked it to.

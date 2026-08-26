@@ -121,25 +121,37 @@ do
 			and v.captains[1].rank ~= nil and v.captains[1].portrait ~= nil)
 	check("and reports when it arrives, in turns",
 		type(v.captains[1].eta) == "number" and type(v.captains[1].steps) == "number")
-	-- Combat is one visible comparison, so both sides of it have to reach the
-	-- client: what a captain can spend, and what a system costs to take.
-	check("and what it can spend, against what it could spend at full",
-		type(v.captains[1].strength) == "number"
-			and type(v.captains[1].max_strength) == "number")
+	-- Combat is two visible comparisons, so all four numbers have to reach the
+	-- client: what a captain brings to each half, and what each half costs.
+	check("and what it brings to each half of a fight",
+		type(v.captains[1].siege_power) == "number"
+			and type(v.captains[1].fleet_power) == "number")
+	check("with the hold those came from",
+		type(v.captains[1].hold) == "table"
+			and type(v.captains[1].carried) == "number")
 	-- The economy has to reach the client whole, or the sheet cannot price an
 	-- embarkation without re-implementing the rules.
 	check("the purse is on the wire", type(v.supply) == "number", v.supply)
 	check("and what it earns each turn",
 		type(v.rates.income) == "number" and v.rates.income > 0, v.rates.income)
-	check("what a unit costs and what it is worth",
-		type(v.rates.unit_cost) == "number" and type(v.rates.unit_strength) == "number")
+	check("the unit catalogue is on the wire",
+		type(v.units) == "table" and #v.units == 3, v.units and #v.units)
+	check("and every type says what it is worth against each half", (function()
+		for i = 1, #v.units do
+			local spec = v.units[i]
+			if type(spec.cost) ~= "number" then return false end
+			if type(spec.fortification) ~= "number" then return false end
+			if type(spec.fleet) ~= "number" then return false end
+		end
+		return true
+	end)())
 	check("a system says what it pays its owner",
 		type(mine.yield) == "number" and mine.yield > 0, mine.yield)
 	check("and a colony says how many units it has ready",
 		type(mine.stock) == "number", mine.stock)
 	check("a captain says what it can carry as well as what it has",
 		type(v.captains[1].base_strength) == "number"
-			and v.captains[1].max_strength > v.captains[1].base_strength)
+			and v.captains[1].max_units > v.captains[1].carried)
 
 	check("the building catalogue is on the wire",
 		type(v.buildings) == "table" and #v.buildings >= 4, v.buildings and #v.buildings)
@@ -155,12 +167,16 @@ do
 	check("and how many captains are allowed",
 		type(v.rates.captain_cap) == "number" and v.rates.captain_cap >= 1)
 
-	check("a system somebody holds says what it defends at",
-		type(mine.defence) == "number", mine.defence)
-	check("and unclaimed ground says nothing, because there is nothing to take",
+	check("a system somebody holds says what its walls are worth",
+		type(mine.fortification) == "number", mine.fortification)
+	check("and what fleet is standing on it", type(mine.fleet) == "number")
+	check("unclaimed ground says neither, because there is nothing to take",
 		(function()
 			for _, sys in pairs(v.systems) do
-				if (sys.owner or 0) == 0 and sys.defence ~= nil then return false end
+				if (sys.owner or 0) == 0
+					and (sys.fortification ~= nil or sys.fleet ~= nil) then
+					return false
+				end
 			end
 			return true
 		end)())

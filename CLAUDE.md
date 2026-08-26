@@ -218,7 +218,8 @@ game is reconstructable from `(seed, order history)`.
 | `systems.lua` | what kind of place a system is, derived from its star |
 | `races.lua` | the six playable races, as pure modifier bundles |
 | `modifiers.lua` | folds race into the numbers the resolver reads |
-| `commanders.lua` | the named officer: rank, portrait, reach and strength |
+| `commanders.lua` | the named officer: rank, portrait, reach and what they lead |
+| `units.lua` | the three things a colony can put aboard, and what each is for |
 | `bots.lua` | what a bot does with its turn, on the server and in the harness |
 | `state.lua` | opening state, captains, and JSON-round-trip repair |
 | `path.lua` | Dijkstra along lanes; captains never move in straight lines |
@@ -248,33 +249,71 @@ so a route through a chain of empty systems sweeps them all up.
 repelled would mean standing in a system you do not hold; the route is dropped
 rather than held, so a captain never waits on something that may never change.
 
-#### Combat is one comparison, and every number in it is on screen
+#### Whether you win is computed; what it costs is simulated
+
+**Resistance has two halves, and both are public:**
 
 ```
-resistance = the world's own defence + every captain garrisoned on it
+fortification   the world's own, from its star + Bastion + capital
+fleet           whoever is standing on it
 ```
 
-**A captain attacks only when it can win.** If `strength >= resistance` the
-system changes hands, the attacker spends exactly the resistance, and the
-garrison is thrown home. If it cannot, the captain stops at the border exactly
-as it did before combat existed - and the event carries *both numbers*, so the
-player can see what it would have taken.
+**Two comparisons, and both must hold.** Your siege power against the walls,
+your fleet power against the garrison. Beat both and you take it; fail either
+and the captain stops at the border exactly as it did when there was one number,
+with the event naming all four figures so the player can see which half turned
+them back.
 
-There are no failed assaults and no dice. That is deliberate and it is the whole
-design: an attack is ordered twelve hours before it resolves, so if the outcome
-were a gamble - or depended on an arithmetic slip - committing a captain would
-be something a player learns not to do. Everything the comparison needs is
-already on the wire before the order is given: `systems.defence` is derived from
-the star and so is public map data, and a rival captain's **strength is shown,
-not just their rank**, wherever you have eyes on them.
+That is the arithmetic a player does *themselves*, on the sheet, before
+committing a captain to a turn that resolves twelve hours later - which is why
+combat has never needed a forecast, and the property unit types were designed
+around rather than against. No dice: the per-turn RNG stream is still derived
+and nothing rolls it.
 
-The per-turn RNG stream is still derived. Nothing rolls it.
+**The exchanges then distribute the cost.** An *exchange* is a trade of damage
+**inside a single turn** - the whole battle is over before the turn that started
+it finishes and nobody else acts in between. It is not a turn, and the two words
+must never be swapped.
+
+Losses follow Lanchester's linear law: two forces grinding each other in
+proportion leave the winner having lost `D*D/A`. That is not one formula among
+several - it is **provably consistent with the comparison**, because `D*D/A < D
+< A` whenever `A > D`. A player who did the arithmetic and was told they would
+win, wins. A well-composed army also finishes in fewer exchanges and therefore
+pays less, which is where composition earns its keep.
 
 | | |
 |---|---|
 | `rules.defence` | `waypoint 2, outpost 5, colony 9`, plus `capital_defence 12` |
 | `rules.captain_strength` | 12 at level one, `+3` a level |
-| `rules.unit_cost` / `unit_strength` | `20` supply for `2` strength |
+| `rules.exchange_depth` | how drawn-out an even fight is |
+| `rules.shield_per_levels` | what a captain's own rank absorbs each exchange |
+
+**The captain's shield only ever reduces losses, never the outcome.** That is
+what makes it safe to have at all: a veteran wins the same fights and comes out
+of them stronger, without making the sheet's arithmetic a lie.
+
+#### Three types, and an army is aimed rather than large
+
+| | vs fortification | vs fleet | cost |
+|---|---|---|---|
+| **Line** | 1 | 1 | 20 |
+| **Lance** | 1 | 3 | 34 |
+| **Siege** | 3 | 1 | 34 |
+
+Small integers on purpose: a player has to be able to add their hold up in their
+head and compare it against two numbers on the sheet. Anything larger, or
+fractional, and the whole design collapses back into needing a forecast.
+
+**Line dies first**, which is what makes it worth buying - it is the only type
+whose job is to still be there when the shooting stops.
+
+**Composition is chosen at embarkation**, not fixed per colony. A colony holds
+generic berths; the mix is picked when a captain loads, which is when the player
+already knows what they are marching at. Fixing it per colony would be more
+strategic on paper and miserable in practice: with three orders a turn, "my
+Siege is nine lanes from the fortress" is a logistics puzzle rather than a
+decision.
 
 Two consequences worth keeping:
 
@@ -527,7 +566,10 @@ RPCs in `server/modules/game_rpc.lua`:
 
 One order became four. `game.orders` takes `move`, `resupply`, `build` and
 `recruit`; a captain may carry one move and one resupply in a turn, and a colony
-one build.
+one build. A `resupply` carries a **mix**, not a count - and both the RPC's
+cleaning pass and `catch_up`'s rebuild put it through `units.normalise`, because
+this is the third time a widened order shape has been silently flattened by a
+`tonumber` in one of those two places.
 
 **A turn is worth only `rules.orders_per_turn` of them.** Not a safety limit - a
 scarcity. With four captains and a dozen colonies there is always more worth
@@ -1566,9 +1608,14 @@ The game is a foundation being built back up, so most of what is missing is
 missing on purpose. These are the things that are *not* on that plan, or that
 will bite whoever touches them.
 
-- **There are no unit *types*.** A unit is two strength and nothing else, so an
-  army has no shape and a battle stays one comparison. That is the next step,
-  and it is what the battle-summary screen needs before it can exist.
+- **A battle has no screen of its own yet.** The resolver records every
+  exchange - what was lost in each, and what the officer's own command absorbed -
+  and the turn digest states them in a sentence. Nothing animates them. That is
+  the battle-summary screen, and it is the last step of the plan.
+- **Nothing is ever lost at the border.** A captain that cannot beat both halves
+  does not attack, so there are no failed assaults - only battles that were not
+  started. That keeps the sheet's arithmetic honest but means the map has no
+  gambles in it at all, which may eventually be a flatness worth revisiting.
 - **The order allowance is fixed at three and nothing raises it.** It is the
   obvious thing for a fifth building to buy, and the obvious thing to scale with
   empire size; neither exists, so a large empire and a small one get the same

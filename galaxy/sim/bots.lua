@@ -30,6 +30,7 @@ local systems = require("galaxy.sim.systems")
 local commanders = require("galaxy.sim.commanders")
 local modifiers = require("galaxy.sim.modifiers")
 local buildings = require("galaxy.sim.buildings")
+local units = require("galaxy.sim.units")
 
 local M = {}
 
@@ -51,14 +52,16 @@ local CONTESTED_BONUS = 1.5
 local function cost_of(galaxy, state, mods, id)
 	local sys = state.systems[id]
 	local owner = sys.owner
-	local total = systems.defence(galaxy, id, sys.capital_of == owner, mods[owner])
+	local fortification = systems.defence(galaxy, id, sys.capital_of == owner,
+		mods[owner]) + buildings.defence_bonus(sys)
+	local fleet = 0
 	for i = 1, #state.captains do
 		local c = state.captains[i]
 		if c.owner == owner and c.at == id then
-			total = total + commanders.strength(c, mods[owner])
+			fleet = fleet + commanders.power(c, mods[owner], units.FLEET)
 		end
 	end
-	return total
+	return fortification, fleet
 end
 
 --- Walk back up the search tree to the route that reaches `id`.
@@ -99,7 +102,8 @@ end
 -- system the captain can currently afford. Anything dearer than the strength in
 -- hand is not a target at all, because the resolver would simply turn the
 -- captain back at the border and the trip would be wasted.
-local function reachable_targets(galaxy, state, mods, player, from, strength, limit)
+local function reachable_targets(galaxy, state, mods, player, from,
+	siege, fleet_power, limit)
 	local dist = { [from] = 0 }
 	local parent = {}
 	local queue, head = { from }, 1
@@ -120,9 +124,16 @@ local function reachable_targets(galaxy, state, mods, player, from, strength, li
 				elseif owner == player then
 					queue[#queue + 1] = n
 				else
-					local cost = cost_of(galaxy, state, mods, n)
-					if strength >= cost then
-						found[#found + 1] = { id = n, hops = dist[n], cost = cost }
+					-- **Both comparisons, the same two the sheet shows.** A bot
+					-- working from a different sum would march into fights it
+					-- cannot win, which is the exact mistake "never walk into a
+					-- border" was written to stop.
+					local fortification, fleet = cost_of(galaxy, state, mods, n)
+					if siege >= fortification and fleet_power >= fleet then
+						found[#found + 1] = {
+							id = n, hops = dist[n],
+							cost = fortification + fleet,
+						}
 					end
 					-- Too dear: not a road either, so the search stops here.
 				end
@@ -188,6 +199,50 @@ local function on_the_frontier(galaxy, state, player, id)
 	return false
 end
 
+--- What to load, given what is worth attacking from here.
+--
+-- **Composition follows the map.** A bot looks at what its own space borders -
+-- walls or fleets - and buys against whichever it is short of, rather than
+-- filling the hold with whatever is cheapest. Line first regardless, because
+-- something has to be in front.
+local function compose(galaxy, state, mods, player, captain, berths, purse)
+	local walls, ships = 0, 0
+	for id = 1, #galaxy.stars do
+		if state.systems[id].owner == player then
+			local neighbours = galaxy.adjacency[id]
+			for k = 1, #neighbours do
+				local n = neighbours[k]
+				local owner = state.systems[n].owner
+				if owner ~= 0 and owner ~= player then
+					local fortification, fleet = cost_of(galaxy, state, mods, n)
+					walls = walls + fortification
+					ships = ships + fleet
+				end
+			end
+		end
+	end
+
+	local take = units.empty()
+	local spent = 0
+	-- Half the berths to the line, the rest to whichever answer the border
+	-- actually needs. A bot with no border at all is expanding into empty space
+	-- and wants bulk.
+	local line = math.floor(berths / 2)
+	if line < 1 then line = 1 end
+	local second = (ships > walls) and "lance" or "siege"
+	for _, plan in ipairs({ { "line", line }, { second, berths - line } }) do
+		local spec = units.by_id(plan[1])
+		local n = plan[2]
+		local afford = math.floor((purse - spent) / spec.cost)
+		if n > afford then n = afford end
+		if n > 0 then
+			take[plan[1]] = take[plan[1]] + n
+			spent = spent + n * spec.cost
+		end
+	end
+	return take
+end
+
 --- What to spend a surplus on, if anything.
 --
 -- One decision a turn, and only ever with a reserve kept back: a bot that spent
@@ -200,7 +255,7 @@ end
 -- is, and Yards where it is not.
 local function spend(galaxy, state, player)
 	local purse = state.players[player].supply or 0
-	local reserve = RESERVE_UNITS * rules.unit_cost
+	local reserve = RESERVE_UNITS * units.by_id("line").cost
 
 	-- Colonies in id order: `pairs` is unspecified and two runtimes have to
 	-- agree on what this bot did.
@@ -307,10 +362,14 @@ function M.orders(galaxy, state, player)
 		-- would make a bot dither on the spot, and its standing order is
 		-- usually still the best one.
 		if state_mod.is_parked(captain) then
-			local strength = commanders.strength(captain, mods[player])
-			local full = commanders.max_strength(captain, mods[player])
+			local my_mods = mods[player]
+			local siege = commanders.power(captain, my_mods, units.FORTIFICATION)
+			local fleet_power = commanders.power(captain, my_mods, units.FLEET)
+			local room = commanders.room(captain, my_mods)
+			local carried = commanders.carried(captain)
 			local purse = state.players[player].supply or 0
 			local here = state.systems[captain.at]
+			local cheapest = units.by_id("line").cost
 
 			-- **Refit, then go - never both in one turn.** A captain buys where
 			-- it *ends* the turn, so issuing a purchase and a march together
@@ -320,16 +379,10 @@ function M.orders(galaxy, state, player)
 			-- exactly nothing.
 			local busy = false
 			if here.owner == player and (here.stock or 0) > 0
-				and purse >= rules.unit_cost then
-				-- **Only if there is a whole unit's worth of room.** A captain
-				-- one point short of full asks for `floor(1 / 2)` units, which
-				-- is none - and then stands there having spent its turn on an
-				-- order that does nothing, for ever. Every long game ended with
-				-- both survivors' whole rosters doing exactly this.
-				local room = math.floor((full - strength) / rules.unit_strength)
-				local take = math.min(room, here.stock,
-					math.floor(purse / rules.unit_cost))
-				if take > 0 then
+				and purse >= cheapest and room > 0 then
+				local take = compose(galaxy, state, mods, player, captain,
+					math.min(room, here.stock), purse)
+				if units.count(take) > 0 then
 					orders[#orders + 1] = {
 						player = player, kind = "resupply",
 						captain = captain.id, units = take,
@@ -339,9 +392,10 @@ function M.orders(galaxy, state, player)
 			end
 
 			-- Too spent to take anything worth taking, and somewhere to refit:
-			-- go there. Expansion can wait - a captain at half strength is one
+			-- go there. Expansion can wait - a captain at half its berths is one
 			-- that will be turned back at the first thing worth attacking.
-			if not busy and strength * 2 <= full and purse >= rules.unit_cost then
+			if not busy and carried * 2 <= commanders.max_units(captain, my_mods)
+				and purse >= cheapest then
 				local depot, road = nearest_depot(galaxy, state, player, captain.at)
 				if depot and road and #road > 0 then
 					orders[#orders + 1] = {
@@ -353,7 +407,7 @@ function M.orders(galaxy, state, player)
 			end
 
 			local targets = busy and {} or reachable_targets(galaxy, state,
-				mods, player, captain.at, strength, 12)
+				mods, player, captain.at, siege, fleet_power, 12)
 			local best, best_score = nil, nil
 			for t = 1, #targets do
 				-- A little noise so two bots in the same position do not make

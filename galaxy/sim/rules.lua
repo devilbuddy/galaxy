@@ -96,15 +96,44 @@ return {
 	colony_stock_cap = 6,
 	colony_stock_turns = 2,
 
-	-- What a unit is worth in the field, and what it costs to take one on.
+	-- Combat ---------------------------------------------------------------------
+	-- **Whether you win is computed; what it costs is simulated.**
 	--
+	-- Two comparisons decide the first, both integer and both on the sheet: your
+	-- siege power against the world's fortification, and your fleet power
+	-- against whatever fleet is standing on it. Beat both and you take it. That
+	-- is the arithmetic a player does before committing a captain to a turn that
+	-- resolves twelve hours later, and it is why combat has never needed a
+	-- forecast.
+	--
+	-- The **exchanges** then distribute the cost. An exchange is a trade of
+	-- damage *inside* a single turn - the whole battle is over before the turn
+	-- that started it finishes, and nobody else acts in between. It is not a
+	-- turn, and the two words must not be swapped.
+	--
+	-- Losses follow Lanchester's linear law: two forces grinding each other down
+	-- in proportion leave the winner having lost `D*D/A`, so a well-composed
+	-- army both finishes sooner and comes out of it larger. It is also **provably
+	-- consistent with the comparison** - `D*D/A < D < A` whenever `A > D` - so a
+	-- player who did the arithmetic and was told they would win, wins.
+	exchange_depth = 4,       -- how drawn-out an even fight is
+	max_exchanges = 6,        -- and the most a replay will ever have to show
+	-- What a captain's own rank absorbs each exchange before their units take
+	-- anything, as a level divisor. A veteran wins the same fights and comes out
+	-- of them stronger, which is worth more than any single battle - and because
+	-- it only ever reduces losses, it can never flip a fight the player had
+	-- calculated as winnable.
+	shield_per_levels = 2,
+
 	-- Stock deliberately does **not** defend the colony holding it. It did, and
 	-- it nearly doubled what a colony cost to take - which re-froze the map that
 	-- combat had just unfrozen, because defence accumulated for free while an
 	-- attacker had to carry theirs across the galaxy. Fortifying is a choice a
 	-- player makes, not something that happens to a world nobody visited.
-	unit_strength = 2,
-	unit_cost = 20,
+	--
+	-- What a unit is *worth* and what it *costs* now both depend on its type -
+	-- see galaxy/sim/units.lua. A colony's stock is still counted in units of
+	-- any kind, because a berth is a berth.
 
 	-- Orders --------------------------------------------------------------------
 	-- **How many decisions a turn is worth.** Not a safety limit - a scarcity.

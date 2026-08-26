@@ -10,6 +10,7 @@
 
 local rules = require("galaxy.sim.rules")
 local races = require("galaxy.sim.races")
+local units = require("galaxy.sim.units")
 
 local floor = math.floor
 
@@ -189,6 +190,34 @@ function M.max_units(commander, mods)
 	return units
 end
 
+--- What the officer and their hold are worth against one half of a resistance.
+--
+-- `against` is `units.FORTIFICATION` or `units.FLEET`. The officer's own worth
+-- counts towards both - rank is rank, whatever it is pointed at - and the hold
+-- is weighted by type, which is the whole of composition.
+--
+-- This is the number on the sheet, and the number the player adds up
+-- themselves before committing. Every term in it is a small integer for that
+-- reason.
+function M.power(commander, mods, against)
+	return M.base_strength(commander, mods)
+		+ units.power(commander.units, against)
+end
+
+--- Damage the officer's own command absorbs each exchange before the hold does.
+--
+-- Only ever reduces losses, never the outcome, so a veteran wins the same
+-- fights and comes out of them stronger without making the sheet's arithmetic
+-- a lie.
+function M.shield(commander)
+	return floor((commander.level or 1) / rules.shield_per_levels)
+end
+
+--- How many units are aboard.
+function M.carried(commander)
+	return units.count(commander.units)
+end
+
 --- The most strength a captain can hold: their own, plus a full complement.
 --
 -- **Rank does not cap what a captain carries.** It used to - the ceiling was
@@ -201,24 +230,11 @@ end
 -- A whole number, for the same reason `steps` is - the player is expected to do
 -- this arithmetic themselves before committing to an attack, and half a point
 -- of strength is not something anyone can hold in their head.
-function M.max_strength(commander, mods)
-	return M.base_strength(commander, mods)
-		+ M.max_units(commander, mods) * rules.unit_strength
-end
-
---- Strength in hand right now, between the officer's own and a full hold.
---
--- Clamped on read rather than on write: the ceiling moves when a captain is
--- promoted or demoted, and a value stored under the old one would otherwise
--- read as full when it is not, or sit above full forever. A missing value is a
--- newly raised officer, who has their own command and nothing bought.
-function M.strength(commander, mods)
-	local cap = M.max_strength(commander, mods)
-	local have = tonumber(commander.strength)
-	if not have then return M.base_strength(commander, mods) end
-	if have > cap then return cap end
-	if have < 0 then return 0 end
-	return have
+--- Room left in the hold.
+function M.room(commander, mods)
+	local room = M.max_units(commander, mods) - M.carried(commander)
+	if room < 0 then return 0 end
+	return room
 end
 
 --- Everything a client needs to draw one, in one call.
@@ -232,9 +248,13 @@ function M.profile(commander, mods, race)
 		next_xp = (level < rules.commander_max_level)
 			and M.xp_for_level(level + 1) or nil,
 		steps = M.steps(commander, mods),
-		strength = M.strength(commander, mods),
-		max_strength = M.max_strength(commander, mods),
 		base_strength = M.base_strength(commander, mods),
+		-- The two numbers the sheet compares against a target's two halves.
+		siege_power = M.power(commander, mods, units.FORTIFICATION),
+		fleet_power = M.power(commander, mods, units.FLEET),
+		shield = M.shield(commander),
+		hold = commander.units,
+		carried = M.carried(commander),
 		max_units = M.max_units(commander, mods),
 	}
 end

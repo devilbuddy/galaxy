@@ -32,6 +32,7 @@ local regions_mod = require("galaxy.sim.regions")
 local modifiers = require("galaxy.sim.modifiers")
 local systems_mod = require("galaxy.sim.systems")
 local buildings = require("galaxy.sim.buildings")
+local units = require("galaxy.sim.units")
 
 local floor = math.floor
 local min = math.min
@@ -124,10 +125,15 @@ local function captain_orders(galaxy, state, orders, mods, lengths, events, pend
 			if not captain or captain.owner ~= who then
 				reject("no such captain", { captain = order.captain })
 			else
+				-- **A mix, not a count.** Composition is chosen at the moment a
+				-- captain loads, which is when the player already knows what
+				-- they are marching at - not twenty turns earlier at whichever
+				-- colony happened to build it.
+				--
 				-- Recorded rather than acted on: a captain buys where it *ends*
-				-- the turn, so an order can move onto a colony and resupply
-				-- there in one go. Movement has not run yet.
-				captain.buying = math.max(0, floor(tonumber(order.units) or 0))
+				-- the turn, so an order can move onto a colony and load there
+				-- in one go. Movement has not run yet.
+				captain.buying = units.normalise(order.units)
 			end
 
 		elseif order.kind == "move" then
@@ -173,31 +179,101 @@ end
 -- contact they have eyes on. That is what makes the comparison below a decision
 -- rather than a gamble.
 --
--- Returns the total **and its parts**: the world's own resistance, and every
--- officer standing on it by name. Nothing needs the breakdown to decide the
--- battle - the decision is the total - but a fight that reports only a number
--- can never be replayed as anything more than a number, and a battle you can
--- watch is where this is going. Carrying who was there costs a table per fight
--- and is the difference between an event and a scene.
+-- **Two halves, both public, and an army is aimed at one or the other.** The
+-- world's own fortification is derived from the star and whatever has been
+-- built on it; the fleet is whoever is standing there. Returns them separately
+-- because they are separately compared, and the garrison by name because a
+-- fight that reports only numbers can never be replayed as anything more than
+-- numbers.
 local function resistance(galaxy, state, mods, id)
 	local sys = state.systems[id]
 	local owner = sys.owner
-	local world = systems_mod.defence(galaxy, id, sys.capital_of == owner, mods[owner])
-		+ buildings.defence_bonus(sys)
-	local total = world
-	local garrison = {}
+	local fortification = systems_mod.defence(galaxy, id, sys.capital_of == owner,
+		mods[owner]) + buildings.defence_bonus(sys)
+
+	-- A garrison defends; it does not besiege. So a captain standing on a system
+	-- contributes to the *fleet* half only, and a world with nobody on it has no
+	-- fleet half at all.
+	local fleet, garrison = 0, {}
 	for i = 1, #state.captains do
 		local c = state.captains[i]
 		if c.owner == owner and c.at == id then
-			local held = commanders.strength(c, mods[owner])
-			total = total + held
+			local held = commanders.power(c, mods[owner], units.FLEET)
+			fleet = fleet + held
 			garrison[#garrison + 1] = {
 				captain = c.id, name = c.name,
-				rank = commanders.rank(c.level or 1), strength = held,
+				rank = commanders.rank(c.level or 1), power = held,
 			}
 		end
 	end
-	return total, world, garrison
+	return fortification, fleet, garrison
+end
+
+--- Grind a battle out, exchange by exchange, and take what it cost.
+--
+-- **The outcome is already decided** by the two comparisons above - the player
+-- did that arithmetic on the sheet before committing. This settles the other
+-- half: what the captain has left afterwards, and the beats a replay is built
+-- from.
+--
+-- Losses follow Lanchester's linear law. Two forces grinding each other in
+-- proportion leave the winner having lost `D*D/A`, which for `A > D` is always
+-- less than `D` and therefore always less than `A` - so a fight the sheet said
+-- was winnable is one the captain survives. That is not a coincidence to be
+-- checked, it is why this formula and not another.
+--
+-- Each half is fought separately, because each is answered by a different part
+-- of the army: siege power against the walls, fleet power against whoever is
+-- standing on them. A well-composed army finishes both sooner and pays less.
+--
+-- An **exchange** is a trade of damage inside a single turn. It is not a turn:
+-- the whole battle is over before the turn that started it finishes.
+local function fight(captain, siege, fortification, fleet_power, fleet)
+	local function toll(attack, defence)
+		if defence <= 0 or attack <= 0 then return 0 end
+		return floor(defence * defence / attack)
+	end
+
+	local cost = toll(siege, fortification) + toll(fleet_power, fleet)
+	-- How drawn out it was: an even fight goes the distance, an overwhelming
+	-- one is over in a couple of exchanges.
+	local total_defence = fortification + fleet
+	local total_attack = siege + fleet_power
+	local count = 1
+	if total_attack > 0 and total_defence > 0 then
+		count = floor(total_defence * rules.exchange_depth / total_attack) + 1
+	end
+	if count < 1 then count = 1 end
+	if count > rules.max_exchanges then count = rules.max_exchanges end
+
+	-- The officer's own command absorbs its share before the hold does, every
+	-- exchange - which is why a veteran comes out of the same fight stronger.
+	local shield = commanders.shield(captain) * count
+	cost = cost - shield
+	if cost < 0 then cost = 0 end
+
+	local carried = commanders.carried(captain)
+	if cost > carried then cost = carried end
+
+	-- Spread across the exchanges, remainder to the first: a battle reads worst
+	-- at the start, which is when the line is doing its job.
+	local exchanges, lost = {}, units.empty()
+	local left = cost
+	for e = 1, count do
+		local share = floor(left / (count - e + 1))
+		if e == 1 then share = left - floor(left * (count - 1) / count) end
+		if share > left then share = left end
+		left = left - share
+		local removed = units.strip(captain.units, share)
+		local line = {}
+		for k = 1, #units.CATALOGUE do
+			local id = units.CATALOGUE[k].id
+			lost[id] = lost[id] + removed[id]
+			if removed[id] > 0 then line[id] = removed[id] end
+		end
+		exchanges[e] = { lost = line, shield = commanders.shield(captain) }
+	end
+	return exchanges, lost
 end
 
 --- Throw the defenders of a system that has just fallen back to their capital.
@@ -264,21 +340,28 @@ local function movement(galaxy, state, mods, events)
 			local defender = sys.owner
 
 			if defender ~= 0 and defender ~= captain.owner then
-				local cost, world, garrison = resistance(galaxy, state, mods, next_id)
-				local have = commanders.strength(captain, my_mods)
-				if have < cost then
-					-- Stopped *before* entering: a border you cannot cross is
-					-- one you do not stand in. The route is dropped rather than
-					-- held, so a captain never waits on something that may
-					-- never change.
+				local fortification, fleet, garrison =
+					resistance(galaxy, state, mods, next_id)
+				local siege = commanders.power(captain, my_mods, units.FORTIFICATION)
+				local against_fleet = commanders.power(captain, my_mods, units.FLEET)
+
+				-- **Two comparisons, and both must hold.** Siege power against
+				-- the walls, fleet power against whoever is standing on them.
+				-- Failing either stops the captain *before* the border, exactly
+				-- as it did when there was one number: a border you cannot
+				-- cross is one you do not stand in, and the route is dropped
+				-- rather than held so nobody waits on something that may never
+				-- change.
+				if siege < fortification or against_fleet < fleet then
 					captain.route = {}
 					emit(events, {
 						kind = "captain_blocked", turn = state.turn,
 						player = captain.owner, captain = captain.id,
 						name = captain.name, at = captain.at,
 						blocked_by = next_id, held_by = defender,
-						strength = have, resistance = cost,
-						defence = world, garrison = garrison,
+						siege = siege, fortification = fortification,
+						fleet_power = against_fleet, fleet = fleet,
+						garrison = garrison,
 						visible_to = { captain.owner },
 					})
 					break
@@ -294,27 +377,31 @@ local function movement(galaxy, state, mods, events)
 				-- handed its conqueror an instant army would make taking one
 				-- pay for itself twice over.
 				sys.stock = 0
-				captain.strength = have - cost
+
+				local exchanges, lost = fight(captain, siege, fortification,
+					against_fleet, fleet)
+
 				-- Promotion is reported when the *title* changes, not when the
 				-- level does. Ranks span two levels each, so awarding a level
 				-- announced "promoted to Captain" to someone who was already
 				-- a Captain - which reads as the game not knowing what it did.
 				local was_rank = commanders.rank(captain.level or 1)
-				commanders.award(captain, cost)
+				commanders.award(captain, fortification + fleet)
 				local now_rank = commanders.rank(captain.level or 1)
 				sys.owner = captain.owner
 				emit(events, {
 					kind = "battle", turn = state.turn,
 					at = next_id, player = captain.owner, captain = captain.id,
 					name = captain.name, against = defender,
-					rank = now_rank,
-					-- What was brought and what was faced, both broken down.
-					-- The client turns these into a sentence today and will turn
-					-- them into a replay later; the resolver states facts.
-					brought = have, resistance = cost,
-					defence = world, garrison = garrison,
-					strength = captain.strength,
-					level = captain.level,
+					rank = now_rank, level = captain.level,
+					-- What was faced, what was brought, and what it cost -
+					-- exchange by exchange, because a battle that reports only
+					-- its outcome can be listed but never watched.
+					fortification = fortification, fleet = fleet,
+					siege = siege, fleet_power = against_fleet,
+					garrison = garrison,
+					exchanges = exchanges, lost = lost,
+					hold = captain.units,
 					promoted = (now_rank ~= was_rank) and now_rank or nil,
 				})
 			end
@@ -438,15 +525,10 @@ local function logistics(galaxy, state, mods, events)
 		local captain = state.captains[i]
 		local want = captain.buying
 		captain.buying = nil
-		if want and want > 0 then
+		if want and units.count(want) > 0 then
 			local player = state.players[captain.owner]
 			local sys = state.systems[captain.at]
 			local my_mods = mods[captain.owner]
-			local have = commanders.strength(captain, my_mods)
-			local room = commanders.max_strength(captain, my_mods) - have
-			local afford = floor((player.supply or 0) / rules.unit_cost)
-			local take = min(want, sys.stock or 0, afford,
-				floor(room / rules.unit_strength))
 
 			if sys.owner ~= captain.owner then
 				emit(events, {
@@ -454,26 +536,57 @@ local function logistics(galaxy, state, mods, events)
 					player = captain.owner, captain = captain.id,
 					reason = "not your colony", visible_to = { captain.owner },
 				})
-			elseif take <= 0 then
-				emit(events, {
-					kind = "order_rejected", turn = state.turn,
-					player = captain.owner, captain = captain.id,
-					reason = (sys.stock or 0) == 0 and "nothing in stock"
-						or (afford <= 0 and "not enough supply" or "no room aboard"),
-					visible_to = { captain.owner },
-				})
 			else
-				sys.stock = sys.stock - take
-				player.supply = player.supply - take * rules.unit_cost
-				captain.strength = have + take * rules.unit_strength
-				emit(events, {
-					kind = "resupplied", turn = state.turn,
-					player = captain.owner, captain = captain.id,
-					name = captain.name, at = captain.at,
-					units = take, cost = take * rules.unit_cost,
-					strength = captain.strength,
-					visible_to = { captain.owner },
-				})
+				-- Clamped rather than refused, and in catalogue order so a
+				-- player who asked for more than the berth, the purse or the
+				-- hold allows gets as much of the front of their list as fits.
+				-- The event says what actually came aboard.
+				local room = commanders.room(captain, my_mods)
+				local berths = sys.stock or 0
+				local purse = player.supply or 0
+				local taken, spent = units.empty(), 0
+				for k = 1, #units.CATALOGUE do
+					local spec = units.CATALOGUE[k]
+					local n = want[spec.id] or 0
+					if n > room then n = room end
+					if n > berths then n = berths end
+					local afford = floor((purse - spent) / spec.cost)
+					if n > afford then n = afford end
+					if n > 0 then
+						taken[spec.id] = n
+						room = room - n
+						berths = berths - n
+						spent = spent + n * spec.cost
+					end
+				end
+
+				local count = units.count(taken)
+				if count <= 0 then
+					emit(events, {
+						kind = "order_rejected", turn = state.turn,
+						player = captain.owner, captain = captain.id,
+						reason = (sys.stock or 0) == 0 and "nothing in stock"
+							or (commanders.room(captain, my_mods) <= 0
+								and "no room aboard" or "not enough supply"),
+						visible_to = { captain.owner },
+					})
+				else
+					for k = 1, #units.CATALOGUE do
+						local id = units.CATALOGUE[k].id
+						captain.units[id] = (captain.units[id] or 0) + taken[id]
+					end
+					sys.stock = sys.stock - count
+					player.supply = purse - spent
+					emit(events, {
+						kind = "resupplied", turn = state.turn,
+						player = captain.owner, captain = captain.id,
+						name = captain.name, at = captain.at,
+						units = count, took = taken, cost = spent,
+						siege = commanders.power(captain, my_mods, units.FORTIFICATION),
+						fleet_power = commanders.power(captain, my_mods, units.FLEET),
+						visible_to = { captain.owner },
+					})
+				end
 			end
 		end
 	end

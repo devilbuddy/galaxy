@@ -20,6 +20,7 @@ local state_mod = require("galaxy.sim.state")
 local commanders = require("galaxy.sim.commanders")
 local regions_mod = require("galaxy.sim.regions")
 local buildings = require("galaxy.sim.buildings")
+local units = require("galaxy.sim.units")
 
 local M = {}
 
@@ -129,10 +130,14 @@ function M.project(galaxy, state, player)
 			capital_of = sys.capital_of,
 			seen = state.turn,
 			live = true,
-			-- Nil for unowned ground: there is nothing to take it off.
-			defence = sys.owner ~= 0 and (systems.defence(galaxy, id,
+			-- **The two halves an attacker compares against, separately.** The
+			-- fleet half is filled in below, from the contacts the player can
+			-- actually see - a garrison you have no eyes on is not a number you
+			-- are handed.
+			fortification = sys.owner ~= 0 and (systems.defence(galaxy, id,
 				sys.capital_of == sys.owner, defence_mods[sys.owner])
 				+ buildings.defence_bonus(sys)) or nil,
+			fleet = sys.owner ~= 0 and 0 or nil,
 			-- What is standing there. Public where the system is visible: the
 			-- borders show it, and an attacker who cannot see a Bastion coming
 			-- is being asked to guess at the one number that decides the fight.
@@ -177,13 +182,14 @@ function M.project(galaxy, state, player)
 				portrait = profile.portrait,
 				xp = profile.xp, next_xp = profile.next_xp,
 				steps = profile.steps,
-				strength = profile.strength,
-				max_strength = profile.max_strength,
-				-- What the officer is worth alone, and how many bought units
-				-- they can lead on top. The sheet prices an embarkation from
-				-- the gap between strength and max_strength; these say *why*
-				-- the gap is that size.
+				-- The two numbers the sheet compares against a target's two
+				-- halves, and the hold they were computed from.
+				siege_power = profile.siege_power,
+				fleet_power = profile.fleet_power,
 				base_strength = profile.base_strength,
+				shield = profile.shield,
+				hold = profile.hold,
+				carried = profile.carried,
 				max_units = profile.max_units,
 			}
 		elseif visible[c.at] or (c.route[1] and visible[c.route[1]]) then
@@ -194,10 +200,15 @@ function M.project(galaxy, state, player)
 			-- hidden is where they are *going*: you can see a fleet, not a plan.
 			local them = state.players[c.owner]
 			local their_mods = modifiers.of(them)
+			-- What they are worth *defending*, which is the number an attacker
+			-- has to beat. Their siege power is their business.
+			local their_fleet = commanders.power(c, their_mods, units.FLEET)
+			local entry = out_systems[tostring(c.at)]
+			if entry and entry.fleet then entry.fleet = entry.fleet + their_fleet end
 			contacts[#contacts + 1] = {
 				owner = c.owner, at = c.at, next_hop = c.route[1],
 				rank = commanders.rank(c.level or 1),
-				strength = commanders.strength(c, their_mods),
+				fleet_power = their_fleet,
 				-- Their face, not their name. Portraits are grouped by race, so
 				-- this is how a player learns whose fleet is on their border
 				-- without being handed the officer's identity.
@@ -240,9 +251,11 @@ function M.project(galaxy, state, player)
 		regions = region_view,
 		region_weights = regions_mod.weights(galaxy),
 		regions_needed = regions_mod.needed(galaxy),
-		-- The catalogue, so the client lists what can be built and what it
-		-- costs without carrying a second copy of the table.
+		-- The catalogues, so the client lists what can be built or embarked -
+		-- and what each is worth against which half - without carrying a second
+		-- copy of either table.
 		buildings = buildings.CATALOGUE,
+		units = units.CATALOGUE,
 		regions_held = regions_mod.tally(galaxy, state, held)[player] or 0,
 		-- The numbers the client needs to explain itself.
 		-- The purse. Fungible across the map, and the one number a player has to
@@ -253,10 +266,6 @@ function M.project(galaxy, state, player)
 			steps = commanders.steps({ level = 1 }, mods),
 			hops = mods.hops,
 			vision = mods.vision,
-			-- What a unit costs and what it is worth, so the client can price a
-			-- resupply without re-implementing the rule.
-			unit_cost = rules.unit_cost,
-			unit_strength = rules.unit_strength,
 			stock_cap = rules.colony_stock_cap,
 			captain_cost = rules.captain_cost,
 			captains = #state_mod.captains_of(state, player),

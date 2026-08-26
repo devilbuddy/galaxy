@@ -27,6 +27,7 @@ local races = require("galaxy.sim.races")
 local bots = require("galaxy.sim.bots")
 local rng = require("galaxy.rng")
 local rules = require("galaxy.sim.rules")
+local sim_units = require("galaxy.sim.units")
 
 local M = {}
 
@@ -213,7 +214,11 @@ local function catch_up(game, game_version)
 						kind = o.kind,
 						captain = tonumber(o.captain),
 						route = route,
-						units = tonumber(o.units),
+						-- The hold is a table, so it is repaired rather than
+						-- coerced. `tonumber` on one gives nil, which is how a
+						-- resupply reached the resolver asking for nothing at
+						-- all the last time this rebuild was widened.
+						units = sim_units.normalise(o.units),
 						at = tonumber(o.at),
 						building = o.building,
 					}
@@ -674,10 +679,13 @@ local function rpc_orders(context, payload)
 				-- purse can pay and whether the captain is even standing there
 				-- all depend on state that has moved on by resolution, so the
 				-- resolver clamps and reports.
-				local units = math.floor(tonumber(o.units) or 0)
-				if units < 0 then units = 0 end
+				--
+				-- A **mix**, not a count: `units.normalise` is what makes it a
+				-- dense table of known ids and nothing else, whatever a client
+				-- sent.
 				local entry = {
-					kind = "resupply", captain = math.floor(captain), units = units,
+					kind = "resupply", captain = math.floor(captain),
+					units = sim_units.normalise(o.units),
 				}
 				replace(function(c)
 					return c.kind == "resupply" and c.captain == entry.captain

@@ -206,10 +206,22 @@ function M.plan_signature()
 		if type(o.route) == "table" then
 			for k = 1, #o.route do route = route .. "," .. tostring(o.route[k]) end
 		end
+		-- The hold is a table, so it has to be spelled out: `tostring` on one
+		-- gives an address, which is stable enough within a session and
+		-- meaningless across a rebuild - a signature that changes for no reason
+		-- reads as "unsent" for ever.
+		local mix = ""
+		if type(o.units) == "table" then
+			local rates = (M.game_view and M.game_view.units) or {}
+			for k = 1, #rates do
+				mix = mix .. "," .. rates[k].id .. "=" .. tostring(o.units[rates[k].id] or 0)
+			end
+		elseif o.units then
+			mix = tostring(o.units)
+		end
 		parts[#parts + 1] = table.concat({
 			tostring(o.kind), tostring(o.captain), route,
-			tostring(o.units or ""), tostring(o.at or ""),
-			tostring(o.building or ""),
+			mix, tostring(o.at or ""), tostring(o.building or ""),
 		}, ":")
 	end
 	return table.concat(parts, "|")

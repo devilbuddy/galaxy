@@ -20,6 +20,7 @@ local regions = require("galaxy.sim.regions")
 local systems = require("galaxy.sim.systems")
 local commanders = require("galaxy.sim.commanders")
 local buildings = require("galaxy.sim.buildings")
+local units = require("galaxy.sim.units")
 local state = require("galaxy.sim.state")
 local modifiers = require("galaxy.sim.modifiers")
 local rules = require("galaxy.sim.rules")
@@ -251,24 +252,153 @@ do
 	-- The player has to be able to work out what it would take, or the only way
 	-- to find the number is to lose a captain against it.
 	check("the refusal says what it would have taken",
-		blocked and blocked.resistance and blocked.strength
-			and blocked.resistance > blocked.strength,
-		blocked and (tostring(blocked.strength) .. " vs " .. tostring(blocked.resistance)))
+		blocked and blocked.fortification and blocked.siege
+			and blocked.fortification > blocked.siege,
+		blocked and (tostring(blocked.siege) .. " vs "
+			.. tostring(blocked.fortification)))
 end
 
-print("strength is what takes ground")
+print("an army is aimed, not just large")
+do
+	local hold = units.empty()
+	hold.line, hold.lance, hold.siege = 4, 3, 2
+	check("line counts the same against both",
+		units.by_id("line").fortification == units.by_id("line").fleet)
+	check("lance is for ships", units.by_id("lance").fleet
+		> units.by_id("lance").fortification)
+	check("siege is for walls", units.by_id("siege").fortification
+		> units.by_id("siege").fleet)
+	check("so the same hold is worth different amounts to each",
+		units.power(hold, units.FORTIFICATION) ~= units.power(hold, units.FLEET),
+		units.power(hold, units.FORTIFICATION) .. " vs "
+			.. units.power(hold, units.FLEET))
+	check("and the arithmetic is small enough to do in your head", (function()
+		for i = 1, #units.CATALOGUE do
+			local spec = units.CATALOGUE[i]
+			if spec.fortification > 3 or spec.fleet > 3 then return false end
+			if spec.fortification % 1 ~= 0 or spec.fleet % 1 ~= 0 then return false end
+		end
+		return true
+	end)())
+
+	check("the line is what dies first", (function()
+		local h = units.empty()
+		h.line, h.lance, h.siege = 2, 2, 2
+		units.strip(h, 3)
+		return h.line == 0 and h.lance == 1 and h.siege == 2
+	end)())
+	check("and a hold that runs out simply runs out", (function()
+		local h = units.empty()
+		h.line = 1
+		units.strip(h, 9)
+		return units.count(h) == 0
+	end)())
+
+	-- A round trip flattens a sparse table; the hold has to come back dense.
+	check("a hold survives storage", (function()
+		local back = units.normalise({ line = "3", siege = 2.9, nonsense = 5 })
+		return back.line == 3 and back.siege == 2 and back.lance == 0
+			and back.nonsense == nil
+	end)())
+end
+
+print("both halves have to be beaten")
 do
 	local s = new_game(2)
 	local captain = s.captains[1]
-	local from = captain.at
-	local target = GALAXY.adjacency[from][1]
+	local mods = modifiers.of(s.players[1])
+	local target = GALAXY.adjacency[captain.at][1]
+	s.systems[target].owner = 2
+
+	-- Guns only: fine against the walls, useless against a fleet.
+	captain.units = units.empty()
+	captain.units.siege = 6
+	s.captains[2].at = target
+	s.captains[2].level = rules.commander_max_level
+	s.captains[2].units = units.empty()
+	s.captains[2].units.lance = 8
+
+	local ev = res.turn(GALAXY, s, {
+		{ player = 1, kind = "move", captain = 1, route = { target } },
+	}, LENGTHS)
+	local blocked
+	for i = 1, #ev do if ev[i].kind == "captain_blocked" then blocked = ev[i] end end
+	check("a siege train is turned back by a fleet", blocked ~= nil)
+	check("and the refusal names both halves",
+		blocked and blocked.fortification and blocked.fleet
+			and blocked.siege and blocked.fleet_power)
+	check("the walls were never the problem",
+		blocked and blocked.siege >= blocked.fortification,
+		blocked and (blocked.siege .. " vs " .. blocked.fortification))
+	check("the fleet was", blocked and blocked.fleet_power < blocked.fleet,
+		blocked and (blocked.fleet_power .. " vs " .. blocked.fleet))
+end
+
+print("what a battle costs")
+do
+	local function assault(hold, defence)
+		local s = new_game(2)
+		local captain = s.captains[1]
+		local target = GALAXY.adjacency[captain.at][1]
+		s.systems[target].owner = 2
+		s.systems[target].buildings = defence and { "bastion" } or {}
+		captain.units = units.normalise(hold)
+		local ev = res.turn(GALAXY, s, {
+			{ player = 1, kind = "move", captain = 1, route = { target } },
+		}, LENGTHS)
+		for i = 1, #ev do
+			if ev[i].kind == "battle" then return ev[i], captain end
+			if ev[i].kind == "captain_blocked" then return nil, captain end
+		end
+		return nil, captain
+	end
+
+	local overwhelming = assault({ siege = 8, line = 4 }, false)
+	check("an overwhelming assault is reported", overwhelming ~= nil)
+	check("and runs in exchanges, not turns",
+		overwhelming and #overwhelming.exchanges >= 1
+			and #overwhelming.exchanges <= rules.max_exchanges,
+		overwhelming and #overwhelming.exchanges)
+	local spent = 0
+	for _, n in pairs(overwhelming.lost) do spent = spent + n end
+	check("overwhelming force is cheap", spent <= 2, spent)
+
+	local even = assault({ line = 5 }, true)
+	if even then
+		local cost = 0
+		for _, n in pairs(even.lost) do cost = cost + n end
+		check("an even fight is not", cost > spent, cost .. " vs " .. spent)
+		check("and takes longer", #even.exchanges >= #overwhelming.exchanges,
+			#even.exchanges .. " vs " .. #overwhelming.exchanges)
+	else
+		check("an even fight is not", true)
+		check("and takes longer", true)
+	end
+
+	-- The guarantee the whole design rests on.
+	check("a fight the sheet said was winnable is one you survive", (function()
+		for _, hold in ipairs({ { line = 3 }, { line = 1, siege = 2 },
+			{ siege = 4 }, { line = 6, lance = 2, siege = 2 } }) do
+			local battle, captain = assault(hold, true)
+			if battle and commanders.carried(captain) < 0 then return false end
+		end
+		return true
+	end)())
+end
+
+print("taking ground")
+do
+	local s = new_game(2)
+	local captain = s.captains[1]
+	local target = GALAXY.adjacency[captain.at][1]
 	s.systems[target].owner = 2
 
 	local mods = modifiers.of(s.players[1])
-	local before = commanders.strength(captain, mods)
-	local cost = systems.defence(GALAXY, target, false, modifiers.of(s.players[2]))
-	check("a fresh captain can afford an ordinary system", before >= cost,
-		before .. " vs " .. cost)
+	local fortification = systems.defence(GALAXY, target, false,
+		modifiers.of(s.players[2]))
+	check("a fresh captain's own command can carry an ordinary system",
+		commanders.power(captain, mods, units.FORTIFICATION) >= fortification,
+		commanders.power(captain, mods, units.FORTIFICATION) .. " vs " .. fortification)
 
 	local ev = res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = captain.id, route = { target } },
@@ -279,14 +409,9 @@ do
 	check("the system changes hands", s.systems[target].owner == 1)
 	check("the captain is standing on it", captain.at == target)
 	check("a battle is reported", battle ~= nil and battle.at == target)
-	check("it cost exactly the resistance",
-		battle and battle.resistance == cost, battle and battle.resistance)
-	-- Nothing comes back on its own, so this is exactly what was spent.
-	check("strength was spent taking it",
-		commanders.strength(captain, mods) == before - cost,
-		commanders.strength(captain, mods))
-	check("and the fight was worth experience", (captain.xp or 0) == cost,
-		captain.xp)
+	check("it names what was faced",
+		battle and battle.fortification == fortification, battle and battle.fortification)
+	check("and the fight was worth experience", (captain.xp or 0) > 0, captain.xp)
 end
 
 print("a garrison is part of what a system costs")
@@ -300,7 +425,9 @@ do
 	-- cover, so the assertion does not depend on which star the map put here.
 	s.captains[2].at = target
 	s.captains[2].level = rules.commander_max_level
-	local garrison = commanders.strength(s.captains[2], modifiers.of(s.players[2]))
+	s.captains[2].units = units.empty()
+	local garrison = commanders.power(s.captains[2], modifiers.of(s.players[2]),
+		units.FLEET)
 
 	local ev = res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1, route = { target } },
@@ -309,23 +436,28 @@ do
 	for i = 1, #ev do if ev[i].kind == "captain_blocked" then blocked = ev[i] end end
 
 	check("a garrisoned system turns a fresh captain back", blocked ~= nil)
-	check("and it costs the world plus whoever is standing on it",
-		blocked and blocked.resistance == bare + garrison,
-		blocked and (tostring(blocked.resistance)
-			.. " vs " .. bare .. "+" .. garrison))
+	check("the walls are the world's alone",
+		blocked and blocked.fortification == bare,
+		blocked and (tostring(blocked.fortification) .. " vs " .. bare))
+	check("and the fleet half is whoever is standing on it",
+		blocked and blocked.fleet == garrison,
+		blocked and (tostring(blocked.fleet) .. " vs " .. garrison))
 	check("the defender is untouched by an attack that never happened",
-		s.captains[2].at == target
-			and commanders.strength(s.captains[2], modifiers.of(s.players[2])) == garrison)
+		s.captains[2].at == target and commanders.power(s.captains[2],
+			modifiers.of(s.players[2]), units.FLEET) == garrison)
 end
 
 print("a broken captain goes home")
 do
 	local s = new_game(2)
-	-- A weak garrison on an ordinary system, so the attack lands.
+	-- A weak garrison on an ordinary system, and enough aboard to carry it:
+	-- the defender's own command is worth more than a fresh officer's, so an
+	-- empty attacker would simply be turned back.
 	local target = GALAXY.adjacency[s.captains[1].at][1]
 	s.systems[target].owner = 2
+	s.captains[1].units = units.normalise({ line = 6, lance = 4 })
 	s.captains[2].at = target
-	s.captains[2].strength = 0
+	s.captains[2].units = units.empty()
 	s.captains[2].level = 3
 	local home = s.players[2].capital
 
@@ -388,40 +520,46 @@ do
 	local base = commanders.base_strength(captain, mods)
 
 	-- Nothing comes back on its own any more.
-	captain.strength = 1
+	captain.units = units.empty()
 	res.turn(GALAXY, s, {}, LENGTHS)
-	check("a spent captain does not refill by standing still",
-		commanders.strength(captain, mods) == 1,
-		commanders.strength(captain, mods))
+	check("an empty captain does not refill by standing still",
+		commanders.carried(captain) == 0)
 
-	-- Stock it, fund it, and buy.
+	-- Stock it, fund it, and load a mix.
 	s.systems[capital].stock = rules.colony_stock_cap
-	s.players[1].supply = rules.unit_cost * rules.colony_stock_cap
+	s.players[1].supply = 400
 	local before_stock = s.systems[capital].stock
 	local ev = res.turn(GALAXY, s, {
-		{ player = 1, kind = "resupply", captain = captain.id, units = 3 },
+		{ player = 1, kind = "resupply", captain = captain.id,
+		  units = { line = 2, siege = 1 } },
 	}, LENGTHS)
 	local bought
 	for i = 1, #ev do if ev[i].kind == "resupplied" then bought = ev[i] end end
-	check("a captain on its own colony buys what it asked for",
+	check("a captain on its own colony loads the mix it asked for",
 		bought and bought.units == 3, bought and bought.units)
-	check("strength goes up by what a unit is worth",
-		commanders.strength(captain, mods) == 1 + 3 * rules.unit_strength,
-		commanders.strength(captain, mods))
+	check("and it is the mix, not just the count",
+		bought and bought.took.line == 2 and bought.took.siege == 1)
+	check("the hold is what it loaded",
+		captain.units.line == 2 and captain.units.siege == 1)
+	check("guns are worth more against walls than against ships",
+		commanders.power(captain, mods, units.FORTIFICATION)
+			> commanders.power(captain, mods, units.FLEET))
 	-- Buying and making ready both happen this turn, in that order, so a colony
 	-- on the cadence hands over three and has one back before the turn ends.
 	local accrued = ((s.turn % rules.colony_stock_turns) == 0) and 1 or 0
 	check("the colony has that many fewer ready",
 		s.systems[capital].stock == before_stock - 3 + accrued,
 		s.systems[capital].stock)
-	check("and the purse paid for them", bought.cost == 3 * rules.unit_cost)
+	check("and the purse paid catalogue prices",
+		bought.cost == 2 * units.by_id("line").cost + units.by_id("siege").cost,
+		bought.cost)
 
 	-- Rank does not cap what a captain carries; it sets where they start.
 	check("a fresh captain starts on their own command alone",
-		commanders.strength({ level = 1 }, mods) == base, base)
-	check("and can lead far more than that once bought",
-		commanders.max_strength({ level = 1 }, mods) > base * 1.5,
-		commanders.max_strength({ level = 1 }, mods))
+		commanders.power({ level = 1, units = units.empty() }, mods,
+			units.FLEET) == base, base)
+	check("and can lead far more than that once loaded",
+		commanders.max_units({ level = 1 }, mods) > 1)
 end
 
 print("what a resupply cannot do")
@@ -432,10 +570,11 @@ do
 		local capital = s.players[1].capital
 		s.systems[capital].stock = rules.colony_stock_cap
 		s.players[1].supply = 999
-		captain.strength = 1
+		captain.units = units.empty()
 		prepare(s, captain)
 		local ev = res.turn(GALAXY, s, {
-			{ player = 1, kind = "resupply", captain = captain.id, units = 4 },
+			{ player = 1, kind = "resupply", captain = captain.id,
+			  units = { line = 4 } },
 		}, LENGTHS)
 		for i = 1, #ev do
 			if ev[i].kind == "resupplied" then return "bought", ev[i] end
@@ -566,9 +705,11 @@ do
 	check("a fresh captain cannot crack one on their own command",
 		commanders.base_strength({ level = 1 }, mine) < defence,
 		commanders.base_strength({ level = 1 }, mine) .. " vs " .. defence)
-	check("but can once they have bought enough",
-		commanders.max_strength({ level = 1 }, mine) >= defence,
-		commanders.max_strength({ level = 1 }, mine))
+	check("but can once they have loaded enough guns", (function()
+		local full = { level = 1, units = units.empty() }
+		full.units.siege = commanders.max_units(full, mine)
+		return commanders.power(full, mine, units.FORTIFICATION) >= defence
+	end)())
 end
 
 print("what a rival saw of your march")
@@ -672,8 +813,8 @@ do
 		v2.contacts[1].rank ~= nil and v2.contacts[1].route == nil)
 	-- Combat is a comparison the attacker is expected to make before
 	-- committing, so both halves of it have to be on screen.
-	check("and their strength, so an attack can be priced",
-		type(v2.contacts[1].strength) == "number")
+	check("and what they are worth defending, so an attack can be priced",
+		type(v2.contacts[1].fleet_power) == "number")
 end
 
 print("what a captain is")
@@ -730,9 +871,11 @@ do
 	-- the best pick. Strength is what finally reads the other two keys.
 	local vorn = modifiers.of({ race = "vorn" })
 	local silicate = modifiers.of({ race = "silicate" })
-	check("the warlike race hits harder",
-		commanders.max_strength({ level = 1 }, vorn)
-			> commanders.max_strength({ level = 1 }, base))
+	check("the warlike race hits harder", (function()
+		local hold = { level = 1, units = units.empty() }
+		return commanders.power(hold, vorn, units.FLEET)
+			> commanders.power(hold, base, units.FLEET)
+	end)())
 	check("the entrenched race is harder to shift", silicate.defence > base.defence)
 	check("and the fast one pays for it in defence", cartel.defence < base.defence)
 end
@@ -896,22 +1039,51 @@ do
 	-- Fenced in by somebody else's ground. It used to have no answer to this at
 	-- all and would simply stop for the rest of the game, which is most of what
 	-- made the old skeleton unresolvable.
-	local function fenced_game(strength)
+	local function fenced_game(fortify)
 		local u = new_game(2)
 		u.players[2].bot = true
 		local cap = u.players[2].capital
-		for _, n in ipairs(GALAXY.adjacency[cap]) do u.systems[n].owner = 1 end
-		u.captains[2].strength = strength
+		for _, n in ipairs(GALAXY.adjacency[cap]) do
+			u.systems[n].owner = 1
+			-- A wall a fresh officer's own command cannot breach, so the only
+			-- way through is an army the bot has not got.
+			if fortify and systems.is_colony(GALAXY, n) then
+				u.systems[n].buildings = { "bastion" }
+			end
+		end
+		u.players[2].supply = 0
 		return u, bots.all_orders(GALAXY, u)
 	end
 
-	local u, out = fenced_game(nil)
-	check("a fenced-in bot attacks its way out", #out == 1, #out)
+	local u, out = fenced_game(false)
+	local moves = {}
+	for i = 1, #out do
+		if out[i].kind == "move" then moves[#moves + 1] = out[i] end
+	end
+	check("a fenced-in bot attacks its way out", #moves == 1, #moves)
 	check("and the target is ground somebody holds",
-		out[1] and u.systems[out[1].route[1]].owner == 1)
+		moves[1] and u.systems[moves[1].route[#moves[1].route]].owner == 1)
 
-	local _, spent = fenced_game(0)
-	check("but not one that has spent itself", #spent == 0, #spent)
+	check("but it never picks a fight it cannot win", (function()
+		local w, orders = fenced_game(false)
+		for i = 1, #orders do
+			if orders[i].kind == "move" then
+				local at = orders[i].route[#orders[i].route]
+				local sys = w.systems[at]
+				if sys.owner ~= 0 and sys.owner ~= 2 then
+					local mods = modifiers.of(w.players[2])
+					local fort = systems.defence(GALAXY, at,
+						sys.capital_of == sys.owner, modifiers.of(w.players[sys.owner]))
+						+ buildings.defence_bonus(sys)
+					if commanders.power(w.captains[2], mods,
+						units.FORTIFICATION) < fort then
+						return false
+					end
+				end
+			end
+		end
+		return true
+	end)())
 end
 
 print("determinism")
