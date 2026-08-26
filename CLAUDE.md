@@ -1127,6 +1127,15 @@ columns that *thin out* instead: your hold unit by unit, because it is yours and
 you know it in detail, and theirs as a wall and a name, because that is all a
 rival ever shows you.
 
+**It plays.** The exchange list *is* the timeline - each row is a target, the
+current one is lit, and a play button walks them at `EXCHANGE_SECONDS` apiece so
+the hold thins out in front of you. The first pass had a progress bar anchored to
+the bottom of the *screen* with several hundred units of nothing between a
+three-exchange battle and its own controls, and no indication anything could be
+stepped through at all; content with no card around it reads as a layout that has
+come apart. The card is sized to what it holds and the transport sits directly
+under the list.
+
 `playback.battle` winds the exchanges backwards from the hold the fight ended
 with, which is exact for the same reason the digest rewind is: the log records
 what was lost, so it is reversible. `tools/test_playback.lua` checks the rewind

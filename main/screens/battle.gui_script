@@ -121,12 +121,21 @@ local function build(self, data)
 	local frames = playback.battle(event, types)
 	local index = math.max(1, math.min(#frames, self.index or #frames))
 	self.index = index
+	self.frame_count = #frames
 	local frame = frames[index]
 
 	ui.shade()
 
 	local top = h - pad.top
 	local mine = event.player == me
+
+	-- The card first, so everything lands on top of it; its height is fixed up
+	-- once the content below has been measured. Without one the screen was
+	-- content floating on the background with a progress bar stranded at the
+	-- bottom of it, which reads as a layout that has come apart rather than as
+	-- a panel with room to spare.
+	local card = ui.panel(pad.left, top, width, 400, ui.CARD)
+	local edge = ui.panel_line(pad.left, top, width, 400, ui.BORDER)
 
 	-- Header: who, where, and how it went. Never a reveal - the sheet said so
 	-- before the order was given - so it states rather than announces.
@@ -183,8 +192,18 @@ local function build(self, data)
 		local f = frames[e]
 		local gone = 0
 		for _, n in pairs(f.lost) do gone = gone + n end
-		y = y - 32
+		y = y - 36
 		local here = (e == index)
+		-- **The list is the timeline.** Tapping an exchange is the most direct
+		-- way to get to one, and far more discoverable than a track: a row is a
+		-- comfortable target and it already says what happened there.
+		local row = ui.panel(inner - 8, y + 26, width - PAD * 2 + 16, 34,
+			here and ui.ACCENT_SOFT or ui.CLEAR)
+		self.body_druid:new_button(row, function()
+			self.index = e
+			self.playing = false
+			self.rebuild = true
+		end)
 		ui.small(inner, y, tostring(e), here and ui.ACCENT or ui.FAINT)
 		local said
 		if gone > 0 then
@@ -207,38 +226,71 @@ local function build(self, data)
 		end
 	end
 
-	-- Scrubbing back through it, and the way out. Anchored to the bottom rather
-	-- than to the log, so a two-exchange battle and a six-exchange one put both
-	-- controls in the same place.
-	local row_y = pad.bottom + ui.CONTROL
-	local track_y = row_y + 40
-	local track_w = width - PAD * 2
-	ui.bar(inner, track_y, track_w, 12, ui.BG)
+	-- The transport, inside the card and directly under the list it steps
+	-- through. It used to be anchored to the bottom of the *screen*, which put
+	-- several hundred units of nothing between a three-exchange battle and its
+	-- own controls.
+	y = y - 30
+	ui.divider(inner, y, width - PAD * 2)
+
+	y = y - 24
+	local size = 64
+	local play_id = self.playing and "icon_pause" or "icon_play"
+	ui.icon_button(self.body_druid, inner, y, size, play_id,
+		function()
+			-- Playing from the end starts again, because the only reason to
+			-- press play on a finished replay is to see it once more.
+			if not self.playing and self.index >= #frames then self.index = 1 end
+			self.playing = not self.playing
+			self.elapsed = 0
+			self.rebuild = true
+		end, { background = ui.CARD_ALT, colour = ui.TEXT })
+
+	local track_x = inner + size + 16
+	local track_w = width - PAD * 2 - size - 16
+	local track_y = y - size * 0.5 + 6
+	ui.bar(track_x, track_y, track_w, 12, ui.BG)
 	local fraction = (#frames > 1) and ((index - 1) / (#frames - 1)) or 1
-	ui.bar(inner, track_y, math.max(12, track_w * fraction), 12, ui.ACCENT)
-	ui.dot(inner + track_w * fraction - 8, track_y - 2, 16, ui.ACCENT)
+	ui.bar(track_x, track_y, math.max(12, track_w * fraction), 12, ui.ACCENT)
+	-- A mark per exchange, so the track reads as a count of them rather than as
+	-- a bar that happens to be full.
+	for e = 1, #frames do
+		local at = (#frames > 1) and ((e - 1) / (#frames - 1)) or 0
+		ui.dot(track_x + track_w * at - 4, track_y + 14, 9,
+			e <= index and ui.ACCENT or ui.FAINT)
+	end
+	ui.dot(track_x + track_w * fraction - 9, track_y - 3, 18, ui.ACCENT)
 
 	-- **Druid hands a click callback `(context, params, button)` and no touch
 	-- position at all**, so a scrubber has to remember where the finger was
 	-- itself - `on_input` below keeps the last one. Reading a position off the
 	-- third argument silently gets the button component, and the whole track
 	-- does nothing, which is exactly what it did.
-	local grab = ui.panel(inner - 10, track_y + 22, track_w + 20, 56, ui.CLEAR)
+	local grab = ui.panel(track_x - 10, track_y + 26, track_w + 20, 60, ui.CLEAR)
 	self.body_druid:new_button(grab, function()
 		local at = self.touch_x
 		if not at then return end
-		local pick = (at - inner) / math.max(1, track_w)
-		self.index = math.floor(pick * (#frames - 1) + 1.5)
+		local pick = (at - track_x) / math.max(1, track_w)
+		self.index = math.max(1, math.min(#frames,
+			math.floor(pick * (#frames - 1) + 1.5)))
+		self.playing = false
 		self.rebuild = true
 	end)
 
+	y = y - size - 10
+	ui.small(inner, y, string.format("Exchange %d of %d", index, #frames), ui.FAINT)
+	y = y - 22
+
+	-- The card is as tall as what it holds.
+	local height = top - y
+	gui.set_size(card, vmath.vector3(width, height, 0))
+	gui.set_size(edge, vmath.vector3(width, height, 0))
+
 	local done_w = 200
-	ui.button(self.body_druid, w - pad.right - PAD - done_w, row_y,
+	ui.button(self.body_druid, w - pad.right - done_w, pad.bottom + ui.CONTROL,
 		done_w, ui.CONTROL, "DONE",
 		function() monarch.hide(hash("battle")) end,
 		{ style = "primary", size = ui.CAPS })
-	ui.small(inner, row_y - ui.CONTROL * 0.5,
-		string.format("Exchange %d of %d", index, #frames), ui.FAINT)
 
 	ui.collect(previous)
 end
@@ -258,9 +310,29 @@ function final(self)
 	self.druid:final()
 end
 
+-- How long an exchange is held when the replay is running itself. Slow enough
+-- to see a rank thin out, brisk enough that six of them are over in five
+-- seconds.
+local EXCHANGE_SECONDS = 0.9
+
 function update(self, dt)
 	self.druid:update(dt)
 	if self.body_druid then self.body_druid:update(dt) end
+
+	if self.playing then
+		self.elapsed = (self.elapsed or 0) + dt
+		if self.elapsed >= EXCHANGE_SECONDS then
+			self.elapsed = 0
+			if self.index >= self.frame_count then
+				-- Stops on the last exchange rather than closing: the player
+				-- has just been shown something and may want to scrub back.
+				self.playing = false
+			else
+				self.index = self.index + 1
+			end
+			self.rebuild = true
+		end
+	end
 	-- Rebuilt on a change, never per frame: the whole card is torn down and put
 	-- back, which is only cheap because it happens when somebody scrubs.
 	if self.rebuild then
