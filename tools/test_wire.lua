@@ -147,8 +147,20 @@ do
 	end)())
 	check("a system says what it pays its owner",
 		type(mine.yield) == "number" and mine.yield > 0, mine.yield)
-	check("and a colony says how many units it has ready",
-		type(mine.stock) == "number", mine.stock)
+	check("and a colony says what its dwellings have ready, by type",
+		type(mine.available) == "table"
+			and type(mine.available.escort) == "number", mine.available)
+	-- A capital opens with Berths, so this one makes escorts and nothing else.
+	check("what it cannot make is a zero, not a gap",
+		mine.available.bombard == 0, mine.available.bombard)
+	check("a garrison reaches the client whole, and counts as fleet", (function()
+		local sim_units = require("galaxy.sim.units")
+		state.systems[capital].garrison = sim_units.normalise({ escort = 2 })
+		local w = view.project(galaxy, state, 1)
+		local seen = w.systems[tostring(capital)]
+		return seen.garrison and seen.garrison.escort == 2
+			and seen.fleet >= sim_units.power(seen.garrison, sim_units.FLEET)
+	end)())
 	check("a captain says what it can carry as well as what it has",
 		type(v.captains[1].base_strength) == "number"
 			and v.captains[1].max_units > v.captains[1].carried)

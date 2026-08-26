@@ -170,7 +170,11 @@ local function nearest_depot(galaxy, state, player, from)
 		local id = queue[head]
 		head = head + 1
 		local sys = state.systems[id]
-		if sys.owner == player and (sys.stock or 0) > 0 and id ~= from then
+		-- Somewhere with something to pick up: either bought and waiting in
+		-- the garrison, or ready to buy on arrival. Both are worth the trip,
+		-- and buying costs no order so the second is not a worse errand.
+		if sys.owner == player and id ~= from
+			and (units.count(sys.garrison) > 0 or units.count(sys.available) > 0) then
 			return id, route_to(parent, id, rules.max_route_hops)
 		end
 		local neighbours = galaxy.adjacency[id]
@@ -197,6 +201,18 @@ end
 -- Kept back so a bot never builds itself out of an army. Two units is enough to
 -- top a captain up on the next colony it reaches.
 local RESERVE_UNITS = 2
+
+--- Is one of this player's captains standing here?
+--
+-- Somewhere a captain is already stood is not a place to build a wall: it will
+-- buy and carry the same units away in the same turn.
+local function standing_here(state, player, id)
+	for i = 1, #state.captains do
+		local c = state.captains[i]
+		if c.owner == player and c.at == id then return true end
+	end
+	return false
+end
 
 --- Is anything next to this colony held by somebody else?
 local function on_the_frontier(galaxy, state, player, id)
@@ -324,6 +340,20 @@ local function spend(galaxy, state, player)
 		end
 	end
 
+	-- **Then dwellings, because without one a colony makes nothing at all.**
+	-- Berths first wherever a colony has none - it is the cheapest thing on the
+	-- board and the difference between a world that arms you and a world that
+	-- does not - then the two that answer whichever half of a fight this
+	-- frontier is short of.
+	for i = 1, #colonies do
+		local id = colonies[i]
+		local sys = state.systems[id]
+		if buildings.room(sys) and not buildings.has(sys, "berths")
+			and afford("berths") then
+			return propose("berths", id)
+		end
+	end
+
 	for i = 1, #colonies do
 		local id = colonies[i]
 		local sys = state.systems[id]
@@ -332,13 +362,16 @@ local function spend(galaxy, state, player)
 				if not buildings.has(sys, "bastion") and afford("bastion") then
 					return propose("bastion", id)
 				end
-			else
-				if not buildings.has(sys, "yards") and afford("yards") then
-					return propose("yards", id)
-				end
-				if not buildings.has(sys, "works") and afford("works") then
-					return propose("works", id)
-				end
+			end
+			-- Both dwellings eventually, cheapest first. A bot has no front to
+			-- read at the moment it builds - the colony it is developing may be
+			-- nowhere near the fight by the time anything comes out of it.
+			if not buildings.has(sys, "interceptor_bay")
+				and afford("interceptor_bay") then
+				return propose("interceptor_bay", id)
+			end
+			if not buildings.has(sys, "foundry") and afford("foundry") then
+				return propose("foundry", id)
 			end
 		end
 	end
@@ -380,21 +413,58 @@ function M.orders(galaxy, state, player)
 			local here = state.systems[captain.at]
 			local cheapest = units.by_id("escort").cost
 
-			-- **Refit, then go - never both in one turn.** A captain buys where
-			-- it *ends* the turn, so issuing a purchase and a march together
-			-- means the colony is behind it by the time logistics runs and the
-			-- order is refused. That was the whole economy doing nothing: bots
-			-- asked to resupply eight times in a hundred turns and bought
-			-- exactly nothing.
+			-- **Refit, then go - never both in one turn.** Buying and swapping
+			-- both happen where the captain *ends* the turn, so issuing either
+			-- alongside a march means the colony is behind it by the time
+			-- logistics runs and the order does nothing. That was the whole
+			-- economy idling: bots asked to resupply eight times in a hundred
+			-- turns and bought exactly nothing.
+			--
+			-- Neither costs an order, so a bot spends nothing to stand still
+			-- and load - which is the same bargain a player gets.
 			local busy = false
-			if here.owner == player and (here.stock or 0) > 0
-				and purse >= cheapest and room > 0 then
-				local take = compose(galaxy, state, mods, player, captain,
-					math.min(room, here.stock), purse)
-				if units.count(take) > 0 then
+			if here.owner == player and room > 0 then
+				-- Buy what this colony has ready and the purse can reach,
+				-- into its garrison.
+				local buying = units.empty()
+				local ready = units.count(here.available)
+				if ready > 0 and purse >= cheapest then
+					buying = compose(galaxy, state, mods, player, captain,
+						math.min(room, ready), purse)
+					if units.count(buying) > 0 then
+						orders[#orders + 1] = {
+							player = player, kind = "buy",
+							at = captain.at, units = buying,
+						}
+						busy = true
+					end
+				end
+
+				-- And take everything standing here that will fit, **including
+				-- what is being bought this same turn**: buying settles before
+				-- transferring, so the garrison the swap sees is the one this
+				-- purchase has already landed in. Reading only what is standing
+				-- there now would leave every bot buying units it then walked
+				-- away from.
+				--
+				-- The target is a whole hold, not a delta, so this is simply
+				-- "what I have plus as much of that as I can carry".
+				local want = units.normalise(captain.units)
+				local space, moving = room, 0
+				for k = 1, #units.CATALOGUE do
+					local id = units.CATALOGUE[k].id
+					local n = (here.garrison[id] or 0) + (buying[id] or 0)
+					if n > space then n = space end
+					if n > 0 then
+						want[id] = want[id] + n
+						space = space - n
+						moving = moving + n
+					end
+				end
+				if moving > 0 then
 					orders[#orders + 1] = {
-						player = player, kind = "resupply",
-						captain = captain.id, units = take,
+						player = player, kind = "transfer",
+						captain = captain.id, units = want,
 					}
 					busy = true
 				end
@@ -438,6 +508,49 @@ function M.orders(galaxy, state, player)
 			-- nothing it can take is a bot refitting for the one it can.
 		end
 	end
+
+	-- **Garrison the frontier.** Buying costs no order and needs nobody
+	-- standing there, so what a colony has made is worth turning into a wall
+	-- wherever the wall is the thing that matters - which is exactly the
+	-- decision the garrison exists to create: push with these, or hold with
+	-- them.
+	--
+	-- Only where a border actually is, and only out of what is left after the
+	-- next building is paid for. A bot that garrisoned everywhere would spend
+	-- its whole economy standing still, and a bot that spent its last supply on
+	-- a wall never develops the colony behind it.
+	local purse = state.players[player].supply or 0
+	local reserve = rules.captain_cost
+	if purse > reserve then
+		-- Id order: `pairs` is unspecified and two runtimes have to agree on
+		-- what this bot did.
+		for id = 1, #galaxy.stars do
+			local sys = state.systems[id]
+			if sys.owner == player and systems.is_colony(galaxy, id)
+				and units.count(sys.available) > 0
+				and on_the_frontier(galaxy, state, player, id)
+				and not standing_here(state, player, id) then
+				local take, spent = units.empty(), 0
+				for k = 1, #units.CATALOGUE do
+					local spec = units.CATALOGUE[k]
+					local n = sys.available[spec.id] or 0
+					local afford = math.floor((purse - reserve - spent) / spec.cost)
+					if n > afford then n = afford end
+					if n > 0 then
+						take[spec.id] = n
+						spent = spent + n * spec.cost
+					end
+				end
+				if units.count(take) > 0 then
+					orders[#orders + 1] = {
+						player = player, kind = "buy", at = id, units = take,
+					}
+					purse = purse - spent
+				end
+			end
+		end
+	end
+
 	return orders
 end
 
@@ -456,9 +569,16 @@ local function within_budget(orders)
 	local out, spent = {}, 0
 	for i = 1, #orders do
 		local cost = order_cost(orders[i])
-		if spent + cost > rules.orders_per_turn then break end
-		spent = spent + cost
-		out[#out + 1] = orders[i]
+		-- **Skipped, not stopped.** This used to `break` at the first order it
+		-- could not afford, which was right while every kind cost one. Buying
+		-- and transferring cost nothing now, so breaking silently threw away
+		-- every free order that happened to sit behind a costly one - a bot
+		-- would march, and in the same breath drop the purchase it had already
+		-- decided on.
+		if spent + cost <= rules.orders_per_turn then
+			spent = spent + cost
+			out[#out + 1] = orders[i]
+		end
 	end
 	return out
 end

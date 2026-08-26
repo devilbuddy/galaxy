@@ -117,17 +117,17 @@ return {
 	-- is a building that pays, and there is no room for one at four slots.
 	capital_yield = 12,
 
-	-- What a colony holds ready, and how often another becomes available.
+	-- What a colony holds ready and how often another becomes available now
+	-- live on the *dwelling* rather than here - see `buildings.CATALOGUE`. A
+	-- colony makes only what it has dwellings for, so there is no single
+	-- cadence to state.
+	--
 	-- Availability accumulates whether or not anyone visits and does not decay,
 	-- so a distant colony is not wasted production - it is a reason to march.
-	-- Measured, not guessed. At a cap of 4 the median four-player game took 283
-	-- turns; at 6 it takes 190, which is where pacing sat before there was an
-	-- economy at all. Making stock accrue *every* turn instead of every other
-	-- is worse than either - every seed tried then ran past 1500 turns without
-	-- deciding, because a front where both sides refit as fast as they can
-	-- spend never moves.
-	colony_stock_cap = 6,
-	colony_stock_turns = 2,
+	-- That is lifted straight from Heroes of Might and Magic, along with the
+	-- shape that makes it a decision at all: **you have to pay for what is
+	-- available.** Without the cost, collecting is a chore rather than a choice
+	-- and you always take everything.
 
 	-- Combat ---------------------------------------------------------------------
 	-- **Whether you win is computed; what it costs is simulated.**
@@ -185,13 +185,48 @@ return {
 	-- so making one of them free is a single edit. Resupply is deliberately not
 	-- free: a captain that could always top up for nothing would always top up,
 	-- and collecting would be a chore rather than a decision again.
-	order_cost = { move = 1, build = 1, recruit = 1, resupply = 1 },
+	-- **An order is something that happens somewhere.** Moving a captain,
+	-- raising a building, raising an officer. Buying and transferring are not:
+	-- buying is spending, and a transfer is a captain rearranging what is
+	-- already yours at a place it is already standing.
+	--
+	-- Buying used to cost one. That was right while a purchase went straight
+	-- into a hold and needed a captain present - "a captain that could always
+	-- top up for nothing would always top up". It stopped being right the
+	-- moment purchases went into the colony instead: charging an empire act
+	-- means a rich player with four colonies banks supply they cannot convert,
+	-- which is precisely the failure buildings were introduced to fix,
+	-- reappearing one level down. Supply itself is the scarcity now, the way
+	-- gold is.
+	order_cost = { move = 1, build = 1, recruit = 1, buy = 0, transfer = 0 },
 
 	-- Buildings ----------------------------------------------------------------
 	-- Two slots against four buildings, so a colony specialises rather than
 	-- accumulating everything. See galaxy/sim/buildings.lua for what each does.
-	building_slots = 2,
-	yards_stock = 4,          -- Yards: units held ready, on top of the base
+	-- **Four slots, five buildings.** You give up exactly one, and where the
+	-- colony sits is what decides which: a Bastion on the frontier, an
+	-- Admiralty somewhere safe. Two was right when a building was a multiplier
+	-- on production that happened anyway; with a dwelling per unit type it
+	-- would have meant a colony could never make more than one thing and also
+	-- be anything else.
+	-- **What a colony can hold, and why it is capped at all.**
+	--
+	-- A garrison being *bought* is not enough to make it safe. An attacker's
+	-- power is bounded by `captain_units` - no amount of wealth lets one bring
+	-- more than a hold - while a defender's was bounded by nothing, so past
+	-- some purse every world became uncrackable. Measured: with an uncapped
+	-- garrison three seeds in ten never decided at all, territory bit-identical
+	-- from turn 800 to 900, two players on three of the four regions they
+	-- needed. That is the same freeze combat was built to end, wearing a
+	-- receipt.
+	--
+	-- Pegged to what one captain carries, and stated that way on purpose: **a
+	-- colony holds what one captain can bring.** So a defended world costs
+	-- about one officer's worth over its own walls, and both halves of the
+	-- comparison stay numbers a player can add up.
+	garrison_cap = 6,
+
+	building_slots = 4,
 	bastion_defence = 8,      -- Bastion: flat resistance
 
 	-- Captains. One to begin with, one more per Admiralty, and a hard ceiling

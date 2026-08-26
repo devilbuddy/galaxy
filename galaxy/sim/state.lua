@@ -132,10 +132,21 @@ function M.new(galaxy, players)
 	}
 
 	for i = 1, #galaxy.stars do
-		-- `stock` is units a colony holds ready. Only colonies ever accumulate
-		-- it, but every system carries the field so a JSON round trip does not
-		-- have to distinguish "no stock" from "cannot have stock".
-		state.systems[i] = { owner = 0, capital_of = 0, stock = 0, buildings = {} }
+		-- Two complements per system, and they are not the same thing:
+		--
+		--   `available`  what the dwellings have produced and nobody has paid
+		--                for. Accumulates per type, up to that dwelling's cap.
+		--   `garrison`   what has been bought. Sits here until a captain
+		--                carries it away, and defends the world meanwhile.
+		--
+		-- Every system carries both, dense, even though only colonies with
+		-- dwellings ever fill them: a JSON round trip should not have to
+		-- distinguish "empty" from "cannot have any", and a table of named
+		-- zeroes survives where a sparse one comes back with no keys at all.
+		state.systems[i] = {
+			owner = 0, capital_of = 0, buildings = {},
+			available = units.empty(), garrison = units.empty(),
+		}
 	end
 
 	for i = 1, #players do
@@ -152,12 +163,19 @@ function M.new(galaxy, players)
 			alive = true,
 			next_commander_number = 1,
 			-- The empire purse. Fungible across the whole map, which is what
-			-- makes it different from stock: supply can be earned in one arm
-			-- and spent in another, units cannot.
+			-- makes it different from a garrison: supply can be earned in one
+			-- arm and spent in another, units cannot.
 			supply = 0,
 		}
 		state.systems[capital].owner = i
 		state.systems[capital].capital_of = i
+		-- **A capital opens with Berths standing.** A colony makes only what it
+		-- has dwellings for, and a player who cannot arm at all until they have
+		-- saved the price of one has no opening - they watch a number climb for
+		-- several turns and do nothing. Handing everyone the cheapest dwelling
+		-- is what the game this is lifted from does on day one, and for the
+		-- same reason.
+		state.systems[capital].buildings = { "berths" }
 		state.knowledge[i] = {}
 		M.add_captain(state, i, capital)
 	end
@@ -295,7 +313,11 @@ function M.normalise(state)
 		if key then
 			sys.owner = tonumber(sys.owner) or 0
 			sys.capital_of = tonumber(sys.capital_of) or 0
-			sys.stock = tonumber(sys.stock) or 0
+			-- Both round-trip as objects of named integers; `units.normalise`
+			-- is the one place that shape is repaired, and it also carries
+			-- renamed type ids across.
+			sys.available = units.normalise(sys.available)
+			sys.garrison = units.normalise(sys.garrison)
 			-- A dense array of strings, so it survives JSON intact - but an
 			-- empty one encodes as an object on some encoders and comes back as
 			-- a table with no length, which `#` then reads as zero anyway. The

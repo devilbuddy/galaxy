@@ -378,7 +378,7 @@ has to walk there.
 |---|---|---|
 | waypoint | **nothing** | — |
 | outpost | by `industry`, ~3.2 | — |
-| colony | by `industry`, ~4.7 | units, to a cap |
+| colony | by `industry`, ~4.7 | only what it has dwellings for |
 | a capital, on top | `rules.capital_yield` | |
 
 **Road pays nothing, because the map had already decided that.**
@@ -426,6 +426,70 @@ it a decision at all: **you have to pay for what is available.** Without the
 cost, collecting is a chore rather than a choice, and you always take
 everything.
 
+#### The garrison: two complements, and only one of them is yours yet
+
+A colony carries two, and they are not the same thing:
+
+| | |
+|---|---|
+| `available` | what the dwellings have made and nobody has paid for, per type, to each dwelling's cap |
+| `garrison` | what you bought. Sits here until a captain carries it away |
+
+**Buying belongs to the colony, not to a captain.** What is bought goes into the
+garrison and waits, so a player spends the turn they have the money and collects
+whenever somebody can get there. Before this, arming needed an officer standing
+on the spot at the moment of purchase - which with three dwellings in three
+places is three tours to synchronise with a purse.
+
+**Buying and transferring cost no order** (`rules.order_cost`). An order is
+something that *happens somewhere*: moving a captain, raising a building,
+raising an officer. Buying is spending, and a transfer is a captain rearranging
+what is already yours at a place it is already standing. Charging for a purchase
+was right while one went straight into a hold; it stopped being right the moment
+purchases went into the colony, because charging an empire act means a rich
+player banks supply they cannot convert - which is precisely the failure
+buildings were introduced to fix, one level down.
+
+**A transfer carries a target hold, not a delta.** Whatever the captain should
+have aboard when the turn is over; the resolver works out which way each type
+moves. A delta would be wrong the moment anything else touched either side first
+- a purchase landing the same turn, a battle on the way in - and this way the
+client only ever states the thing the player chose. Buying settles before
+transferring, so a purchase and a collection are one turn's work.
+
+**The garrison defends**, folding into the `fleet` half of the two comparisons
+that already exist rather than adding a concept. Production used to defend the
+world holding it and had to be taken out, because defence accumulated for free
+while an attacker carried theirs across the galaxy. A garrison is not that: it
+is bought, so every unit standing on a world is a unit not in a captain's hold
+and the trade pays for itself.
+
+**But being bought was not enough, and that is why there is a cap.**
+`rules.garrison_cap` exists because the two sides are not symmetrical: an
+attacker's power is bounded by `captain_units` - no amount of wealth brings more
+than a hold - while a defender's was bounded by nothing. Measured, uncapped:
+**three seeds in ten never decided at all**, territory bit-identical from turn
+800 to 900, two players sitting on three of the four regions they needed. The
+same freeze combat was built to end, wearing a receipt. Capped at what one
+captain carries, all ten decide again.
+
+**What was ready scatters; what was built stands.** A colony that changed hands
+handing its conqueror an instant army would pay for taking it twice over, so
+`available` is emptied and the garrison dies in the fight that took the world.
+The dwellings do not: they are the prize.
+
+Ten seeds, four players, through the whole redesign:
+
+| | median | range |
+|---|---|---|
+| before any of it | 134 | 83–182 |
+| road pays nothing | 143 | 106–182 |
+| dwellings and garrisons | 159 | 114–261 |
+
+Slower, because production is gated behind a building and worlds can be walled.
+Prices are still guesses - the dwellings were costed against an economy where
+units were free - and pinning them is a sweep of its own.
+
 **Rank sets where a captain starts, not what they can carry.** `base_strength`
 is the officer's own command and where a broken one reforms; `max_units` is what
 they can lead on top of it, and it is generous. Capping the *total* at the rank
@@ -456,18 +520,36 @@ The numbers were measured, not guessed (`tools/play.lua`):
 Making stock accrue every turn is worse than either: a front where both sides
 refit as fast as they can spend never moves.
 
-#### Buildings: two slots, four things, and they do not stack
+#### Buildings: four slots, five things, and they do not stack
 
 A colony **specialises**, so the decision is spatial rather than numeric: this
-one is where units come from, that one is where officers do, the one on the
-frontier is a fortress.
+one makes escorts, that one is where officers come from, the one on the frontier
+is a fortress. You give up exactly one, and where the colony sits decides which.
 
 | | | |
 |---|---|---|
-| **Yards** | 140 | holds more units ready |
-| **Works** | 160 | one ready every turn instead of every other |
+| **Berths** | 60 | Escorts accumulate here |
+| **Interceptor Bay** | 140 | Interceptors accumulate here |
+| **Foundry** | 160 | Bombards accumulate here |
 | **Bastion** | 100 | flat resistance, and arms nobody |
 | **Admiralty** | 220 | another captain allowed, and the place to raise them |
+
+**A colony makes only what it has dwellings for.** There is no base production:
+a world you have just taken pays supply, counts towards its region and is
+somewhere to stand, but has no shipyard until you put one there. That is what
+makes the four slots the whole decision rather than a bonus on top of one — and
+because **buildings live on the system**, a colony changes hands with everything
+built on it. Somebody else's developed arsenal is a target worth marching on,
+which is the first time the map has had a reason to want a *particular* world
+that was not a region tick or a capital.
+
+**A capital opens with Berths standing.** A player who cannot arm at all until
+they have saved the price of a dwelling has no opening — they watch a number
+climb for several turns and do nothing.
+
+Slots went from two to four with the dwellings: two was right when a building
+was a multiplier on production that happened anyway, and would have meant a
+colony could make one thing *or* be anything else.
 
 **Buildings need no captain present.** Raising one is an empire's decision, not
 an errand, and requiring an officer to stand there would make the whole economy

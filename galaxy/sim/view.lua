@@ -137,19 +137,25 @@ function M.project(galaxy, state, player)
 			fortification = sys.owner ~= 0 and (systems.defence(galaxy, id,
 				sys.capital_of == sys.owner, defence_mods[sys.owner])
 				+ buildings.defence_bonus(sys)) or nil,
-			fleet = sys.owner ~= 0 and 0 or nil,
+			fleet = sys.owner ~= 0 and units.power(sys.garrison, units.FLEET)
+				or nil,
 			-- What is standing there. Public where the system is visible: the
 			-- borders show it, and an attacker who cannot see a Bastion coming
 			-- is being asked to guess at the one number that decides the fight.
 			buildings = sys.buildings,
-			-- What a system pays its owner, and what a colony has ready. Both
-			-- public where you can see the system: the yield is derived from
-			-- the star, and stock is already visible in the defence above.
+			-- What a system pays its owner, and what its dwellings have ready.
+			-- Both public where you can see the system: the yield is derived
+			-- from the star, and what a colony makes is legible from the
+			-- buildings standing on it, which are already on the wire.
 			yield = systems.yield(galaxy, id,
 				sys.capital_of ~= 0 and sys.capital_of == sys.owner),
-			stock = systems.is_colony(galaxy, id) and (sys.stock or 0) or nil,
-			stock_cap = systems.is_colony(galaxy, id)
-				and buildings.stock_cap(sys) or nil,
+			available = systems.is_colony(galaxy, id)
+				and units.normalise(sys.available) or nil,
+			-- **The garrison is public where the system is.** It is half of the
+			-- comparison an attacker has to beat, and a fleet nobody can see is
+			-- the one number this design has never asked a player to guess at.
+			garrison = (sys.owner ~= 0 and units.count(sys.garrison) > 0)
+				and units.normalise(sys.garrison) or nil,
 		}
 	end
 	for id, seen in pairs(memory) do
@@ -267,7 +273,6 @@ function M.project(galaxy, state, player)
 			steps = commanders.steps({ level = 1 }, mods),
 			hops = mods.hops,
 			vision = mods.vision,
-			stock_cap = rules.colony_stock_cap,
 			captain_cost = rules.captain_cost,
 			captains = #state_mod.captains_of(state, player),
 			captain_cap = buildings.captain_cap(state, player),

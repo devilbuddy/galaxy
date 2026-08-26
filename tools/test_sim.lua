@@ -495,18 +495,36 @@ do
 		after_one == systems.yield(GALAXY, capital) + rules.capital_yield,
 		after_one)
 
-	-- A colony makes a unit ready on the cadence, whether or not anyone visits.
-	local was = s.systems[capital].stock
-	for _ = 1, rules.colony_stock_turns * 2 do res.turn(GALAXY, s, {}, LENGTHS) end
-	check("a colony holds units ready without being visited",
-		s.systems[capital].stock > was, s.systems[capital].stock)
+	-- **A colony makes only what it has dwellings for.** The capital opens with
+	-- Berths, so it makes Escorts on that dwelling's cadence and nothing else
+	-- at all - the two rows that would once have filled anyway stay at zero
+	-- until somebody builds for them.
+	local berths = buildings.by_id("berths")
+	local sys = s.systems[capital]
+	for _ = 1, berths.every * 2 do res.turn(GALAXY, s, {}, LENGTHS) end
+	check("a dwelling makes its type ready without being visited",
+		sys.available.escort > 0, sys.available.escort)
+	check("and nothing makes what it has no dwelling for",
+		sys.available.interceptor == 0 and sys.available.bombard == 0)
 
-	for _ = 1, rules.colony_stock_cap * rules.colony_stock_turns * 2 do
+	for _ = 1, berths.ready * berths.every * 2 do
 		res.turn(GALAXY, s, {}, LENGTHS)
 	end
-	check("but never more than the cap",
-		s.systems[capital].stock == rules.colony_stock_cap,
-		s.systems[capital].stock)
+	check("but never more than that dwelling's cap",
+		sys.available.escort == berths.ready, sys.available.escort)
+
+	-- A colony with no dwellings is a place to stand and nothing more.
+	local bare = nil
+	for id = 1, #GALAXY.stars do
+		if systems.is_colony(GALAXY, id) and id ~= capital then bare = id break end
+	end
+	s.systems[bare].owner = 1
+	for _ = 1, berths.every * 3 do res.turn(GALAXY, s, {}, LENGTHS) end
+	check("a colony with nothing built makes nothing at all",
+		units.count(s.systems[bare].available) == 0,
+		units.count(s.systems[bare].available))
+	check("though it still pays its owner",
+		systems.yield(GALAXY, bare) > 0, systems.yield(GALAXY, bare))
 
 	-- **Road pays nothing.** Colonies are towns and outposts are mines; the
 	-- lane between them is terrain. `regions.lua` has always counted only the
@@ -538,34 +556,53 @@ do
 	check("an empty captain does not refill by standing still",
 		commanders.carried(captain) == 0)
 
-	-- Stock it, fund it, and load a mix.
-	s.systems[capital].stock = rules.colony_stock_cap
+	-- Stock it, fund it, buy into the garrison and take it aboard. Both are
+	-- free, and buying settles before transferring, so this is one turn.
+	local sys2 = s.systems[capital]
+	sys2.available = units.normalise({ escort = 4, bombard = 2 })
 	s.players[1].supply = 400
-	local before_stock = s.systems[capital].stock
 	local ev = res.turn(GALAXY, s, {
-		{ player = 1, kind = "resupply", captain = captain.id,
+		{ player = 1, kind = "buy", at = capital,
+		  units = { escort = 2, bombard = 1 } },
+		{ player = 1, kind = "transfer", captain = captain.id,
 		  units = { escort = 2, bombard = 1 } },
 	}, LENGTHS)
-	local bought
-	for i = 1, #ev do if ev[i].kind == "resupplied" then bought = ev[i] end end
-	check("a captain on its own colony loads the mix it asked for",
+	local bought, moved
+	for i = 1, #ev do
+		if ev[i].kind == "bought" then bought = ev[i] end
+		if ev[i].kind == "transferred" then moved = ev[i] end
+	end
+	check("a colony buys the mix it asked for",
 		bought and bought.units == 3, bought and bought.units)
 	check("and it is the mix, not just the count",
 		bought and bought.took.escort == 2 and bought.took.bombard == 1)
+	check("what was bought this turn can be taken aboard the same turn",
+		moved and moved.units == 3, moved and moved.units)
 	check("the hold is what it loaded",
 		captain.units.escort == 2 and captain.units.bombard == 1)
+	check("and the garrison is empty again",
+		units.count(sys2.garrison) == 0, units.count(sys2.garrison))
 	check("guns are worth more against walls than against ships",
 		commanders.power(captain, mods, units.FORTIFICATION)
 			> commanders.power(captain, mods, units.FLEET))
-	-- Buying and making ready both happen this turn, in that order, so a colony
-	-- on the cadence hands over three and has one back before the turn ends.
-	local accrued = ((s.turn % rules.colony_stock_turns) == 0) and 1 or 0
 	check("the colony has that many fewer ready",
-		s.systems[capital].stock == before_stock - 3 + accrued,
-		s.systems[capital].stock)
+		sys2.available.escort == 2 and sys2.available.bombard == 1,
+		sys2.available.escort)
 	check("and the purse paid catalogue prices",
 		bought.cost == 2 * units.by_id("escort").cost + units.by_id("bombard").cost,
 		bought.cost)
+
+	-- What is bought stays where it was bought until somebody carries it.
+	local s3 = new_game(2)
+	local cap3 = s3.players[1].capital
+	s3.systems[cap3].available = units.normalise({ escort = 2 })
+	s3.players[1].supply = 400
+	s3.captains[1].at = GALAXY.adjacency[cap3][1]
+	res.turn(GALAXY, s3, {
+		{ player = 1, kind = "buy", at = cap3, units = { escort = 2 } },
+	}, LENGTHS)
+	check("buying needs no captain standing there",
+		s3.systems[cap3].garrison.escort == 2, s3.systems[cap3].garrison.escort)
 
 	-- Rank does not cap what a captain carries; it sets where they start.
 	check("a fresh captain starts on their own command alone",
@@ -575,35 +612,60 @@ do
 		commanders.max_units({ level = 1 }, mods) > 1)
 end
 
-print("what a resupply cannot do")
+print("what a purchase and a transfer cannot do")
 do
-	local function attempt(prepare)
+	local function attempt(orders, prepare)
 		local s = new_game(2)
 		local captain = s.captains[1]
 		local capital = s.players[1].capital
-		s.systems[capital].stock = rules.colony_stock_cap
+		s.systems[capital].available = units.normalise({ escort = 4 })
 		s.players[1].supply = 999
 		captain.units = units.empty()
-		prepare(s, captain)
-		local ev = res.turn(GALAXY, s, {
-			{ player = 1, kind = "resupply", captain = captain.id,
-			  units = { escort = 4 } },
-		}, LENGTHS)
+		if prepare then prepare(s, captain) end
+		local ev = res.turn(GALAXY, s, orders(s, captain), LENGTHS)
 		for i = 1, #ev do
-			if ev[i].kind == "resupplied" then return "bought", ev[i] end
+			if ev[i].kind == "bought" then return "bought", ev[i] end
+			if ev[i].kind == "transferred" then return "transferred", ev[i] end
 			if ev[i].kind == "order_rejected" then return ev[i].reason end
 		end
 		return "nothing"
 	end
 
-	check("not somewhere you do not hold",
-		attempt(function(s, c) c.at = GALAXY.adjacency[c.at][1] end)
-			== "not your colony")
-	check("not from a colony with nothing ready",
-		attempt(function(s) s.systems[s.players[1].capital].stock = 0 end)
-			== "nothing in stock")
+	local function buy(s)
+		return { { player = 1, kind = "buy", at = s.players[1].capital,
+			units = { escort = 4 } } }
+	end
+
+	check("not buying somewhere you do not hold",
+		attempt(buy, function(s) s.systems[s.players[1].capital].owner = 2 end)
+			== "not yours to build on")
+	check("not buying what no dwelling has made",
+		attempt(buy, function(s)
+			s.systems[s.players[1].capital].available = units.empty()
+		end) == "nothing ready here")
 	check("and not on an empty purse",
-		attempt(function(s) s.players[1].supply = 0 end) == "not enough supply")
+		attempt(buy, function(s) s.players[1].supply = 0 end)
+			== "not enough supply")
+
+	check("not swapping where you are not standing", attempt(function(s, c)
+		return { { player = 1, kind = "transfer", captain = c.id,
+			units = { escort = 4 } } }
+	end, function(s, c)
+		s.systems[s.players[1].capital].garrison = units.normalise({ escort = 4 })
+		c.at = GALAXY.adjacency[c.at][1]
+	end) == "not your colony")
+
+	-- A target hold, not a delta: asking for more than the garrison holds gets
+	-- the garrison, and asking for more than the captain can carry gets what
+	-- fits. Both clamp rather than refuse.
+	local why, e = attempt(function(s, c)
+		return { { player = 1, kind = "transfer", captain = c.id,
+			units = { escort = 99 } } }
+	end, function(s)
+		s.systems[s.players[1].capital].garrison = units.normalise({ escort = 3 })
+	end)
+	check("asking for more than is standing there takes what is",
+		why == "transferred" and e.units == 3, e and e.units)
 end
 
 print("what a colony can be made into")
@@ -624,15 +686,23 @@ do
 		return "nothing"
 	end
 
-	local was_cap = buildings.stock_cap(sys)
-	check("a colony can be built on", build("yards") == "built")
-	check("and it does what it says",
-		buildings.stock_cap(sys) > was_cap, buildings.stock_cap(sys))
-	check("the same thing twice is refused", build("yards") == "already built")
+	-- The capital opens with Berths, so it starts on one of its slots.
+	check("a capital opens with somewhere to make escorts",
+		buildings.has(sys, "berths"))
+	check("and that is the only type it makes",
+		buildings.makes(sys, "escort") ~= nil
+			and buildings.makes(sys, "bombard") == nil)
 
-	check("a second building fills the slots", build("works") == "built")
-	check("and a third has nowhere to go",
-		build("bastion") == "no room for another building")
+	check("a colony can be built on", build("foundry") == "built")
+	check("and it does what it says",
+		buildings.makes(sys, "bombard") ~= nil
+			and buildings.ready_cap(sys, "bombard") > 0)
+	check("the same thing twice is refused", build("foundry") == "already built")
+
+	check("more buildings fill the slots", build("interceptor_bay") == "built"
+		and build("bastion") == "built")
+	check("and one past the last slot has nowhere to go",
+		build("admiralty") == "no room for another building")
 	check("slots are what the rules say",
 		buildings.count(sys) == rules.building_slots, buildings.count(sys))
 
@@ -643,9 +713,9 @@ do
 	end
 	s.systems[elsewhere].owner = 1
 	check("only a colony can be built on",
-		build("yards", elsewhere) == "only a colony can be built on")
+		build("berths", elsewhere) == "only a colony can be built on")
 	check("and only one that is yours",
-		build("yards", s.players[2].capital) == "not yours to build on")
+		build("berths", s.players[2].capital) == "not yours to build on")
 
 	-- A Bastion is the only way a world gets harder to take.
 	local t = new_game(2)
@@ -655,7 +725,7 @@ do
 	check("a bastion is worth what the rules say",
 		buildings.defence_bonus(t.systems[other]) == rules.bastion_defence)
 	check("and nothing else raises a system's defence",
-		buildings.defence_bonus({ buildings = { "yards", "works" } }) == 0)
+		buildings.defence_bonus({ buildings = { "berths", "foundry" } }) == 0)
 	check("the bare world is unchanged by it",
 		systems.defence(GALAXY, other, true, modifiers.of(t.players[2])) == bare)
 end

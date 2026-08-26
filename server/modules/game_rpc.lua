@@ -206,7 +206,7 @@ local function catch_up(game, game_version)
 					-- **Every field an order kind carries has to be named here.**
 					-- This rebuild exists to put numbers back after a JSON
 					-- round trip, and it silently drops anything it does not
-					-- mention - which is how a resupply arrived at the resolver
+					-- mention - which is how a purchase arrived at the resolver
 					-- asking for nil units and quietly bought nothing. The same
 					-- shape ate the old `fleet` field once already.
 					orders[#orders + 1] = {
@@ -214,9 +214,9 @@ local function catch_up(game, game_version)
 						kind = o.kind,
 						captain = tonumber(o.captain),
 						route = route,
-						-- The hold is a table, so it is repaired rather than
+						-- A mix is a table, so it is repaired rather than
 						-- coerced. `tonumber` on one gives nil, which is how a
-						-- resupply reached the resolver asking for nothing at
+						-- purchase reached the resolver asking for nothing at
 						-- all the last time this rebuild was widened.
 						units = sim_units.normalise(o.units),
 						at = tonumber(o.at),
@@ -582,7 +582,8 @@ end
 --
 -- There is one order:
 --   { kind = "move", captain, route }   send a captain along a list of waypoints
---   { kind = "resupply", captain, units } load units where the captain ends up
+--   { kind = "buy", at, units }           buy into one of your colonies' garrisons
+--   { kind = "transfer", captain, units } the hold a captain should end with
 --   { kind = "build", at, building }      raise a building on one of your colonies
 --   { kind = "recruit", at }              raise a captain at an Admiralty
 --
@@ -629,8 +630,8 @@ local function rpc_orders(context, payload)
 	--- would have to know about.
 	---
 	--- Matched on kind as well as captain: a captain may march onto one of its
-	--- own colonies *and* resupply there in the same turn, and a resupply that
-	--- superseded the march would leave it buying where it already stood.
+	--- own colonies *and* swap there in the same turn, and a transfer that
+	--- superseded the march would leave it loading where it already stood.
 	local function replace(match)
 		for k = #clean, 1, -1 do
 			if match(clean[k]) then table.remove(clean, k) end
@@ -672,23 +673,39 @@ local function rpc_orders(context, payload)
 				clean[#clean + 1] = entry
 			end
 
-		elseif o.kind == "resupply" then
-			local captain = tonumber(o.captain)
-			if captain then
-				-- Shape only. Whether the colony has the units, whether the
-				-- purse can pay and whether the captain is even standing there
-				-- all depend on state that has moved on by resolution, so the
-				-- resolver clamps and reports.
+		elseif o.kind == "buy" then
+			local at = tonumber(o.at)
+			if at then
+				-- Shape only. Whether the dwellings have produced it and
+				-- whether the purse can pay both depend on state that has moved
+				-- on by resolution, so the resolver clamps and reports.
 				--
 				-- A **mix**, not a count: `units.normalise` is what makes it a
 				-- dense table of known ids and nothing else, whatever a client
-				-- sent.
+				-- sent. This is the third place a widened order shape has been
+				-- flattened by a stray `tonumber`; the field has to be named.
 				local entry = {
-					kind = "resupply", captain = math.floor(captain),
+					kind = "buy", at = math.floor(at),
+					units = sim_units.normalise(o.units),
+				}
+				-- One purchase per colony per turn, for the same reason as a
+				-- build: two orders for the same place would race.
+				replace(function(c) return c.kind == "buy" and c.at == entry.at end)
+				clean[#clean + 1] = entry
+			end
+
+		elseif o.kind == "transfer" then
+			local captain = tonumber(o.captain)
+			if captain then
+				-- The **hold the captain should end the turn with**, not a
+				-- delta - see `resolve.transfers`. Clamped there against what
+				-- the garrison can supply and what the captain can carry.
+				local entry = {
+					kind = "transfer", captain = math.floor(captain),
 					units = sim_units.normalise(o.units),
 				}
 				replace(function(c)
-					return c.kind == "resupply" and c.captain == entry.captain
+					return c.kind == "transfer" and c.captain == entry.captain
 				end)
 				clean[#clean + 1] = entry
 			end

@@ -24,7 +24,11 @@ local playback = require("main.playback")
 local SEED = 1337
 local GALAXY = gen.build(SEED)
 local LENGTHS = path.lane_lengths(GALAXY)
-local TURNS = 30
+-- Long enough to contain a war. Dwellings gate production now, so the first
+-- fight of a four-player game lands a little past turn 30 - and a fixture with
+-- no battle in it silently stops testing the half of the rewind that reads
+-- `battle` events.
+local TURNS = 45
 
 local failures = 0
 local function check(name, ok, detail)

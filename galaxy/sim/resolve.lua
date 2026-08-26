@@ -120,20 +120,41 @@ local function captain_orders(galaxy, state, orders, mods, lengths, events, pend
 				reject("nowhere to raise them")
 			end
 
-		elseif order.kind == "resupply" then
+		elseif order.kind == "buy" then
+			-- **Buying belongs to the colony, not to a captain.** What is
+			-- bought goes into the garrison and waits there, so a player spends
+			-- the turn they have the money and collects whenever somebody can
+			-- get to it. Before this, arming required an officer standing on
+			-- the spot at the moment of purchase - which with three dwellings
+			-- in three places is three tours to synchronise with a purse.
+			--
+			-- Recorded rather than acted on, like a build: who holds the
+			-- colony can change in the movement phase that has not run yet.
+			local at = order.at and floor(order.at)
+			if at then
+				pending[#pending + 1] = {
+					player = who, at = at, buy = units.normalise(order.units),
+				}
+			else
+				reject("nowhere to buy")
+			end
+
+		elseif order.kind == "transfer" then
+			-- **A captain rearranging what is already yours**, at a place it is
+			-- already standing. It costs no order at all - see
+			-- `rules.order_cost` - and it is a *target hold*, not a delta: the
+			-- client sets what should be aboard when the turn is over and the
+			-- resolver moves whatever it takes to get there, in either
+			-- direction. A delta would be wrong the moment anything else
+			-- touched either side first.
 			local captain = state_mod.captain_by_id(state, order.captain)
 			if not captain or captain.owner ~= who then
 				reject("no such captain", { captain = order.captain })
 			else
-				-- **A mix, not a count.** Composition is chosen at the moment a
-				-- captain loads, which is when the player already knows what
-				-- they are marching at - not twenty turns earlier at whichever
-				-- colony happened to build it.
-				--
-				-- Recorded rather than acted on: a captain buys where it *ends*
-				-- the turn, so an order can move onto a colony and load there
-				-- in one go. Movement has not run yet.
-				captain.buying = units.normalise(order.units)
+				-- Recorded rather than acted on: a captain transfers where it
+				-- *ends* the turn, so a march onto one of your colonies and a
+				-- swap there are one turn's work.
+				captain.swapping = units.normalise(order.units)
 			end
 
 		elseif order.kind == "move" then
@@ -191,10 +212,28 @@ local function resistance(galaxy, state, mods, id)
 	local fortification = systems_mod.defence(galaxy, id, sys.capital_of == owner,
 		mods[owner]) + buildings.defence_bonus(sys)
 
-	-- A garrison defends; it does not besiege. So a captain standing on a system
-	-- contributes to the *fleet* half only, and a world with nobody on it has no
-	-- fleet half at all.
+	-- A defender defends; it does not besiege. So everything standing on a
+	-- system contributes to the *fleet* half only, and a world with nothing on
+	-- it has no fleet half at all.
+	--
+	-- Two things stand: the colony's own garrison, and any captain of the
+	-- owner's who happens to be there.
+	--
+	-- **The garrison defends because it was bought.** Production used to defend
+	-- the world holding it, and that had to be taken out - defence accumulated
+	-- for free while an attacker carried theirs across the galaxy, and the map
+	-- froze. A garrison is not that. Every unit standing on a world is a unit
+	-- that is not in a captain's hold, so a player who fortifies pays for it in
+	-- offence and the trade balances itself.
 	local fleet, garrison = 0, {}
+	local held_here = units.power(sys.garrison, units.FLEET)
+	if held_here > 0 then
+		fleet = fleet + held_here
+		garrison[#garrison + 1] = {
+			name = "Garrison", power = held_here,
+			hold = units.normalise(sys.garrison),
+		}
+	end
 	for i = 1, #state.captains do
 		local c = state.captains[i]
 		if c.owner == owner and c.at == id then
@@ -282,6 +321,18 @@ end
 -- each, an officer who could be removed from the board would end the game for
 -- their player on a single bad turn, and everyone would stop committing.
 local function break_defenders(state, mods, id, owner, events)
+	-- **The garrison was the fight, so the garrison is gone.** It stood in the
+	-- fleet half of the comparison the attacker had to beat, and a defence that
+	-- survived losing would mean an attacker paying for the same wall twice.
+	local sys = state.systems[id]
+	if sys and units.count(sys.garrison) > 0 then
+		emit(events, {
+			kind = "garrison_lost", turn = state.turn,
+			player = owner, at = id, lost = units.normalise(sys.garrison),
+			units = units.count(sys.garrison), visible_to = { owner },
+		})
+		sys.garrison = units.empty()
+	end
 	for i = 1, #state.captains do
 		local c = state.captains[i]
 		if c.owner == owner and c.at == id then
@@ -372,11 +423,17 @@ local function movement(galaxy, state, mods, events)
 				-- their capital - which matters when the capital *is* the
 				-- system falling.
 				break_defenders(state, mods, next_id, defender, events)
-				-- The stock scatters rather than changing hands: units raised
-				-- for one empire do not serve the next, and a colony that
-				-- handed its conqueror an instant army would make taking one
-				-- pay for itself twice over.
-				sys.stock = 0
+				-- **What was ready scatters; what was built stands.** Units
+				-- raised for one empire do not serve the next, and a colony
+				-- that handed its conqueror an instant army would pay for
+				-- taking it twice over. The dwellings that made them are a
+				-- different matter - they live on the system, so a developed
+				-- colony changes hands intact, and that is what makes somebody
+				-- else's arsenal worth marching on.
+				--
+				-- The garrison is not cleared here: it stood in the fight, and
+				-- `break_defenders` has already taken it apart.
+				sys.available = units.empty()
 
 				local exchanges, lost = fight(captain, siege, fortification,
 					against_fleet, fleet)
@@ -467,6 +524,51 @@ local function construction(galaxy, state, pending, events)
 		if not sys or sys.owner ~= order.player then
 			reject("not yours to build on")
 
+		elseif order.buy then
+			-- **Clamped rather than refused**, in catalogue order, against
+			-- three things: what the dwellings have actually produced, what the
+			-- purse can pay for, and what the colony can still hold.
+			--
+			-- A player who asked for six and can afford four has been given the
+			-- four, which is what they wanted; the event says what happened.
+			local purse = player.supply or 0
+			local room = rules.garrison_cap - units.count(sys.garrison)
+			local taken, spent = units.empty(), 0
+			for k = 1, #units.CATALOGUE do
+				local spec = units.CATALOGUE[k]
+				local n = order.buy[spec.id] or 0
+				local ready = sys.available[spec.id] or 0
+				if n > ready then n = ready end
+				if n > room then n = room end
+				local afford = floor((purse - spent) / spec.cost)
+				if n > afford then n = afford end
+				if n > 0 then
+					taken[spec.id] = n
+					room = room - n
+					spent = spent + n * spec.cost
+				end
+			end
+
+			local count = units.count(taken)
+			if count <= 0 then
+				reject(units.count(sys.available) == 0 and "nothing ready here"
+					or (units.count(sys.garrison) >= rules.garrison_cap
+						and "the garrison is full" or "not enough supply"))
+			else
+				for k = 1, #units.CATALOGUE do
+					local id = units.CATALOGUE[k].id
+					sys.available[id] = sys.available[id] - taken[id]
+					sys.garrison[id] = (sys.garrison[id] or 0) + taken[id]
+				end
+				player.supply = purse - spent
+				emit(events, {
+					kind = "bought", turn = state.turn,
+					player = order.player, at = order.at,
+					units = count, took = taken, cost = spent,
+					visible_to = { order.player },
+				})
+			end
+
 		elseif order.recruit then
 			local here = buildings.has(sys, "admiralty")
 			local room = #state_mod.captains_of(state, order.player)
@@ -514,80 +616,69 @@ local function construction(galaxy, state, pending, events)
 	end
 end
 
---- Buy the units a captain asked for, wherever it ended up.
+--- Move units between a colony's garrison and the captain standing on it.
 --
 -- **Where it ends the turn, not where it started.** A captain that marches onto
--- one of its own colonies resupplies the same turn, which is what makes a trip
--- home a single order rather than two turns of waiting. Movement is discrete
--- and the route is drawn before it is sent, so the player knows exactly where
--- the captain will be standing.
+-- one of its own colonies swaps the same turn, which is what makes a trip home
+-- a single order rather than two turns of waiting. Movement is discrete and the
+-- route is drawn before it is sent, so the player knows exactly where the
+-- captain will be standing.
 --
--- Everything is clamped rather than refused: what the colony has, what the
--- purse can pay for, and what the captain can still carry. A player asking for
--- six and getting four has been given the four, which is what they wanted; the
--- event says what actually happened.
-local function logistics(galaxy, state, mods, events)
+-- **The order carries a target hold, not a delta.** Whatever the captain should
+-- have aboard when the turn is over; the resolver works out which way each type
+-- has to move and does it. A delta would be wrong the moment anything else
+-- touched either side first - a battle on the way in, a purchase landing the
+-- same turn - and this way the client only ever has to state the thing the
+-- player actually chose.
+--
+-- Clamped rather than refused, in catalogue order: what the garrison can supply
+-- and what the captain can still carry. A player who asked for six and got four
+-- has been given the four.
+local function transfers(galaxy, state, mods, events)
 	for i = 1, #state.captains do
 		local captain = state.captains[i]
-		local want = captain.buying
-		captain.buying = nil
-		if want and units.count(want) > 0 then
-			local player = state.players[captain.owner]
+		local want = captain.swapping
+		captain.swapping = nil
+		if want then
 			local sys = state.systems[captain.at]
 			local my_mods = mods[captain.owner]
 
-			if sys.owner ~= captain.owner then
+			if not sys or sys.owner ~= captain.owner then
 				emit(events, {
 					kind = "order_rejected", turn = state.turn,
 					player = captain.owner, captain = captain.id,
 					reason = "not your colony", visible_to = { captain.owner },
 				})
 			else
-				-- Clamped rather than refused, and in catalogue order so a
-				-- player who asked for more than the berth, the purse or the
-				-- hold allows gets as much of the front of their list as fits.
-				-- The event says what actually came aboard.
-				local room = commanders.room(captain, my_mods)
-				local berths = sys.stock or 0
-				local purse = player.supply or 0
-				local taken, spent = units.empty(), 0
+				local capacity = commanders.max_units(captain, my_mods)
+				local aboard, moved = 0, 0
 				for k = 1, #units.CATALOGUE do
-					local spec = units.CATALOGUE[k]
-					local n = want[spec.id] or 0
-					if n > room then n = room end
-					if n > berths then n = berths end
-					local afford = floor((purse - spent) / spec.cost)
-					if n > afford then n = afford end
-					if n > 0 then
-						taken[spec.id] = n
-						room = room - n
-						berths = berths - n
-						spent = spent + n * spec.cost
+					local id = units.CATALOGUE[k].id
+					local have = captain.units[id] or 0
+					local here = sys.garrison[id] or 0
+					local target = want[id] or 0
+
+					-- Up, but only as far as the garrison and the hold allow.
+					if target > have + here then target = have + here end
+					if target > have + (capacity - aboard - have) then
+						target = have + (capacity - aboard - have)
 					end
+					if target < 0 then target = 0 end
+
+					local delta = target - have
+					captain.units[id] = have + delta
+					sys.garrison[id] = here - delta
+					aboard = aboard + captain.units[id]
+					moved = moved + (delta < 0 and -delta or delta)
 				end
 
-				local count = units.count(taken)
-				if count <= 0 then
+				if moved > 0 then
 					emit(events, {
-						kind = "order_rejected", turn = state.turn,
-						player = captain.owner, captain = captain.id,
-						reason = (sys.stock or 0) == 0 and "nothing in stock"
-							or (commanders.room(captain, my_mods) <= 0
-								and "no room aboard" or "not enough supply"),
-						visible_to = { captain.owner },
-					})
-				else
-					for k = 1, #units.CATALOGUE do
-						local id = units.CATALOGUE[k].id
-						captain.units[id] = (captain.units[id] or 0) + taken[id]
-					end
-					sys.stock = sys.stock - count
-					player.supply = purse - spent
-					emit(events, {
-						kind = "resupplied", turn = state.turn,
+						kind = "transferred", turn = state.turn,
 						player = captain.owner, captain = captain.id,
 						name = captain.name, at = captain.at,
-						units = count, took = taken, cost = spent,
+						units = moved,
+						hold = units.normalise(captain.units),
 						siege = commanders.power(captain, my_mods, units.FORTIFICATION),
 						fleet_power = commanders.power(captain, my_mods, units.FLEET),
 						visible_to = { captain.owner },
@@ -598,12 +689,13 @@ local function logistics(galaxy, state, mods, events)
 	end
 end
 
---- What every system paid its owner, and what every colony made ready.
+--- What every system paid its owner, and what every dwelling made ready.
 --
--- Stock accrues on a fixed cadence rather than per colony, so a player can read
--- "another unit every other turn" off the rules instead of tracking a timer per
--- world. It accumulates whether or not anyone visits and does not decay: a
--- distant colony is not wasted production, it is a reason to march.
+-- **A colony makes only what it has dwellings for.** Each carries its own cap
+-- and its own cadence, so a Foundry fills slowly and Berths quickly, and a
+-- world with neither fills not at all. Availability accumulates whether or not
+-- anyone visits and does not decay: a distant colony is not wasted production,
+-- it is a reason to march.
 local function economy(galaxy, state, summaries)
 	local earned = {}
 	for id, sys in pairs(state.systems) do
@@ -613,12 +705,16 @@ local function economy(galaxy, state, summaries)
 			-- way for a captured seat to keep paying its former owner.
 			earned[sys.owner] = (earned[sys.owner] or 0)
 				+ systems_mod.yield(galaxy, id, sys.capital_of == sys.owner)
-			-- Cadence and cap are the colony's own, not the rules': Works makes
-			-- one ready every turn and Yards holds more of them.
-			if systems_mod.is_colony(galaxy, id)
-				and (state.turn % buildings.stock_turns(sys)) == 0
-				and (sys.stock or 0) < buildings.stock_cap(sys) then
-				sys.stock = (sys.stock or 0) + 1
+			-- One pass per dwelling standing here. Catalogue order, never
+			-- `pairs`, because two runtimes have to agree on what a turn did.
+			local dwellings = buildings.dwellings(sys)
+			for d = 1, #dwellings do
+				local spec = dwellings[d]
+				local made = spec.makes
+				if (state.turn % spec.every) == 0
+					and (sys.available[made] or 0) < spec.ready then
+					sys.available[made] = (sys.available[made] or 0) + 1
+				end
 			end
 		end
 	end
@@ -654,7 +750,8 @@ local function aftermath(galaxy, state, mods, events, summaries)
 			for _, sys in pairs(state.systems) do
 				if sys.owner == i then
 					sys.owner = 0
-					sys.stock = 0
+					sys.available = units.empty()
+					sys.garrison = units.empty()
 					sys.capital_of = 0
 					released = released + 1
 				end
@@ -859,9 +956,12 @@ function M.turn(galaxy, state, orders, lengths)
 	local pending = {}
 	captain_orders(galaxy, state, orders, mods, lengths, events, pending)
 	movement(galaxy, state, mods, events)
-	-- After movement, because a captain buys where it *ends* the turn.
+	-- After movement, because everything here happens where the turn *ends*: a
+	-- colony taken this turn can be built on and bought from this turn, and a
+	-- captain that marched home swaps there. Buying runs before transferring,
+	-- so a purchase and a collection are one turn's work.
 	construction(galaxy, state, pending, events)
-	logistics(galaxy, state, mods, events)
+	transfers(galaxy, state, mods, events)
 	economy(galaxy, state, summaries)
 
 	for e = 1, #events do
