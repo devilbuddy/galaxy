@@ -1293,7 +1293,27 @@ liability. Turning it off is the supported switch, not a workaround.
   `druid/base/hover.lua: Deleted node`. `ui.region(instance, nodes)` finals the
   instance and *then* deletes the nodes, in that order.
 
-  **`druid:remove()` is not an alternative, because it is usually deferred.**
+  **`late_init` is not run from `update` — it is scheduled on a
+  `timer.delay(0)` when any component is created, and *nothing* cancels it.**
+  Not `final()`, not `remove()`. So it fires on the next frame whether the
+  instance still exists or not, pops a component whose node has since been
+  deleted, and `on_late_init` walks the dead node looking for a stencil:
+
+      druid/helper.lua:338: Deleted node
+        get_parent → get_closest_stencil_node → button.on_late_init → late_init
+
+  That makes it a **race**, not a mistake in the teardown order — it only throws
+  when a region is rebuilt within a frame of a button being made in it: a fast
+  second tap, a relayout landing on the frame a card was built, a playback
+  stepping at 4x. Which is why it was intermittent, and why it appeared to come
+  from screens with no connection to whatever had just been touched.
+  `ui.region` cancels the pending timer before finaling, which closes the class
+  wherever it happens. Draining the queue instead would be worse: `final` leaves
+  the interest lists populated, so `late_init` would re-acquire input focus for
+  an instance being thrown away.
+
+  **`druid:remove()` is not an alternative either, because it is usually
+  deferred.**
   `DruidInstance:update` and `:on_input` both set `_is_late_remove_enabled`, and
   while it is set `remove()` queues the component and returns `false` without
   touching it. Anything rebuilt from an update, an input callback or an async

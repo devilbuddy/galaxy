@@ -709,7 +709,33 @@ end
 -- which is exactly what went wrong: `ui.tabs` and `ui.scroll` each quietly
 -- registered one and the caller only tracked its buttons.
 function M.region(instance, nodes)
-	if instance then instance:final() end
+	if instance then
+		-- **Cancel Druid's pending late-init first.** `late_init` is not run
+		-- from `update` - creating any component schedules it on a
+		-- `timer.delay(0)`, and *nothing* cancels that: not `final()`, not
+		-- `remove()`. So it fires on the next frame whether the instance still
+		-- exists or not, pops a component whose node this function is about to
+		-- delete, and `on_late_init` walks the dead node looking for a stencil:
+		--
+		--     druid/helper.lua:338: Deleted node
+		--       get_parent -> get_closest_stencil_node -> button.on_late_init
+		--
+		-- Which makes it a *race*, not a mistake in the teardown order: it only
+		-- throws when a region is rebuilt within a frame of a button being made
+		-- in it - a fast second tap, a relayout landing on the frame a card was
+		-- built, a playback stepping at 4x. That is why it was intermittent and
+		-- why it appeared to come from screens with no connection to whatever
+		-- had just been touched.
+		--
+		-- Draining the queue instead of cancelling it would be worse: `final`
+		-- leaves the interest lists populated, so `late_init` would also
+		-- re-acquire input focus for an instance that is being thrown away.
+		if instance._late_init_timer_id then
+			timer.cancel(instance._late_init_timer_id)
+			instance._late_init_timer_id = nil
+		end
+		instance:final()
+	end
 	if nodes then
 		for i = 1, #nodes do
 			if nodes[i] then gui.delete_node(nodes[i]) end
