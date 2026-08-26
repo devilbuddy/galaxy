@@ -1,4 +1,4 @@
-script: "/main/screens/slot.gui_script"
+script: "/main/screens/transfer.gui_script"
 fonts {
   name: "ui"
   font: "/main/fonts/ui.font"

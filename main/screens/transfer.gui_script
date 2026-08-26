@@ -1,0 +1,251 @@
+--- Moving units between a colony's garrison and the captain standing on it.
+--
+-- **The one screen where the whole combat design is visible at once.** Every
+-- fight in this game is two comparisons a player does in their head before
+-- committing - siege against walls, fleet against ships - and this is where
+-- both numbers move as they decide. Push with these, or hold with them.
+--
+-- So the header is not decoration: it is the answer. Both halves for the
+-- captain and both halves for the world, live, as the split changes.
+--
+-- **Steppers, not sliders.** The same control the shipyard buys with, because
+-- it is the same act - deciding a composition against a budget - and one
+-- vocabulary is worth more than a gesture. The numbers are small (a captain
+-- carries six, a veteran nine) and the three rows share one capacity, so a
+-- slider would be about 35 dp a step with a ceiling that moves under your
+-- thumb. TAKE ALL is what a slider was actually for: the tap count.
+--
+-- It costs no order. A transfer is a captain rearranging what is already yours
+-- at a place it is already standing.
+
+local druid = require("druid.druid")
+local monarch = require("monarch.monarch")
+local store = require("main.store")
+local ui = require("main.ui")
+local sim_units = require("galaxy.sim.units")
+
+local CARD_W = 660
+local PAD = 26
+local ROW_H = 74
+
+--- "<shield> n   <hull> n" - the same two marks the sheet measures everything in.
+local function draw_halves(x, y, walls, ships, tone)
+	local size = 24
+	ui.icon(x, y + 12, size, "icon_defence", tone or ui.DIM)
+	ui.body(x + size + 6, y, tostring(walls), tone or ui.TEXT)
+	local mid = x + size + 12 + ui.text_width(tostring(walls), ui.BODY) + 20
+	ui.icon(mid, y + 12, size, "icon_warship", tone or ui.DIM)
+	ui.body(mid + size + 6, y, tostring(ships), tone or ui.TEXT)
+end
+
+local function close()
+	monarch.hide(hash("transfer"))
+end
+
+--- The captain and the colony, as they stand right now.
+local function subject(data)
+	local view = store.game_view or {}
+	local sys = (view.systems or {})[tostring(data.at or 0)] or {}
+	local captain
+	for i = 1, #(view.captains or {}) do
+		if view.captains[i].id == data.captain then captain = view.captains[i] end
+	end
+	return view, sys, captain
+end
+
+--- What each half is worth, for one side of the split.
+--
+-- The captain's own command counts towards both and is not in the hold, so it
+-- is added back: a bare officer is still worth something, and a screen that
+-- said otherwise would disagree with the sheet.
+local function halves(hold, base)
+	return sim_units.power(hold, sim_units.FORTIFICATION) + (base or 0),
+		sim_units.power(hold, sim_units.FLEET) + (base or 0)
+end
+
+local function build(self)
+	local w, h = store.screen.width, store.screen.height
+	self.druid = druid.new(self)
+	ui.shade(0.72)
+
+	local data = monarch.data(hash("transfer")) or {}
+	local view, sys, captain = subject(data)
+	if not captain then close() return end
+
+	local base = captain.base_strength or 0
+	local capacity = captain.max_units or 0
+	local garrison = sim_units.normalise(sys.garrison)
+	local starting = sim_units.normalise(captain.hold)
+
+	-- The working split. Everything below reads and writes these two, and the
+	-- pair always adds up to what was there when the screen opened - which is
+	-- what makes both columns true at every moment rather than only at the end.
+	self.hold = self.hold or sim_units.normalise(captain.hold)
+	self.here = self.here or garrison
+	local hold, here = self.hold, self.here
+
+	local moving = {}
+	local previous = ui.collect(moving)
+	local card, edge = ui.card(0, 0, CARD_W, 100)
+	local inner = PAD
+	local text_w = CARD_W - PAD * 2
+
+	local aboard = sim_units.count(hold)
+	local yy = -34
+	ui.portrait(inner, yy + 22, 44, captain.portrait,
+		{ ring_colour = ui.ACCENT })
+	ui.body(inner + 58, yy, captain.name, ui.TEXT)
+	ui.small(inner + text_w, yy, aboard .. " of " .. capacity .. " aboard",
+		aboard >= capacity and ui.WARN or ui.DIM, { pivot = gui.PIVOT_E })
+
+	yy = yy - 44
+	local hs, hf = halves(hold, base)
+	local gs, gf = halves(here, 0)
+	local column = text_w * 0.5
+	ui.small(inner, yy, captain.name:upper(), ui.FAINT)
+	ui.small(inner + text_w, yy, "ON GUARD HERE", ui.FAINT,
+		{ pivot = gui.PIVOT_E })
+	yy = yy - 34
+	draw_halves(inner, yy, hs, hf, ui.TEXT)
+	draw_halves(inner + column + 40, yy, gs, gf, ui.TEXT)
+
+	yy = yy - 26
+	ui.divider(inner, yy, text_w)
+
+	local rows = 0
+	for k = 1, #(view.units or {}) do
+		local spec = view.units[k]
+		local mine, theirs = hold[spec.id] or 0, here[spec.id] or 0
+		if mine > 0 or theirs > 0 then
+			rows = rows + 1
+			yy = yy - ROW_H
+			ui.panel(inner, yy + ROW_H - 6, text_w, ROW_H - 12, ui.CARD_ALT)
+			ui.small(inner + 14, yy + 44, spec.name, ui.TEXT)
+			ui.icon(inner + 14, yy + 26, 20, "icon_defence", ui.FAINT)
+			ui.small(inner + 38, yy + 16, tostring(spec.fortification), ui.FAINT)
+			ui.icon(inner + 62, yy + 26, 20, "icon_warship", ui.FAINT)
+			ui.small(inner + 86, yy + 16, tostring(spec.fleet), ui.FAINT)
+
+			-- The two numbers, and the two chevrons that move the boundary
+			-- between them. Both are always true; nothing here is a delta the
+			-- player has to add up.
+			local size = 60
+			local left_x = inner + text_w - 14 - size * 2 - 120
+			ui.value(left_x - 18, yy + 32, tostring(mine), ui.BODY,
+				mine > 0 and ui.TEXT or ui.FAINT, { pivot = gui.PIVOT_E })
+			ui.value(inner + text_w - 14, yy + 32, tostring(theirs), ui.BODY,
+				theirs > 0 and ui.TEXT or ui.FAINT, { pivot = gui.PIVOT_E })
+
+			local function shift(delta)
+				return function()
+					local from = delta > 0 and here or hold
+					local to = delta > 0 and hold or here
+					if (from[spec.id] or 0) <= 0 then return end
+					if delta > 0 and sim_units.count(hold) >= capacity then return end
+					from[spec.id] = from[spec.id] - 1
+					to[spec.id] = (to[spec.id] or 0) + 1
+					self.dirty = true
+				end
+			end
+
+			local take = ui.icon_button(self.druid, left_x, yy + ROW_H - 8,
+				size, "icon_chevron_left", shift(1),
+				{ background = ui.CARD, colour = ui.TEXT })
+			if theirs <= 0 or aboard >= capacity then take.set_enabled(false) end
+			local leave = ui.icon_button(self.druid, left_x + size + 8,
+				yy + ROW_H - 8, size, "icon_chevron_right", shift(-1),
+				{ background = ui.CARD, colour = ui.TEXT })
+			if mine <= 0 then leave.set_enabled(false) end
+		end
+	end
+
+	if rows == 0 then
+		yy = yy - 48
+		ui.small(inner, yy, "Nothing to move.", ui.FAINT)
+	end
+
+	yy = yy - 88
+	local gap = 14
+	local third = (text_w - gap * 2) / 3
+	local fill = ui.button(self.druid, inner, yy + 80, third, ui.CONTROL,
+		"TAKE ALL", function()
+			-- **What a slider was for.** Nine taps a type is the only real
+			-- argument against a stepper, and one control removes it.
+			for k = 1, #sim_units.CATALOGUE do
+				local id = sim_units.CATALOGUE[k].id
+				while (here[id] or 0) > 0
+					and sim_units.count(hold) < capacity do
+					here[id] = here[id] - 1
+					hold[id] = (hold[id] or 0) + 1
+				end
+			end
+			self.dirty = true
+		end, { size = ui.CAPS })
+	if sim_units.count(here) == 0 or sim_units.count(hold) >= capacity then
+		fill.set_enabled(false)
+	end
+
+	local empty = ui.button(self.druid, inner + third + gap, yy + 80, third,
+		ui.CONTROL, "LEAVE ALL", function()
+			for k = 1, #sim_units.CATALOGUE do
+				local id = sim_units.CATALOGUE[k].id
+				here[id] = (here[id] or 0) + (hold[id] or 0)
+				hold[id] = 0
+			end
+			self.dirty = true
+		end, { size = ui.CAPS })
+	if sim_units.count(hold) == 0 then empty.set_enabled(false) end
+
+	ui.button(self.druid, inner + (third + gap) * 2, yy + 80, third,
+		ui.CONTROL, "DONE", function()
+			store.transfer_request = {
+				captain = data.captain, units = sim_units.normalise(hold),
+				current = starting,
+			}
+			close()
+		end, { style = "primary", size = ui.CAPS })
+
+	ui.collect(previous)
+
+	local card_h = -yy + PAD
+	gui.set_size(card, vmath.vector3(CARD_W, card_h, 0))
+	gui.set_size(edge, vmath.vector3(CARD_W, card_h, 0))
+	local dx, dy = (w - CARD_W) * 0.5, (h + card_h) * 0.5
+	for i = 1, #moving do
+		local p = gui.get_position(moving[i])
+		gui.set_position(moving[i], vmath.vector3(p.x + dx, p.y + dy, 0))
+	end
+	self.nodes = moving
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	ui.install_druid_picking()
+	build(self)
+end
+
+function final(self)
+	if self.druid then self.druid:final() end
+end
+
+function update(self, dt)
+	if self.druid then self.druid:update(dt) end
+	-- Rebuilt whole rather than patched: the row set changes as a type empties
+	-- on one side, and every number on the card depends on the split. Only on
+	-- an actual change, so this is not per-frame work.
+	if self.dirty then
+		self.dirty = false
+		ui.region(self.druid, self.nodes)
+		self.druid = nil
+		self.nodes = nil
+		build(self)
+	end
+end
+
+function on_input(self, action_id, action)
+	return ui.modal_input(self.druid, action_id, action)
+end
+
+function on_message(self, message_id, message, sender)
+	if self.druid then self.druid:on_message(message_id, message, sender) end
+end

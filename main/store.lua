@@ -93,6 +93,18 @@ M.leave_requested = nil
 M.slot_popup = nil
 M.slot_request = nil
 
+-- A colony and the captain standing on it, when the player has asked to move
+-- units between them: `{ at = <system>, captain = <id> }`. Shown by the HUD
+-- for the same reason as the slot popup - a screen cannot open one from inside
+-- the region Monarch is part way through tearing down.
+M.transfer_popup = nil
+M.transfer_request = nil
+
+-- A colony and the captain standing on it, when the player has asked to move
+-- units between them: `{ at = <system>, captain = <id> }`. Shown by the HUD for
+-- the same reason as the slot popup - a screen cannot open one from inside the
+-- region Monarch is part way through tearing down.
+
 -- A turn digest that arrived on a background poll rather than on arrival at the
 -- map. Held rather than shown, because a popup must not land on top of a player
 -- who is in the middle of reading the map; the overview offers it instead.

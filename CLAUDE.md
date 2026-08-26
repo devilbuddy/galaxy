@@ -1047,6 +1047,7 @@ found nothing.
 | `map` | `main/screens/map.collection` | the galaxy view (was the old bootstrap) |
 | `report` | `main/screens/report.collection` | turn digest; a **popup** over the map |
 | `slot` | `main/screens/slot.collection` | one upgrade slot; a **popup** over the map |
+| `transfer` | `main/screens/transfer.collection` | a colony's garrison and the captain on it; a **popup** |
 
 **The map screen sets `screen_keeps_input_focus_when_below_popup`.** Monarch
 defaults that to *false*, so showing a popup posts `release_input_focus` to the
@@ -1424,6 +1425,41 @@ rule below came out of one specific thing on it that could not be read:
   content past it is drawn over the order bar. Two slot boxes took the card back
   from ~930 units to ~700, but the cap is 960 and adding a row means checking
   that sum.
+
+**The shipyard says what *this world* makes.** Only the types it has a dwelling
+for - the mapping is on the wire, since every building declares what it makes -
+so a colony with one dwelling is one row, and a Foundry with nothing out of it
+yet still says "0 ready" rather than vanishing until something appears. Each row
+carries three numbers that mean different things: what it costs, what is ready
+to buy, and what is already standing here.
+
+Buying fills the garrison, so the steppers need no captain present and spend no
+order — the bar reads "0 of 3 orders used" while a purchase is staged, which is
+the whole point of it being free.
+
+**MOVE UNITS opens the transfer popup**, and only when there is something to
+trade: a control that opens two empty columns is a control that has taught the
+player it does nothing.
+
+**`main/screens/transfer.gui_script` is where the whole combat design is visible
+at once.** Every fight is two comparisons a player does in their head before
+committing, and this is the one screen where both move as they decide — the
+captain's two halves and the world's two halves, live, as the split changes.
+Push with these, or hold with them.
+
+Steppers rather than sliders, and it was close. A slider can *show* the shared
+capacity as a dead zone on the track, which beats three `+` buttons greying for
+a reason that is off-screen. Against it: the ranges are tiny (a captain carries
+six, a veteran nine), the three rows share one budget, and a step would be about
+35 dp — under a fingertip, on the one screen where an off-by-one is a wrong
+army. The deciding argument was vocabulary: buying and transferring are the same
+act, deciding a composition against a budget, and one control for both is worth
+more than a gesture. TAKE ALL is what the slider was actually for — the tap
+count.
+
+The popup rebuilds itself whole on every change rather than patching, because
+the row set changes as a type empties on one side and every number on the card
+depends on the split. Gated on an actual change, so it is not per-frame work.
 
 **Upgrades are two boxes, and each one opens a popup.** They were four rows with
 a name, a line of what they do and a price - a catalogue on the bottom of the

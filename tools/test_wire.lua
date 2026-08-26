@@ -102,7 +102,8 @@ do
 	check("the projection has every field the client reads", #missing == 0,
 		table.concat(missing, ", "))
 
-	for _, key in ipairs({ "systems", "steps", "hops", "vision" }) do
+	for _, key in ipairs({ "systems", "steps", "hops", "vision",
+			"garrison_cap" }) do
 		check("rates." .. key .. " is a number", type(v.rates[key]) == "number")
 	end
 

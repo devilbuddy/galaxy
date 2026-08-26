@@ -768,6 +768,13 @@ function M.plural(n, singular, plural)
 	return n .. " " .. (n == 1 and singular or (plural or (singular .. "s")))
 end
 
+--- Just the noun, pluralised. `plural` already puts the count in front of it,
+--- which is wrong wherever the count is being formatted separately.
+function M.plural_word(n, singular, plural)
+	n = math.floor(tonumber(n) or 0)
+	return n == 1 and singular or (plural or (singular .. "s"))
+end
+
 --- A signed rate, for an income figure shown next to a balance.
 function M.rate(n)
 	n = math.floor(tonumber(n) or 0)

@@ -201,9 +201,14 @@ local function step_caption(step, you, name_of, place_of)
 		elseif e.kind == "battle" then
 			offer(2, (e.player == you and (e.name or "You") or name_of(e.player))
 				.. " took " .. place_of(e.at))
-		elseif e.kind == "resupplied" then
+		elseif e.kind == "transferred" then
 			offer(2, (e.name or "A captain") .. " took aboard "
 				.. tostring(e.units or 0) .. " at " .. place_of(e.at))
+		elseif e.kind == "bought" then
+			offer(1, "Bought " .. tostring(e.units or 0) .. " at "
+				.. place_of(e.at))
+		elseif e.kind == "garrison_lost" then
+			offer(3, "The garrison at " .. place_of(e.at) .. " was destroyed")
 		elseif e.kind == "claimed" then
 			offer(1, (e.player == you and "You claimed " or (name_of(e.player)
 				.. " claimed ")) .. place_of(e.at))
@@ -437,8 +442,9 @@ local FORT_ICON, FLEET_ICON = "icon_defence", "icon_warship"
 -- is already in the vocabulary - a hull for a yard, a cog for works, a shield
 -- for a bastion, a flag for the place officers come from.
 local BUILDING_ICON = {
-	yards = "icon_warship",
-	works = "icon_industry",
+	berths = "icon_warship",
+	interceptor_bay = "icon_speed",
+	foundry = "icon_industry",
 	bastion = "icon_defence",
 	admiralty = "icon_flag",
 }
@@ -488,6 +494,21 @@ local function captain_by_id(id)
 	return nil
 end
 
+--- A complement, in words. "2 Escorts, 1 Bombard".
+local function mix_words(mix)
+	local view = store.game_view
+	local parts = {}
+	for k = 1, #((view and view.units) or {}) do
+		local spec = view.units[k]
+		local n = (type(mix) == "table") and (mix[spec.id] or 0) or 0
+		if n > 0 then
+			parts[#parts + 1] = n .. " " .. ui.plural_word(n, spec.name)
+		end
+	end
+	if #parts == 0 then return "nothing" end
+	return table.concat(parts, ", ")
+end
+
 --- One staged order, in the words the player thought it in.
 --
 -- A count on the button is not enough to act on. The batch *replaces* whatever
@@ -500,16 +521,16 @@ local function describe_order(o)
 		local dest = o.route and o.route[#o.route]
 		if not dest then return who .. " holds position" end
 		return string.format("%s to %s", who, star_name(dest))
-	elseif o.kind == "resupply" then
-		local view = store.game_view
-		local parts = {}
-		for k = 1, #((view and view.units) or {}) do
-			local spec = view.units[k]
-			local n = (type(o.units) == "table") and (o.units[spec.id] or 0) or 0
-			if n > 0 then parts[#parts + 1] = n .. " " .. spec.name end
-		end
-		if #parts == 0 then return who .. " takes nothing aboard" end
-		return string.format("%s takes %s aboard", who, table.concat(parts, ", "))
+	elseif o.kind == "buy" then
+		return string.format("Buy %s at %s", mix_words(o.units),
+			star_name(o.at))
+	elseif o.kind == "transfer" then
+		-- The order carries the *whole* hold the captain should end with, so
+		-- the line says the result rather than the movement - "Kess: 2 Escorts"
+		-- is what the player chose and what they can check against the map.
+		local mix = mix_words(o.units)
+		if mix == "nothing" then return who .. " unloads everything" end
+		return string.format("%s carries %s", who, mix)
 	elseif o.kind == "build" then
 		return string.format("%s at %s", tostring(o.label or o.building),
 			star_name(o.at))
@@ -541,61 +562,90 @@ local function stage_at(self, order)
 	self.sheet_dirty = true
 end
 
---- Stage a purchase for a captain standing on one of your colonies.
+--- Stage a purchase at one of your colonies.
 --
--- Its own order rather than a flag on the move, because the two are
--- independent: a captain can march onto a colony and load there in the same
--- turn, and the server supersedes per kind for exactly that reason.
---- Add one unit of a type to a captain's embarkation.
+-- **Keyed on the colony, not on a captain.** What is bought goes into the
+-- garrison and waits there, so buying needs nobody standing on the spot - and
+-- it costs no order at all, which is why there is no allowance check here.
 --
--- **One order, built up a tap at a time.** Composition is a mix rather than a
--- count now, and a stepper per type would be three widgets and a lot of card;
--- adding to the same order instead keeps it to one row per type and means the
--- allowance is spent once however elaborate the mix.
-local function stage_unit(self, captain_id, type_id)
-	if not captain_id or not type_id then return end
+-- One order per colony, built up a tap at a time: a second order for the same
+-- place would race with the first for the same purse.
+local function stage_buy(self, at, type_id, delta)
+	if not at or not type_id then return end
 	for i = 1, #store.orders do
 		local o = store.orders[i]
-		if o.kind == "resupply" and o.captain == captain_id then
-			o.units[type_id] = (o.units[type_id] or 0) + 1
-			self.sheet_dirty = true
-			return
-		end
-	end
-	if not store.plan_has_room("resupply") then
-		self.flash, self.flash_timer = "No orders left this turn", 0
-		return
-	end
-	local mix = sim_units.empty()
-	mix[type_id] = 1
-	store.orders[#store.orders + 1] = {
-		kind = "resupply", captain = captain_id, units = mix,
-	}
-	self.sheet_dirty = true
-end
-
---- Take one unit of a type back off a staged embarkation.
---
--- The order goes with the last unit: an empty mix is not a decision, and
--- leaving one behind would spend an order on nothing.
-local function unstage_unit(self, captain_id, type_id)
-	if not captain_id or not type_id then return end
-	for i = 1, #store.orders do
-		local o = store.orders[i]
-		if o.kind == "resupply" and o.captain == captain_id then
-			o.units[type_id] = math.max(0, (o.units[type_id] or 0) - 1)
+		if o.kind == "buy" and o.at == at then
+			o.units[type_id] = math.max(0, (o.units[type_id] or 0) + delta)
+			-- An empty basket is not a decision. Dropping it keeps the bar
+			-- honest about what will actually be sent.
 			if sim_units.count(o.units) == 0 then store.plan_remove(i) end
 			self.sheet_dirty = true
 			return
 		end
 	end
+	if delta <= 0 then return end
+	if not store.plan_has_room("buy") then
+		self.flash, self.flash_timer = "No orders left this turn", 0
+		return
+	end
+	local mix = sim_units.empty()
+	mix[type_id] = delta
+	store.orders[#store.orders + 1] = { kind = "buy", at = at, units = mix }
+	self.sheet_dirty = true
 end
 
---- How much of a captain's embarkation is already staged.
-local function staged_mix(captain_id)
+--- What is already staged to be bought at a colony.
+local function staged_buy(at)
 	for i = 1, #store.orders do
 		local o = store.orders[i]
-		if o.kind == "resupply" and o.captain == captain_id then return o.units end
+		if o.kind == "buy" and o.at == at then return o.units end
+	end
+	return nil
+end
+
+--- Stage the hold a captain should end the turn with.
+--
+-- **A target, not a delta** - the same shape the resolver takes, for the same
+-- reason: anything else touching either side first would make a delta wrong,
+-- and this way the client only ever states the thing the player chose.
+--
+-- Free, like buying. An order that asks for the hold the captain already has is
+-- dropped rather than sent, because it is not a decision.
+local function stage_transfer(self, captain_id, hold, current)
+	if not captain_id then return end
+	local same = true
+	for k = 1, #sim_units.CATALOGUE do
+		local id = sim_units.CATALOGUE[k].id
+		if (hold[id] or 0) ~= ((current and current[id]) or 0) then same = false end
+	end
+	for i = 1, #store.orders do
+		local o = store.orders[i]
+		if o.kind == "transfer" and o.captain == captain_id then
+			if same then
+				store.plan_remove(i)
+			else
+				o.units = sim_units.normalise(hold)
+			end
+			self.sheet_dirty = true
+			return
+		end
+	end
+	if same then return end
+	if not store.plan_has_room("transfer") then
+		self.flash, self.flash_timer = "No orders left this turn", 0
+		return
+	end
+	store.orders[#store.orders + 1] = {
+		kind = "transfer", captain = captain_id, units = sim_units.normalise(hold),
+	}
+	self.sheet_dirty = true
+end
+
+--- The hold a captain is staged to end the turn with, if anything is staged.
+local function staged_hold(captain_id)
+	for i = 1, #store.orders do
+		local o = store.orders[i]
+		if o.kind == "transfer" and o.captain == captain_id then return o.units end
 	end
 	return nil
 end
@@ -1022,64 +1072,86 @@ local function build_sheet(self, w, pad)
 			y = y - 16
 		end
 
-		-- **Buying, where the units are.** A colony of yours with anything ready
-		-- and a captain standing on it is the only place strength comes back,
-		-- so the whole transaction is stated here: what is in stock, what it
-		-- costs, and what the purse holds.
+		-- **What this world makes, and what is standing on it.**
+		--
+		-- Only the types it has a dwelling for, because that is now the whole
+		-- of what a colony is: a world with no Foundry does not make Bombards
+		-- slowly, it does not make them at all. So the section is a description
+		-- of *this place* rather than a reprint of the catalogue.
 		if mine and sim_systems.is_colony(g, id) and view then
-			-- A captain of yours standing here is what makes any of this
-			-- possible, so it is stated before the shop rather than after it.
-			local aboard = here[1]
+			local available = info.available or {}
+			local garrison = info.garrison or {}
+			local basket = staged_buy(id)
+			local spent = basket and sim_units.price(basket) or 0
+			local held = sim_units.count(garrison)
+				+ (basket and sim_units.count(basket) or 0)
+			local room = (view.rates.garrison_cap or 6) - held
+			local left = (view.supply or 0) - spent
+
+			-- **What it has a dwelling for**, not what happens to be sitting
+			-- there. A Foundry with nothing out of it yet still says the world
+			-- makes Bombards - "0 ready" is a fact about this turn, and a row
+			-- that vanished until something appeared would read as the building
+			-- not existing. The mapping is on the wire: every building says
+			-- what it makes.
+			local built = info.buildings or {}
+			local makes = {}
+			for k = 1, #(view.units or {}) do
+				local spec = view.units[k]
+				local dwelt = false
+				for b = 1, #built do
+					for c = 1, #(view.buildings or {}) do
+						local shape = view.buildings[c]
+						if shape.id == built[b] and shape.makes == spec.id then
+							dwelt = true
+						end
+					end
+				end
+				if dwelt or (garrison[spec.id] or 0) > 0 then
+					makes[#makes + 1] = spec
+				end
+			end
 
 			y = y - 46
 			ui.caps(inner, y, "shipyard")
-			ui.small(inner + text_w, y, string.format("%s ready   %s in the purse",
-				ui.plural(info.stock or 0, "unit"),
-				ui.number(view.supply or 0)), ui.DIM, { pivot = gui.PIVOT_E })
-			if not aboard then
-				y = y - 28
+			ui.small(inner + text_w, y,
+				ui.number(view.supply or 0) .. " in the purse", ui.DIM,
+				{ pivot = gui.PIVOT_E })
+
+			if #makes == 0 then
+				y = y - 34
 				ui.small(inner, y,
-					"Bring a captain here to load them aboard", ui.WARN)
+					"Nothing is made here yet - build a dwelling below", ui.FAINT)
 			end
 
-			local staged = aboard and staged_mix(aboard.id) or nil
-			local mixed = staged and sim_units.count(staged) or 0
-			local room = aboard
-				and ((aboard.max_units or 0) - (aboard.carried or 0) - mixed) or 0
-			local left = (view.supply or 0)
-				- (staged and sim_units.price(staged) or 0)
-			local berths = (info.stock or 0) - mixed
-
-			for k = 1, #(view.units or {}) do
-				local spec = view.units[k]
-				local picked = (staged and staged[spec.id]) or 0
-				local can_add = aboard and left >= (spec.cost or 0)
-					and room > 0 and berths > 0
+			for k = 1, #makes do
+				local spec = makes[k]
+				local ready = available[spec.id] or 0
+				local picked = (basket and basket[spec.id]) or 0
+				local standing = garrison[spec.id] or 0
+				local can_add = picked < ready and left >= (spec.cost or 0)
+					and room > 0
 				y = y - 68
 				ui.panel(inner, y + 60, text_w, 62,
 					picked > 0 and ui.ACCENT_SOFT or ui.CARD_ALT)
 				ui.body(inner + 14, y + 40, spec.name,
-					can_add and ui.TEXT or ui.DIM)
-				-- What it is worth against each half, as the same two icons the
-				-- target above is measured in.
+					(ready > 0 or standing > 0) and ui.TEXT or ui.DIM)
 				draw_halves(inner + 14, y + 12, spec.fortification, spec.fleet)
+				-- Three numbers, and they mean different things: what it costs,
+				-- what is ready to buy, and what is already standing here.
 				ui.small(inner + 150, y + 12,
 					(spec.cost or 0) .. " each", ui.FAINT)
+				ui.small(inner + 150, y + 38,
+					ready .. " ready" .. (standing > 0
+						and ("   " .. standing .. " on guard") or ""),
+					standing > 0 and ui.GOOD or ui.FAINT)
 
-				-- **Plus and minus, not a row you tap.** Tapping a row added one
-				-- and there was no way to take one back short of dropping the
-				-- whole order; a stepper says both what it does and that there
-				-- is a number here to change.
-				-- Sized against the thumb, not the glyph. A design unit is about
-				-- 0.57 dp, so the 44 these started at was 25 dp - a target you
-				-- have to aim at, on the one control in the sheet a player uses
-				-- repeatedly.
 				local step = 60
 				local plus_x = inner + text_w - 12 - step
 				local minus_x = plus_x - step - 52
 				local minus = ui.icon_button(self.sheet_druid, minus_x, y + 60,
 					step, "icon_minus", function()
-						unstage_unit(self, aboard and aboard.id, spec.id)
+						stage_buy(self, id, spec.id, -1)
 					end, { background = ui.CARD, colour = ui.TEXT })
 				if picked <= 0 then minus.set_enabled(false) end
 				ui.value(minus_x + step + 26, y + 30, tostring(picked), ui.BODY,
@@ -1087,21 +1159,35 @@ local function build_sheet(self, w, pad)
 					{ pivot = gui.PIVOT_CENTER })
 				local plus = ui.icon_button(self.sheet_druid, plus_x, y + 60,
 					step, "icon_plus", function()
-						stage_unit(self, aboard and aboard.id, spec.id)
+						stage_buy(self, id, spec.id, 1)
 					end, { background = ui.CARD, colour = ui.TEXT })
 				if not can_add then plus.set_enabled(false) end
 			end
 
-			if mixed > 0 then
+			if basket then
 				y = y - 34
-				ui.small(inner, y, string.format("%s aboard next turn",
-					ui.plural(mixed, "unit")), ui.ACCENT)
-				ui.small(inner + text_w, y,
-					sim_units.price(staged) .. " supply", ui.ACCENT,
+				ui.small(inner, y, string.format("%s into the garrison",
+					ui.plural(sim_units.count(basket), "unit")), ui.ACCENT)
+				ui.small(inner + text_w, y, spent .. " supply", ui.ACCENT,
 					{ pivot = gui.PIVOT_E })
-			elseif aboard and room <= 0 then
+			elseif #makes > 0 and room <= 0 then
 				y = y - 30
-				ui.small(inner, y, "No room aboard", ui.WARN)
+				ui.small(inner, y, "The garrison is full", ui.WARN)
+			end
+
+			-- **The one place a captain and a colony meet.** Only offered when
+			-- there is something to trade: a control that opens a screen with
+			-- two empty columns is a control that has taught the player it does
+			-- nothing.
+			local aboard = here[1]
+			if aboard and (sim_units.count(garrison) > 0
+				or (aboard.carried or 0) > 0) then
+				y = y - 76
+				ui.button(self.sheet_druid, inner, y + 68, text_w, ui.CONTROL,
+					"MOVE UNITS   " .. aboard.name:upper(),
+					function()
+						store.transfer_popup = { at = id, captain = aboard.id }
+					end, { size = ui.CAPS })
 			end
 			y = y - 16
 		end
@@ -2483,6 +2569,19 @@ function update(self, dt)
 		stage_at(self, order)
 	end
 
+	-- The same handshake for moving units between a colony and the captain
+	-- standing on it.
+	if store.transfer_popup then
+		local it = store.transfer_popup
+		store.transfer_popup = nil
+		monarch.show(hash("transfer"), nil, it)
+	end
+	if store.transfer_request then
+		local it = store.transfer_request
+		store.transfer_request = nil
+		stage_transfer(self, it.captain, it.units, it.current)
+	end
+
 	-- Leaving the game. The menu popup sets this rather than navigating itself,
 	-- because a screen being torn down cannot reliably do it.
 	if store.leave_requested then
@@ -2504,6 +2603,8 @@ function update(self, dt)
 			store.report_now = false
 			store.slot_popup = nil
 			store.slot_request = nil
+			store.transfer_popup = nil
+			store.transfer_request = nil
 		end)
 		return
 	end

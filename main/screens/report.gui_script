@@ -71,7 +71,7 @@ local function describe(event, me)
 			subtitle = (event.name or "A captain") .. " passed through",
 		}
 
-	elseif kind == "resupplied" then
+	elseif kind == "bought" then
 		local mix = {}
 		for i = 1, #((store.game_view and store.game_view.units) or {}) do
 			local spec = store.game_view.units[i]
@@ -80,12 +80,28 @@ local function describe(event, me)
 		end
 		return {
 			icon = "icon_industry", tone = ui.GOOD,
+			title = "Bought " .. (#mix > 0 and table.concat(mix, ", ")
+				or ui.plural(event.units or 0, "unit")),
+			subtitle = string.format("into the garrison at %s, for %d supply",
+				system_name(event.at), event.cost or 0),
+		}
+
+	elseif kind == "transferred" then
+		return {
+			icon = "icon_warship", tone = ui.GOOD,
 			title = (event.name or "A captain") .. " took aboard "
-				.. (#mix > 0 and table.concat(mix, ", ")
-					or ui.plural(event.units or 0, "unit")),
-			subtitle = string.format("%s for %d supply - %d vs walls, %d vs ships",
-				system_name(event.at), event.cost or 0,
-				event.siege or 0, event.fleet_power or 0),
+				.. ui.plural(event.units or 0, "unit"),
+			subtitle = string.format("at %s - now %d vs walls, %d vs ships",
+				system_name(event.at), event.siege or 0,
+				event.fleet_power or 0),
+		}
+
+	elseif kind == "garrison_lost" then
+		return {
+			icon = "icon_defence", tone = ui.BAD,
+			title = "The garrison at " .. system_name(event.at)
+				.. " was destroyed",
+			subtitle = ui.plural(event.units or 0, "unit") .. " lost holding it",
 		}
 
 	elseif kind == "built" then

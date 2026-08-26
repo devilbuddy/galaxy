@@ -273,6 +273,7 @@ function M.project(galaxy, state, player)
 			steps = commanders.steps({ level = 1 }, mods),
 			hops = mods.hops,
 			vision = mods.vision,
+			garrison_cap = rules.garrison_cap,
 			captain_cost = rules.captain_cost,
 			captains = #state_mod.captains_of(state, player),
 			captain_cap = buildings.captain_cap(state, player),
