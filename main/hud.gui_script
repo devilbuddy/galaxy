@@ -432,6 +432,21 @@ end
 -- and tie the unit rows, the captain and the target together.
 local FORT_ICON, FLEET_ICON = "icon_defence", "icon_warship"
 
+-- A glyph per building, so a filled slot is recognisable before it is read.
+-- Drawn from the kit's existing set rather than new art: what each one is for
+-- is already in the vocabulary - a hull for a yard, a cog for works, a shield
+-- for a bastion, a flag for the place officers come from.
+local BUILDING_ICON = {
+	yards = "icon_warship",
+	works = "icon_industry",
+	bastion = "icon_defence",
+	admiralty = "icon_flag",
+}
+
+-- Which of them a player can actually *do* something with. Only the Admiralty,
+-- so far - it is where officers are raised.
+local BUILDING_VERB = { admiralty = true }
+
 --- Draw "<shield> n  <hull> n" and return how wide it came out.
 local function draw_halves(x, y, walls, ships, tone)
 	local size = 22
@@ -654,6 +669,17 @@ local function build_captains(self, w, h, pad)
 			-- the aim rather than only pointing the camera at them. The sheet
 			-- stands down while aiming, which is what hands the map over for
 			-- the tap being asked for.
+			--
+			-- **The same face is the way out.** Aiming takes the whole map, and
+			-- a mode you can only leave by finishing it or by finding CANCEL in
+			-- the bar is a mode that catches people; the control that started it
+			-- is the one a thumb is already on.
+			if store.aiming and store.aiming.captain == f.id then
+				store.aiming = nil
+				store.selected_captain = nil
+				self.sheet_dirty = true
+				return
+			end
 			store.selected_captain = f.id
 			store.selected = f.at
 			store.aiming = { kind = "move", captain = f.id }
@@ -867,14 +893,43 @@ local function build_sheet(self, w, pad)
 	local card = ui.panel(pad.left, 0, width, SHEET_MIN, ui.CARD)
 	local edge = ui.panel_line(pad.left, 0, width, SHEET_MIN, ui.BORDER)
 
+	-- **Whose it is, before what it is.** A colour dot on the name row is the
+	-- same mark the map draws round the system, so the two are read the same
+	-- way and the sheet needs no sentence for the common case; grey is nobody's.
+	--
+	-- What went with it: "Colony   Antares   Anomaly". The kind is already told
+	-- by what the sheet offers below - a shipyard is a colony - and the feature
+	-- is flavour, so only the region survives, and only because regions are the
+	-- objective and nothing else on the card says which one this is.
+	local DOT = 22
 	local y = -34
-	ui.h2(inner, y, star.name)
-	local subtitle = KIND_LABEL[kind] or kind
-	local region = g.regions[star.region]
-	if region then subtitle = subtitle .. "   " .. region.name end
-	if star.feature_label ~= "" then subtitle = subtitle .. "   " .. star.feature_label end
+	local owner_colour = ui.FAINT
+	if info and (info.owner or 0) ~= 0 then
+		owner_colour = player_colour(info.owner)
+	end
+	ui.dot(inner, y + DOT * 0.5, DOT, owner_colour)
+	ui.h2(inner + DOT + 16, y, star.name)
+
+	-- **"CAPITAL", not "Your capital".** Whose it is, the dot has already said.
+	if info and (info.capital_of or 0) ~= 0 then
+		local own = info.capital_of == you
+		local tone = own and ui.ACCENT or ui.BAD
+		local label_w = ui.text_width("CAPITAL", ui.CAPS) + 28
+		ui.pill(inner + text_w - label_w, y + 15, label_w, 30,
+			own and ui.ACCENT_SOFT or ui.CARD_ALT)
+		ui.caps(inner + text_w - label_w + 14, y, "CAPITAL", tone)
+	end
+
 	y = y - 34
-	ui.small(inner, y, subtitle, ui.DIM, { width = text_w, anchor_top = true })
+	local region = g.regions[star.region]
+	local where = region and region.name or (KIND_LABEL[kind] or kind)
+	if info and (info.owner or 0) ~= 0 and not mine then
+		local who = view and view.players[info.owner]
+		where = where .. "   Held by " .. (who and who.name or "someone")
+	end
+	ui.small(inner + DOT + 16, y, where,
+		(info and (info.owner or 0) ~= 0 and not mine) and ui.BAD or ui.DIM,
+		{ width = text_w - DOT - 16, anchor_top = true })
 	y = y - 28
 	ui.divider(inner, y, text_w)
 
@@ -883,24 +938,11 @@ local function build_sheet(self, w, pad)
 		ui.body(inner, y, "Unexplored", ui.FAINT)
 		y = y - 24
 	else
-		y = y - 46
-		if (info.capital_of or 0) ~= 0 then
-			local own = info.capital_of == you
-			local who = view and view.players[info.capital_of]
-			ui.icon(inner, y + 14, 26, "icon_flag", own and ui.ACCENT or ui.BAD)
-			ui.body(inner + 34, y,
-				own and "Your capital" or ((who and who.name or "A rival") .. "'s capital"),
-				own and ui.ACCENT or ui.BAD)
-		elseif mine then
-			ui.body(inner, y, "Yours", ui.TEXT)
-		elseif (info.owner or 0) == 0 then
-			ui.body(inner, y, "Unclaimed", ui.DIM)
-		else
-			local who = view and view.players[info.owner]
-			ui.body(inner, y, "Held by " .. (who and who.name or "someone"), ui.BAD)
-		end
+		-- Ownership is on the name row now, so there is no line for it here -
+		-- only the one thing the dot cannot say, which is that you are looking
+		-- at a memory rather than at the place.
 		if not info.live then
-			y = y - 30
+			y = y - 40
 			ui.small(inner, y, "Last seen turn " .. tostring(info.seen), ui.WARN)
 		end
 
@@ -912,6 +954,12 @@ local function build_sheet(self, w, pad)
 			local c = view.captains[i]
 			if c.at == id and (c.eta or 0) == 0 then here[#here + 1] = c end
 		end
+		-- **A statement, not a control.** Ordering a captain starts at the
+		-- round face in the strip - one place, always in reach, whatever is
+		-- selected - so this row does not also do it. Two ways to begin the
+		-- same thing meant the sheet had to disappear to let you finish it,
+		-- which is why tapping a colony used to hand the map over instead of
+		-- opening its card.
 		if #here > 0 then
 			y = y - 42
 			ui.caps(inner, y, "captains here")
@@ -919,7 +967,7 @@ local function build_sheet(self, w, pad)
 				local captain = here[k]
 				local chosen = store.selected_captain == captain.id
 				y = y - 58
-				local row = ui.panel(inner, y + 48, text_w, 54,
+				ui.panel(inner, y + 48, text_w, 54,
 					chosen and ui.ACCENT_SOFT or ui.CARD_ALT)
 				ui.portrait(inner + 8, y + 43, 38, captain.portrait,
 					{ ring_colour = chosen and ui.ACCENT or ui.BORDER })
@@ -927,18 +975,6 @@ local function build_sheet(self, w, pad)
 				ui.small(inner + 56, y + 6, captain.rank or "", ui.FAINT)
 				draw_halves(inner + 56 + ui.text_width(captain.rank or "", ui.SMALL) + 18,
 					y + 6, captain.siege_power or 0, captain.fleet_power or 0)
-				ui.small(inner + text_w - 14, y + 21, "tap to move", ui.FAINT,
-					{ pivot = gui.PIVOT_E })
-				self.sheet_druid:new_button(row, function()
-						if chosen then
-							store.selected_captain = nil
-							store.aiming = nil
-						else
-							store.selected_captain = captain.id
-							store.aiming = { kind = "move", captain = captain.id }
-						end
-						self.sheet_dirty = true
-					end)
 			end
 		end
 
@@ -1070,88 +1106,92 @@ local function build_sheet(self, w, pad)
 			y = y - 16
 		end
 
-		-- **What this colony can be made into.** Two slots against four
-		-- buildings, so the row is a choice rather than a shopping list - and
-		-- the cost sits on every one of them, because supply is the thing the
-		-- player is deciding between spending and saving.
+		-- **What this colony can be made into, as two boxes.**
+		--
+		-- It was a list of four rows with a cost on each - a shopping catalogue
+		-- on a card that is already the longest thing in the game, and it never
+		-- said the one fact that matters: a colony gets *two* of these, ever.
+		-- Two boxes say that without a sentence, and "1 of 2 slots used" went
+		-- with the sentence.
+		--
+		-- An empty box asks (`+`); a full one answers, and is the way to
+		-- whatever that building lets you do. Both open a popup rather than
+		-- growing the card, because the card is out of room and because
+		-- choosing between four things deserves the screen.
 		if mine and view and sim_systems.is_colony(g, id) then
 			local rates = view.rates or {}
 			local built = info.buildings or {}
 			local slots = rates.building_slots or 2
-			local purse = view.supply or 0
+
+			-- A build staged this turn occupies the next empty slot: it is not
+			-- there yet, but the player has spent an order on it and the box is
+			-- where they will look to see that they did.
+			local staged_build = nil
+			for i = 1, #store.orders do
+				local o = store.orders[i]
+				if o.kind == "build" and o.at == id then staged_build = o end
+			end
 
 			y = y - 46
 			ui.caps(inner, y, "upgrades")
-			ui.small(inner + text_w, y, string.format(
-				"%d of %d slots used", #built, slots), ui.DIM,
-				{ pivot = gui.PIVOT_E })
 
-			for b = 1, #built do
+			local gap = 16
+			local box_w = (text_w - gap * (slots - 1)) / slots
+			local box_h = 104
+			y = y - (box_h + 14)
+			for slot = 1, slots do
+				local bx = inner + (box_w + gap) * (slot - 1)
+				local have = built[slot]
+				local pending = (not have) and (slot == #built + 1) and staged_build
+
 				local spec
 				for k = 1, #(view.buildings or {}) do
-					if view.buildings[k].id == built[b] then spec = view.buildings[k] end
+					local b = view.buildings[k]
+					if b.id == (have or (pending and pending.building)) then spec = b end
 				end
-				y = y - 30
-				ui.icon(inner, y + 8, 22, "icon_check", ui.GOOD)
-				ui.small(inner + 30, y, (spec and spec.name) or built[b], ui.TEXT)
-			end
 
-			if #built < slots then
-				for k = 1, #(view.buildings or {}) do
-					local spec = view.buildings[k]
-					local have = false
-					for b = 1, #built do
-						if built[b] == spec.id then have = true end
-					end
-					if not have then
-						local afford = purse >= (spec.cost or 0)
-						y = y - 62
-						local row = ui.panel(inner, y + 54, text_w, 56, ui.CARD_ALT)
-						ui.body(inner + 14, y + 38, spec.name,
-							afford and ui.TEXT or ui.FAINT)
-						ui.small(inner + 14, y + 12, spec.blurb or "", ui.FAINT)
-						ui.small(inner + text_w - 14, y + 26,
-							tostring(spec.cost or 0),
-							afford and ui.GOOD or ui.WARN,
-							{ pivot = gui.PIVOT_E, bold = true })
-						if afford then
-							self.sheet_druid:new_button(row, function()
-								stage_at(self, {
-									kind = "build", at = id,
-									building = spec.id, label = spec.name,
-								})
-							end)
-						end
-					end
-				end
-			end
+				local fill, tone
+				if have then fill, tone = ui.CARD_ALT, ui.TEXT
+				elseif pending then fill, tone = ui.ACCENT_SOFT, ui.ACCENT
+				else fill, tone = ui.CARD, ui.FAINT end
+				local box = ui.panel(bx, y + box_h, box_w, box_h, fill)
+				if not have then ui.panel_line(bx, y + box_h, box_w, box_h, ui.BORDER) end
 
-			-- Raising an officer, where there is somewhere to raise them.
-			local admiralty = false
-			for b = 1, #built do
-				if built[b] == "admiralty" then admiralty = true end
-			end
-			if admiralty then
-				local room = (rates.captains or 0) < (rates.captain_cap or 1)
-				local cost = rates.captain_cost or 0
-				local afford = purse >= cost
-				y = y - 60
-				local handle = ui.button(self.sheet_druid, inner, y + 52,
-					text_w, ui.CONTROL,
-					string.format("RAISE A CAPTAIN   %d", cost),
-					function()
-						stage_at(self, { kind = "recruit", at = id })
-					end, { style = "primary", size = ui.CAPS })
-				if not room or not afford then
-					handle.set_enabled(false)
-					y = y - 26
-					ui.small(inner, y + 44,
-						not room and string.format("%d of %d captains already",
-							rates.captains or 0, rates.captain_cap or 1)
-							or "Not enough supply", ui.WARN)
+				if have or pending then
+					ui.icon(bx + box_w * 0.5 - 15, y + box_h - 20, 30,
+						BUILDING_ICON[spec and spec.id] or "icon_star", tone)
+					ui.small(bx + box_w * 0.5, y + 34,
+						(spec and spec.name) or tostring(have), tone,
+						{ pivot = gui.PIVOT_CENTER })
+					-- **"tap to use" only where there is something to do.** Yards,
+					-- Works and a Bastion work by standing there; promising a
+					-- verb and then opening a card that says there isn't one is
+					-- how an interface loses its word.
+					ui.small(bx + box_w * 0.5, y + 14,
+						pending and "staged"
+							or (BUILDING_VERB[have] and "tap to use" or "built"),
+						ui.FAINT, { pivot = gui.PIVOT_CENTER })
+				else
+					ui.icon(bx + box_w * 0.5 - 17, y + box_h - 30, 34,
+						"icon_plus", ui.DIM)
+					ui.small(bx + box_w * 0.5, y + 22, "empty slot", ui.FAINT,
+						{ pivot = gui.PIVOT_CENTER })
+				end
+
+				-- A staged box is not a control: the order is in the bar, where
+				-- it can be taken back, and a second popup over it would offer
+				-- to build on a slot that is already spoken for.
+				if not pending then
+					self.sheet_druid:new_button(box, function()
+						store.slot_popup = {
+							at = id,
+							building = have,
+							slot = slot,
+						}
+					end)
 				end
 			end
-			y = y - 14
+			y = y - 16
 		end
 
 		-- Rival captains in sight here.
@@ -2425,6 +2465,24 @@ function update(self, dt)
 		end)
 	end
 
+	-- An upgrade slot was tapped. Shown from here rather than from the sheet's
+	-- own callback for the reason every popup in this project is: Monarch is
+	-- part way through rebuilding the region that callback belongs to.
+	if store.slot_popup then
+		local slot = store.slot_popup
+		store.slot_popup = nil
+		monarch.show(hash("slot"), nil, slot)
+	end
+
+	-- ...and what it decided. Staging is done here because the turn's
+	-- allowance is the HUD's to spend, and `stage_at` already knows how a
+	-- second order for the same colony supersedes the first.
+	if store.slot_request then
+		local order = store.slot_request
+		store.slot_request = nil
+		stage_at(self, order)
+	end
+
 	-- Leaving the game. The menu popup sets this rather than navigating itself,
 	-- because a screen being torn down cannot reliably do it.
 	if store.leave_requested then
@@ -2444,6 +2502,8 @@ function update(self, dt)
 			store.turn_ended = nil
 			store.pending_report = nil
 			store.report_now = false
+			store.slot_popup = nil
+			store.slot_request = nil
 		end)
 		return
 	end

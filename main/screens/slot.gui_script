@@ -1,0 +1,215 @@
+--- One upgrade slot, opened from the system sheet.
+--
+-- **The card was out of room, and the choice deserved the screen.** Four
+-- buildings with a name, a line of what they do and a price is a catalogue, and
+-- it sat at the bottom of the longest card in the game where it pushed
+-- everything else off. The sheet now shows two boxes; this is what a box opens.
+--
+-- Two jobs, because a slot has two states:
+--
+--   empty   pick something to build here
+--   full    do whatever that building lets you do
+--
+-- The second is currently only the Admiralty's - the other three work by
+-- existing - so a full slot mostly explains itself and offers nothing. That is
+-- the honest answer rather than an empty control: a Bastion has no verb.
+--
+-- **It answers through the store, not directly.** Staging an order spends the
+-- turn's allowance, and only the HUD knows what is left of it; and a popup
+-- cannot act after Monarch has started tearing it down (see menu.gui_script).
+
+local druid = require("druid.druid")
+local monarch = require("monarch.monarch")
+local store = require("main.store")
+local ui = require("main.ui")
+
+local CARD_W = 620
+local PAD = 28
+local ROW_H = 78
+
+local BUILDING_ICON = {
+	yards = "icon_warship",
+	works = "icon_industry",
+	bastion = "icon_defence",
+	admiralty = "icon_flag",
+}
+
+local function close()
+	monarch.hide(hash("slot"))
+end
+
+--- Ask the HUD to stage something, and get out of the way.
+local function request(order)
+	store.slot_request = order
+	close()
+end
+
+local function spec_of(view, id)
+	for i = 1, #((view and view.buildings) or {}) do
+		if view.buildings[i].id == id then return view.buildings[i] end
+	end
+end
+
+--- What is already standing on this colony, so it is not offered twice.
+local function built_at(view, at)
+	local sys = view and view.systems and view.systems[tostring(at)]
+	return (sys and sys.buildings) or {}
+end
+
+-- Building here -------------------------------------------------------------
+
+local function build_picker(self, x, y, text_w, view, at)
+	local purse = view.supply or 0
+	local built = built_at(view, at)
+
+	ui.h2(x, y - 40, "Build here")
+	ui.small(x, y - 84,
+		"A colony only ever gets two, and they do not stack - so this is what "
+		.. "this world is for.", ui.DIM, { width = text_w, anchor_top = true })
+
+	local row_y = y - 150
+	for i = 1, #(view.buildings or {}) do
+		local spec = view.buildings[i]
+		local have = false
+		for b = 1, #built do
+			if built[b] == spec.id then have = true end
+		end
+		local afford = purse >= (spec.cost or 0)
+		row_y = row_y - ROW_H
+		local row = ui.panel(x, row_y + ROW_H - 8, text_w, ROW_H - 12,
+			have and ui.CARD or ui.CARD_ALT)
+		ui.icon(x + 16, row_y + ROW_H - 26, 30,
+			BUILDING_ICON[spec.id] or "icon_star",
+			have and ui.GOOD or (afford and ui.TEXT or ui.FAINT))
+		ui.body(x + 62, row_y + 44, spec.name,
+			(afford and not have) and ui.TEXT or ui.FAINT)
+		ui.small(x + 62, row_y + 20, spec.blurb or "", ui.FAINT)
+		if have then
+			ui.small(x + text_w - 16, row_y + 32, "BUILT", ui.GOOD,
+				{ pivot = gui.PIVOT_E, bold = true })
+		else
+			ui.small(x + text_w - 16, row_y + 32, tostring(spec.cost or 0),
+				afford and ui.GOOD or ui.WARN,
+				{ pivot = gui.PIVOT_E, bold = true })
+			if afford then
+				self.druid:new_button(row, function()
+					request({ kind = "build", at = at,
+						building = spec.id, label = spec.name })
+				end)
+			end
+		end
+	end
+	return row_y
+end
+
+-- Using what is there ---------------------------------------------------------
+
+local function build_action(self, x, y, text_w, view, at, id)
+	local spec = spec_of(view, id)
+	local rates = view.rates or {}
+
+	ui.icon(x, y - 20, 40, BUILDING_ICON[id] or "icon_star", ui.TEXT)
+	ui.h2(x + 56, y - 40, (spec and spec.name) or id)
+	ui.small(x, y - 104, spec and spec.blurb or "", ui.DIM,
+		{ width = text_w, anchor_top = true })
+
+	local bottom = y - 160
+	if id ~= "admiralty" then
+		-- **No control, because there is no verb.** Yards, Works and a Bastion
+		-- work by standing there; offering a button that does nothing would be
+		-- worse than saying so.
+		ui.small(x, bottom, "It works by being here - nothing to do.", ui.FAINT,
+			{ width = text_w, anchor_top = true })
+		return bottom - 40
+	end
+
+	local cost = rates.captain_cost or 0
+	local room = (rates.captains or 0) < (rates.captain_cap or 1)
+	local afford = (view.supply or 0) >= cost
+
+	ui.small(x, bottom, string.format("%d of %d captains in the field",
+		rates.captains or 0, rates.captain_cap or 1), ui.DIM)
+	bottom = bottom - 52
+	local handle = ui.button(self.druid, x, bottom + 40, text_w, ui.CONTROL,
+		string.format("RAISE A CAPTAIN   %d", cost),
+		function() request({ kind = "recruit", at = at }) end,
+		{ style = "primary", size = ui.CAPS })
+	if not room or not afford then
+		handle.set_enabled(false)
+		bottom = bottom - 34
+		ui.small(x, bottom + 24,
+			(not room) and "Every captain you are allowed is already raised"
+				or "Not enough supply", ui.WARN)
+	end
+	return bottom - 20
+end
+
+-- ------------------------------------------------------------------------------
+
+local function build(self)
+	local w, h = store.screen.width, store.screen.height
+	self.druid = druid.new(self)
+	ui.shade(0.72)
+
+	local data = monarch.data(hash("slot")) or {}
+	local view = store.game_view or {}
+	local at = data.at
+
+	-- **The card is sized to its content, and the content is laid out first.**
+	-- Same trick as the system sheet: the card is made at a placeholder height
+	-- so it sits behind everything, the content decides how deep it goes, and
+	-- then the whole lot is moved into place as one. Guessing the height
+	-- instead is what stranded the battle screen's controls in a field of
+	-- nothing.
+	local moving = {}
+	local previous = ui.collect(moving)
+
+	local card, edge = ui.card(0, 0, CARD_W, 100)
+	local inner = PAD
+	local text_w = CARD_W - PAD * 2
+
+	local depth
+	if data.building then
+		depth = build_action(self, inner, 0, text_w, view, at, data.building)
+	else
+		depth = build_picker(self, inner, 0, text_w, view, at)
+	end
+
+	local card_h = -depth + ui.CONTROL + PAD
+	ui.button(self.druid, inner, depth - 16, text_w, ui.CONTROL,
+		"CLOSE", close, { size = ui.CAPS })
+
+	ui.collect(previous)
+
+	gui.set_size(card, vmath.vector3(CARD_W, card_h, 0))
+	gui.set_size(edge, vmath.vector3(CARD_W, card_h, 0))
+
+	local dx = (w - CARD_W) * 0.5
+	local dy = (h + card_h) * 0.5
+	for i = 1, #moving do
+		local p = gui.get_position(moving[i])
+		gui.set_position(moving[i], vmath.vector3(p.x + dx, p.y + dy, 0))
+	end
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	ui.install_druid_picking()
+	build(self)
+end
+
+function final(self)
+	if self.druid then self.druid:final() end
+end
+
+function update(self, dt)
+	if self.druid then self.druid:update(dt) end
+end
+
+function on_input(self, action_id, action)
+	return ui.modal_input(self.druid, action_id, action)
+end
+
+function on_message(self, message_id, message, sender)
+	if self.druid then self.druid:on_message(message_id, message, sender) end
+end

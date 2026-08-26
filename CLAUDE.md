@@ -927,6 +927,7 @@ found nothing.
 | `lobby` | `main/screens/lobby.collection` | list/create/join/start games |
 | `map` | `main/screens/map.collection` | the galaxy view (was the old bootstrap) |
 | `report` | `main/screens/report.collection` | turn digest; a **popup** over the map |
+| `slot` | `main/screens/slot.collection` | one upgrade slot; a **popup** over the map |
 
 **The map screen sets `screen_keeps_input_focus_when_below_popup`.** Monarch
 defaults that to *false*, so showing a popup posts `release_input_focus` to the
@@ -1259,12 +1260,20 @@ rule below came out of one specific thing on it that could not be read:
 
 | in order | and why |
 |---|---|
-| name, kind, region | what this place is |
-| whose it is | colour on the map says it too, but not who |
+| a colour dot, the name, and CAPITAL | whose it is, and whether it decides the game |
+| the region | the only fact on the card the map does not draw |
 | **the captain standing here** | everything under it reads differently with one |
 | what it takes to capture | see below |
 | SHIPYARD | what can be bought, and with what |
-| UPGRADES | what it can be built into |
+| UPGRADES | two slots, and what is in them |
+
+- **Whose it is, before what it is.** The dot is the same mark the map draws
+  round the system, so the two are read the same way and the common case needs
+  no sentence at all; only a rival's name is worth spelling out, and it goes on
+  the region line in `BAD`. "Colony   Antares   Anomaly" went with the rest: the
+  kind is already told by what the sheet offers below - a shipyard is a colony -
+  and the feature is flavour.
+- **"CAPITAL", not "Your capital".** Whose it is, the dot has already said.
 
 - **A number needs a sentence, not a label.** "DEFENDS AT / Fortification 9" was
   a heading and a number with no verb between them. Your own world now says
@@ -1293,9 +1302,41 @@ rule below came out of one specific thing on it that could not be read:
   every captain in flight comes back empty, and nobody notices until their army
   has quietly evaporated.
 - **`SHEET_MAX` is a real ceiling, not a guess.** The sheet has no scroll, so
-  content past it is drawn over the order bar. A capital with an embarkation
-  staged, four things it could be built into and a captain on it is ~930 units;
-  the cap is 960. Adding a row to this sheet means checking that sum.
+  content past it is drawn over the order bar. Two slot boxes took the card back
+  from ~930 units to ~700, but the cap is 960 and adding a row means checking
+  that sum.
+
+**Upgrades are two boxes, and each one opens a popup.** They were four rows with
+a name, a line of what they do and a price - a catalogue on the bottom of the
+longest card in the game, which never said the one fact that matters: a colony
+gets *two* of these, ever. Two boxes say that without a sentence, and "1 of 2
+slots used" went with the sentence.
+
+| box | says | opens |
+|---|---|---|
+| empty | `+` | pick something to build |
+| staged | the name, "staged" | nothing - it is in the order bar, where it can be taken back |
+| built | the name, "built" | what it does |
+| built, with a verb | the name, "tap to use" | that verb - so far only the Admiralty's |
+
+`main/screens/slot.gui_script` is the popup, and it **answers through the store**
+rather than acting: staging spends the turn's allowance and only the HUD knows
+what is left of it, and a popup cannot act after Monarch has begun tearing it
+down. `store.slot_popup` is the request to open one and `store.slot_request` is
+what it decided, both consumed in the HUD's `update`.
+
+**A slot that promises a verb has to have one.** Yards, Works and a Bastion work
+by standing there, so their boxes say "built" and their popup says so; only the
+Admiralty says "tap to use". Labelling all four the same and then opening a card
+that says there is nothing to do is how an interface loses the word.
+
+**Ordering a captain starts in one place: the round face in the strip.** Tapping
+it aims, tapping the same face again cancels - aiming takes the whole map, and a
+mode you can only leave by finishing it or by hunting for CANCEL is a mode that
+catches people. The sheet's captain row is a statement, not a second way in;
+when it was one, tapping a colony had to hand the map over instead of opening
+its card, which is why **tapping a system now always opens the sheet unless a
+move is being aimed**.
 
 **The map has three interactive layers.** The *system sheet* is rebuilt whenever
 the selection changes, because its content varies enormously — a waypoint you

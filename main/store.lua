@@ -81,6 +81,18 @@ M.turn_ended = nil
 -- main/screens/menu.gui_script).
 M.leave_requested = nil
 
+-- A colony's upgrade slot the player has just tapped, and what the popup that
+-- opens over it should offer: `{ at = <system>, slot = <n>, building = <id or
+-- nil> }`. An empty slot picks something to build; a full one is the way to
+-- whatever that building lets you do.
+--
+-- The HUD shows the popup and the popup answers back through `slot_request`,
+-- because staging an order means spending the turn's allowance and only the
+-- HUD knows how much is left - and because a popup cannot act after Monarch
+-- has begun tearing it down.
+M.slot_popup = nil
+M.slot_request = nil
+
 -- A turn digest that arrived on a background poll rather than on arrival at the
 -- map. Held rather than shown, because a popup must not land on top of a player
 -- who is in the middle of reading the map; the overview offers it instead.
