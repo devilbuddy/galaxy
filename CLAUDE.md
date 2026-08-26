@@ -1710,6 +1710,15 @@ The game is a foundation being built back up, so most of what is missing is
 missing on purpose. These are the things that are *not* on that plan, or that
 will bite whoever touches them.
 
+- **The battle screen's visual treatment is unresolved.** What is there is the
+  *derived* reading: pips that thin out, a list of exchanges, nothing drawn that
+  the simulation does not know. It is not what the mock-up it came from
+  pictures, and the author has said so. The open question is whether the panel
+  should become **representational** instead - formations and movement invented
+  for the screen, driven by the real per-exchange numbers but not claiming to be
+  positions the sim has. That is a legitimate choice and would change the answer
+  completely; it wants deciding before anything is redrawn. The data underneath
+  is settled either way.
 - **The debug strip in the lobby is a back door, not a feature.** `main/dev.lua`
   gates it on `sys.get_engine_info().is_debug`, so it costs a release build
   nothing — but it is the thing most likely to be deleted wholesale one day, and
