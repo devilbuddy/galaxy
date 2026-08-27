@@ -1,52 +1,69 @@
 --- Deterministic name generation for stars and regions.
 --
--- Names carry a surprising amount of a 4X map's character, so this is not a
--- single syllable soup: it mixes invented words with borrowed catalogue,
--- mythological and astronomical vocabulary, then runs them through weighted
--- templates. Uniqueness is enforced globally so no two systems collide.
+-- Names carry a surprising amount of a 4X map's character, and this map is a
+-- hand-drawn atlas: parchment, ink paths, castles and cities. So the
+-- vocabulary is grounded rather than astronomical - place-name compounds,
+-- people's landings and follies, heraldic beasts - and the catalogue
+-- designations, Greek letters and demon mythology that anchored the old
+-- space chart are gone with it. Invented words remain, softened, so the map
+-- still holds names nobody has read before. Uniqueness is enforced globally
+-- so no two systems collide.
+--
+-- Changing anything here changes every seed's digest: names are hashed
+-- (galaxy/digest.lua), so the documented determinism constants are re-baked
+-- whenever the vocabulary moves.
 
 local M = {}
 
 -- Invented-word building blocks. Split into onset/nucleus/coda so the results
--- stay pronounceable instead of turning into consonant pileups.
+-- stay pronounceable instead of turning into consonant pileups. The onset list
+-- leans on liquids and soft stops; the old chart's "Kh"/"Zh"/"Xi" clusters
+-- read as alien, which is now the wrong flavour.
 local ONSET = {
-	"K", "T", "S", "M", "N", "R", "V", "Z", "D", "L", "P", "B", "G", "H", "J", "Y",
-	"Kh", "Th", "Sh", "Vr", "Dr", "Tr", "Kr", "Br", "Gl", "Sk", "St", "Xi", "Ch", "Ph",
-	"Qu", "Zh", "Mn", "Ny", "Ts", "Ar", "Ak", "Ok", "Um", "An",
+	"M", "N", "R", "L", "S", "T", "D", "B", "H", "V", "W", "F", "G", "P",
+	"Br", "Tr", "Gl", "St", "Fl", "Gr", "Sw", "Th", "Sh", "Wh", "Cl", "Bl",
+	"Mar", "El", "Or", "Al", "Is",
 }
 -- Simple nuclei are safe after any onset; the diphthongs are only used after a
--- single-consonant onset, because "Qu"+"ei"+"a" style pileups are unreadable.
+-- single-consonant onset, because cluster+diphthong pileups are unreadable.
 local NUCLEUS_SIMPLE = { "a", "e", "i", "o", "u", "y", "a", "e", "i", "o" }
 local NUCLEUS_RICH = {
 	"a", "e", "i", "o", "u", "ae", "ai", "ea", "ei", "ia", "io", "ou", "ua",
 	"au", "eo",
 }
 local CODA = {
-	"", "", "", "n", "r", "s", "l", "m", "th", "sh", "k", "x", "rn", "ll", "ss",
-	"nd", "ng", "st", "rk", "z", "ph", "tt",
+	"", "", "", "n", "r", "s", "l", "m", "th", "sh", "k", "rn", "ll", "ss",
+	"nd", "ng", "st", "z", "tt", "w",
 }
 
--- Borrowed vocabulary. These anchor the map: a few recognisable names make the
--- invented ones read as part of the same world rather than as noise.
-local CLASSICAL = {
-	"Antares", "Capella", "Sirius", "Castor", "Pollux", "Vega", "Altair", "Rigel",
-	"Deneb", "Arcturus", "Aldebaran", "Bellatrix", "Procyon", "Canopus", "Spica",
-	"Achernar", "Mizar", "Alcor", "Fomalhaut", "Regulus", "Algol", "Mirach",
-	"Alphard", "Izar", "Talitha", "Merak", "Phecda", "Dubhe", "Alkaid", "Thuban",
-	"Sadalsuud", "Zubeneschamali", "Gacrux", "Menkar", "Alnilam", "Saiph", "Nunki",
+-- First elements for place-name compounds: trees, metals, beasts, weather -
+-- the things places are actually named after.
+local PLACE_STEM = {
+	"Ash", "Thorn", "Elder", "Rowan", "Hazel", "Alder", "Bracken", "Heather",
+	"Fen", "Stone", "Iron", "Copper", "Silver", "Amber", "Salt", "Frost",
+	"Ember", "Winter", "Summer", "Harvest", "Raven", "Crow", "Fox", "Hart",
+	"Otter", "Heron", "Mill", "Lantern", "Harrow", "Wander", "Gold", "Moss",
 }
-local MYTHIC = {
-	"Mazzaroth", "Akeron", "Tiamat", "Nergal", "Marduk", "Ashur", "Enlil", "Inanna",
-	"Xipe", "Tlaloc", "Mictlan", "Quetzal", "Huitzil", "Coatl", "Nebiros", "Belial",
-	"Asmodel", "Sachiel", "Raziel", "Ophiel", "Hagith", "Bethor", "Phaleg", "Och",
-	"Vishao", "Kitara", "Kasdreya", "Charis", "Dahin", "Yokan", "Ishuan", "Menorb",
-	"Kailaasa", "Sulani", "Tarkhan", "Vashti", "Zephon", "Ordan", "Serapis", "Kordan",
+-- Second elements. Small and worn, the way real place names end.
+local PLACE_SUFFIX = {
+	"ford", "mere", "bridge", "haven", "wick", "stead", "gate", "combe",
+	"moor", "fell", "march", "field", "brook", "holt", "cross", "well",
+	"den", "worth", "ham", "down", "shaw", "leigh",
 }
+-- People, for possessives: settlers and wanderers, not demons.
+local FOLK = {
+	"Maren", "Oleta", "Bram", "Wren", "Edda", "Tomas", "Isolde", "Corin",
+	"Petra", "Aldous", "Greta", "Ansel", "Mirin", "Odo", "Hesper", "Juno",
+	"Casimir", "Vesna", "Rooke", "Sable", "Elowen", "Fable", "Nan", "Piers",
+}
+-- What a place *is*: kept largely from the old chart, because a Cove or a
+-- Folly was always cartography rather than astronomy.
 local FEATURES = {
-	"Veil", "Gate", "Cove", "Belt", "Reach", "Rest", "Folly", "Crown", "Wake",
-	"Spire", "Deep", "Cradle", "Shadow", "Bastion", "Refuge", "Descent", "Landing",
-	"Passage", "Watch", "Hollow", "Threshold", "Anchorage", "Verge", "Bight",
-	"Expanse", "Drift", "Span", "Hold", "Perch", "Bridge",
+	"Veil", "Gate", "Cove", "Reach", "Rest", "Folly", "Crown", "Wake",
+	"Spire", "Deep", "Cradle", "Shadow", "Bastion", "Refuge", "Landing",
+	"Passage", "Watch", "Hollow", "Anchorage", "Verge", "Expanse", "Drift",
+	"Span", "Hold", "Perch", "Bridge", "Crossing", "Waymeet", "Orchard",
+	"Commons", "Harbour", "Garden",
 }
 local ADJECTIVES = {
 	"Swooping", "Burning", "Silent", "Broken", "Golden", "Hollow", "Distant",
@@ -57,23 +74,18 @@ local CREATURES = {
 	"Eagle", "Serpent", "Lion", "Kraken", "Hart", "Falcon", "Basilisk", "Wyrm",
 	"Mantis", "Leviathan", "Corvid", "Jackal", "Sparrow", "Wolf", "Heron", "Ibis",
 }
-local GREEK = {
-	"Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta", "Theta", "Iota",
-	"Kappa", "Lambda", "Mu", "Nu", "Xi", "Omicron", "Sigma", "Tau", "Upsilon",
-	"Phi", "Chi", "Psi", "Omega",
-}
-local ROMAN = { "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII" }
-local CATALOGUE = { "HD", "HIP", "GJ", "KX", "LP", "TYC", "PSR", "NGC", "IC", "WD" }
 
 -- Grand nouns for region names: bigger in scale than a single system's feature.
 local REGION_NOUNS = {
-	"Maelstrom", "Expanse", "Reach", "Rim", "Verge", "Drift", "Marches", "Cluster",
-	"Sector", "Sprawl", "Deeps", "Frontier", "Dominion", "Fringe", "Shoals",
-	"Wastes", "Cradle", "Crown", "Gulf", "Spur", "Arm", "Belt", "Trace", "Veil",
+	"Maelstrom", "Expanse", "Reach", "Rim", "Verge", "Drift", "Marches",
+	"Sprawl", "Deeps", "Frontier", "Dominion", "Fringe", "Shoals", "Wastes",
+	"Cradle", "Crown", "Gulf", "Spur", "Belt", "Trace", "Veil", "Vale",
+	"Downs", "Weald", "Heath", "Commons",
 }
 local REGION_ADJECTIVES = {
-	"Outer", "Inner", "Wild", "Lost", "Far", "Deep", "Old", "Shattered", "Forsaken",
-	"Radiant", "Obsidian", "Umbral", "Argent", "Verdant", "Ashen", "Gilded",
+	"Outer", "Inner", "Wild", "Lost", "Far", "Deep", "Old", "Shattered",
+	"Forsaken", "Radiant", "Obsidian", "Umbral", "Argent", "Verdant", "Ashen",
+	"Gilded",
 }
 
 --- One invented word of 1-3 syllables.
@@ -93,14 +105,6 @@ local function invent(r)
 	return word:sub(1, 1):upper() .. word:sub(2):lower()
 end
 
---- A stem: sometimes borrowed, usually invented.
-local function stem(r)
-	local roll = r:weighted({ 58, 22, 20 })
-	if roll == 1 then return invent(r) end
-	if roll == 2 then return r:pick(MYTHIC) end
-	return r:pick(CLASSICAL)
-end
-
 local Namer = {}
 Namer.__index = Namer
 
@@ -117,44 +121,41 @@ function Namer:system()
 	local r = self.r
 	for attempt = 1, 40 do
 		local t = r:weighted({
-			26, -- bare stem
-			18, -- possessive feature
-			12, -- greek prefix
-			10, -- greek suffix
-			8,  -- roman numeral
-			10, -- adjective creature
-			8,  -- compound
-			8,  -- catalogue designation
+			30, -- place compound: Thornmere, Saltcombe
+			16, -- possessive feature: Wren's Crossing
+			14, -- stem + feature: Raven Hollow
+			14, -- bare invented word
+			10, -- adjective creature: Golden Hart
+			8,  -- invented possessive: Belwyn's Rest
+			8,  -- The + feature: The Waymeet
 		})
 		local name
 		if t == 1 then
-			name = stem(r)
+			name = r:pick(PLACE_STEM) .. r:pick(PLACE_SUFFIX)
 		elseif t == 2 then
-			name = stem(r) .. "'s " .. r:pick(FEATURES)
+			name = r:pick(FOLK) .. "'s " .. r:pick(FEATURES)
 		elseif t == 3 then
-			name = r:pick(GREEK) .. " " .. stem(r)
+			name = r:pick(PLACE_STEM) .. " " .. r:pick(FEATURES)
 		elseif t == 4 then
-			name = stem(r) .. " " .. r:pick(GREEK)
+			name = invent(r)
 		elseif t == 5 then
-			name = stem(r) .. " " .. r:pick(ROMAN)
-		elseif t == 6 then
 			name = r:pick(ADJECTIVES) .. " " .. r:pick(CREATURES)
-		elseif t == 7 then
-			name = stem(r) .. " " .. invent(r)
+		elseif t == 6 then
+			name = invent(r) .. "'s " .. r:pick(FEATURES)
 		else
-			name = r:pick(CATALOGUE) .. "-" .. r:int(100, 9999)
+			name = "The " .. r:pick(FEATURES)
 		end
 
 		-- After a few collisions stop retrying blind and disambiguate instead,
 		-- so a large galaxy cannot stall on an exhausted template.
 		if attempt > 12 then
-			name = name .. " " .. r:pick(GREEK)
+			name = name .. " " .. r:pick(FEATURES)
 		end
 		local claimed = self:claim(name)
 		if claimed then return claimed end
 	end
 	self.fallback = self.fallback + 1
-	return self:claim(string.format("%s-%04d", self.r:pick(CATALOGUE), 1000 + self.fallback))
+	return self:claim(invent(self.r) .. string.format(" %d", self.fallback))
 		or string.format("Unnamed %d", self.fallback)
 end
 
@@ -163,30 +164,28 @@ end
 function Namer:region()
 	local r = self.r
 	for attempt = 1, 40 do
-		local t = r:weighted({ 26, 18, 20, 14, 12, 10 })
+		local t = r:weighted({ 30, 22, 18, 16, 14 })
 		local name
-		if t == 1 then
-			name = r:pick(CLASSICAL)
-		elseif t == 2 then
-			name = r:pick(GREEK) .. " " .. r:pick(CLASSICAL)
-		elseif t == 3 then
-			name = r:pick(MYTHIC) .. " " .. r:pick(REGION_NOUNS)
-		elseif t == 4 or t == 5 then
+		if t == 1 or t == 2 then
 			local adj, noun = r:pick(REGION_ADJECTIVES), r:pick(REGION_NOUNS)
 			-- Reject overlaps like "The Deep Deeps".
 			if adj:lower():sub(1, 4) == noun:lower():sub(1, 4) then
 				noun = r:pick(REGION_NOUNS)
 			end
-			name = (t == 4 and "The " or "") .. adj .. " " .. noun
-		else
+			name = (t == 1 and "The " or "") .. adj .. " " .. noun
+		elseif t == 3 then
 			name = invent(r) .. " " .. r:pick(REGION_NOUNS)
+		elseif t == 4 then
+			name = r:pick(PLACE_STEM) .. r:pick(PLACE_SUFFIX) .. " " .. r:pick(REGION_NOUNS)
+		else
+			name = "The " .. r:pick(REGION_NOUNS) .. " of " .. invent(r)
 		end
-		if attempt > 12 then name = name .. " " .. r:pick(ROMAN) end
+		if attempt > 12 then name = "Far " .. name end
 		local claimed = self:claim(name)
 		if claimed then return claimed end
 	end
 	self.fallback = self.fallback + 1
-	return "Sector " .. self.fallback
+	return "Province " .. self.fallback
 end
 
 --- A namer with its own uniqueness set. Region names are drawn before system

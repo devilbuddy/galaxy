@@ -1,13 +1,17 @@
 --- Render pipeline for the galaxy map.
 --
--- The layer order and blend modes here are the whole visual treatment:
+-- The layer order and blend modes here are the whole visual treatment. The
+-- map is a hand-drawn atlas - parchment, ink and emoji stickers - so every
+-- layer blends with alpha; nothing adds light, because on paper there is no
+-- light to add:
 --
---   nebula   alpha     dim parallax background
---   dust     additive  background starfield
---   wash     alpha     region territory tints
---   lanes    alpha     hyperlane network
---   glow     additive  star halos - additive is what makes them read as light
---   stars    alpha     star cores
+--   nebula   alpha     parchment mottle over the clear colour's flat base
+--   dust     alpha     sparse dark paper flecks
+--   wash     alpha     region and territory tints
+--   lanes    alpha     dotted ink paths
+--   glow     alpha     soft drop shadows under the glyphs
+--   owners   alpha     ownership rings
+--   stars    alpha     the emoji glyphs themselves
 --   gui      alpha     labels and HUD, in screen space
 --
 -- Depth testing is off throughout: this is a 2D map and the draw order above
@@ -27,11 +31,11 @@ local WORLD_LAYERS = {
 	"galaxy_star",
 }
 
--- Layers that add light rather than occlude what is behind them.
-local ADDITIVE = {
-	galaxy_dust = true,
-	galaxy_glow = true,
-}
+-- Layers that add light rather than occlude what is behind them. Empty since
+-- the parchment re-theme - the dust became dark flecks and the glow became
+-- shadows, and additive light on a light ground is invisible anyway - but the
+-- mechanism stays, because it is one line to give a future layer back.
+local ADDITIVE = {}
 
 local MSG_CLEAR_COLOR = hash("clear_color")
 local MSG_WINDOW_RESIZED = hash("window_resized")
@@ -83,9 +87,11 @@ function init(self)
 
 	self.clear_buffers = {
 		[graphics.BUFFER_TYPE_COLOR0_BIT] = vmath.vector4(
-			sys.get_config_number("render.clear_color_red", 0.012),
-			sys.get_config_number("render.clear_color_green", 0.014),
-			sys.get_config_number("render.clear_color_blue", 0.030),
+			-- The parchment base. The backdrop texture carries only the
+			-- mottle *over* this, so the clear colour is the paper itself.
+			sys.get_config_number("render.clear_color_red", 0.935),
+			sys.get_config_number("render.clear_color_green", 0.870),
+			sys.get_config_number("render.clear_color_blue", 0.745),
 			1),
 		[graphics.BUFFER_TYPE_DEPTH_BIT] = 1,
 		[graphics.BUFFER_TYPE_STENCIL_BIT] = 0,

@@ -82,20 +82,33 @@ luajit tools/preview_map.lua 1337 > /tmp/m.json && python3 tools/render_map.py /
 ```
 
 `tools/render_map.py` is an offline sketch of the renderer (numpy + PIL). It is
-not the game renderer, but its layer order and colour choices are the spec the
-Defold one follows, so it is the right place to try a visual change first.
+not the game renderer, but its layer order, colours and sizing maths are the
+spec the Defold one follows (it draws the real Noto glyphs, downloaded into a
+gitignored cache), so it is the right place to try a visual change first —
+`... /tmp/m.png detail` renders at 3x and crops the centre, roughly the game's
+mid zoom. Pass a third argument to `preview_map.lua` to place that many
+capitals with the real opening-state picker, so 🏰 can be judged with no game
+running.
 
 There is no automated check of the interface itself; it is verified by building
 to the device and reading screenshots (`adb exec-out screencap -p > shot.png`).
-`tools/make_ui_textures.py` also writes a contact sheet of the glyphs if you want
-to eyeball them without a build.
 
-`tools/make_textures.py` regenerates the nebula backdrop in `main/assets/`, and
+`tools/make_textures.py` regenerates the parchment backdrop in `main/assets/`
+(still named `nebula.png` — same mesh, same material), and
 `tools/make_ui_textures.py` regenerates the interface atlas in
 `main/assets/ui/` **and rewrites `main/ui.atlas`**. Re-run whichever applies
 after changing a parameter; every PNG in those directories is a build artifact
 of its script, not hand-authored art. Adding an interface glyph means adding a
 function to the `ICONS` table and re-running — nothing to wire up by hand.
+
+`tools/import_emoji.py` is an *import*, not a regeneration — the
+`import_portraits.py` convention: it parses `main/theme.lua`'s `M.EMOJI` table
+(the single source of what the map can draw), downloads those Noto glyphs at a
+pinned release tag, packs `main/assets/emoji/sheet.png`, and generates
+`main/emoji_sheet.lua` (UV rects — never hand-edited) plus provenance
+(`MANIFEST.json`, `CREDITS.txt`, `NotoEmoji-LICENSE.txt`, Apache-2.0). Changing
+which emoji the map uses means editing `theme.lua` and re-running it;
+`test_wire.lua` fails if the resolver can name a glyph the sheet lacks.
 
 ### Android
 
@@ -156,12 +169,15 @@ luajit tools/test_wire.lua            # client/server wire format round-trips
 luajit tools/test_gestures.lua        # pan / pinch / tap recognition
 luajit tools/test_playback.lua        # the past, rebuilt from the event log
 luajit tools/test_plan.lua            # staged orders survive a send; a turn consumes them
+luajit tools/test_territory.lua       # provinces tile, fuse, and rebuild identically
 luajit tools/lint_shared.lua          # no idioms gopher-lua miscompiles
 ```
 
 To check a *runtime* agrees with standalone LuaJIT, compare digests — the game
 logs one at startup, and it must equal what `luajit` prints for the same seed.
-Seed 424242 gives `1720409762` on macOS, arm64 Android and standalone LuaJIT:
+Seed 424242 gives `3805718957` on macOS and standalone LuaJIT (re-baked when
+the name generator was re-voiced for the atlas theme — names are hashed, so
+touching `galaxy/names.lua` moves every seed's digest):
 
 ```bash
 luajit -e 'package.path="./?.lua;"..package.path
@@ -923,31 +939,83 @@ The non-obvious choices behind it:
 
 ### Rendering (`main/`)
 
-Six mesh components, one per layer, each with a dynamic vertex buffer built once
-per seed by `main/meshbuild.lua` and uploaded with `resource.set_buffer`. Per-item
-colour lives in a **vertex stream**, not a material constant — a per-component
-constant would break batching, so this keeps each layer to a single draw call.
-The whole map is ~6 draw calls and does no per-frame CPU work except the
-parallax backdrop.
+**The map is a hand-drawn atlas**: warm parchment, dotted ink paths, and every
+system drawn as a Google Noto color emoji whose *meaning* says what the place
+is — 🏰 a capital, 🏙 a colony, ⛏/🛰/🏛/🌀/💫-class glyphs for what makes an
+outpost worth holding, ✨ bare terrain. `main/theme.lua` is the one resolver
+from system to glyph name (the game, `tools/render_map.py` and `tools/test_wire.lua`
+all go through it, so the wire and the offline fallback cannot disagree);
+`main/emoji_sheet.lua` (generated) maps names to UV rects in
+`main/assets/emoji/sheet.png` (imported — see the tooling section). A new look
+is tried in `tools/render_map.py` first; its constants mirror the engine's
+(`CORE_SCALE × KIND_SCALE × (0.85 + 0.3r)`), so an approved sketch transfers 1:1.
 
-**Shapes are drawn procedurally in the fragment shaders, not from sprites.** A
-textured quad is only ever as sharp as its texture, and this map zooms to ~9x
-the fit scale, where a 64px disc is visibly mushy. Each layer derives its shape
-from the UV instead (`main/shaders/`):
+Seven mesh components, one per layer, each with a dynamic vertex buffer built
+once per seed by `main/meshbuild.lua` and uploaded with `resource.set_buffer`.
+Per-item colour lives in a **vertex stream**, not a material constant — a
+per-component constant would break batching, so this keeps each layer to a
+single draw call. The whole map is ~7 draw calls and does no per-frame CPU work
+except the parallax backdrop.
 
-| shader | used by | shape |
+**Shapes are still drawn procedurally in the fragment shaders wherever they are
+shapes.** A textured quad is only ever as sharp as its texture, so discs, dots
+and falloffs derive from the UV and antialias against `fwidth`. The emoji are
+the deliberate exception — a glyph is art, not a shape — and the sheet is sized
+so it never betrays that: 256px cells that never magnify past ~70% at
+`ZOOM_MAX`, 16px gutters with 8px UV insets so linear sampling and mips never
+bleed a neighbour, and **mipmaps via `galaxy.texture_profiles`** (the emoji
+directory is the only override; everything else keeps the no-mip default),
+because ~220 glyphs minified at the widest zoom shimmer on every pan without
+them. `.mesh`/`.material`/`.fp`/`game.project`/texture-profile/PNG changes all
+need a full build — only `.script`/`.lua` hot-reload.
+
+| shader | used by | what |
 |---|---|---|
-| `disc.fp` | star cores | hard disc, edge antialiased with `fwidth` |
-| `dot.fp` | background dust | soft point |
-| `glow.fp` | star halos | exponential falloff, zero at the quad edge |
-| `wash.fp` | region territory | wide soft falloff |
-| `lane.fp` | hyperlanes | solid band, `fwidth`-antialiased edges |
-| `mesh.fp` | nebula | the one genuine texture |
+| `emoji.fp` | systems | glyphs from the sheet; vertex colour is white × fog alpha, never a tint |
+| `disc.fp` | lane dots + province borders | hard disc, edge antialiased with `fwidth` |
+| `shadow.fp` | drop shadows | soft dark disc under each glyph, offset down-right |
+| `dot.fp` | paper flecks | soft point |
+| `wash.fp` | territory fill / region blobs | flat across province fans, soft falloff on blobs |
+| `mesh.fp` | parchment mottle | the textured backdrop quad |
 
-Two consequences worth knowing when tuning: the procedural shapes fill the whole
-quad where the old textures faded out inside it, so size constants are *not*
-interchangeable with the pre-shader values; and `fwidth` needs derivatives,
-which is core in GLSL 140 / ES 3.0 (verified on the device's Vulkan backend).
+**Territory is a political map** (`main/territory.lua`, engine-free,
+`tools/test_territory.lua`): every owned system's Voronoi cell — the dual of
+the Delaunay triangulation the lanes already come from — fused per owner into
+provinces that tile and never overlap, exactly like countries on an atlas. The
+fill is the cell polygons fan-filled flat on the wash layer in the *bright*
+player palette (a stain wants saturation; ink is for pen work), reaching
+exactly to the border; the border is a thin solid pen line along cell edges
+where the neighbour's owner differs, inset slightly into its own ground so two
+rivals meeting draw two hugging lines. Interior edges between same-owner cells
+vanish, which is what fuses cells into one province. Every Voronoi edge is
+jittered by midpoint displacement keyed on the pair of systems it separates,
+so both sides bend identically and the tiling holds — organic, deterministic,
+no RNG stream. Hull cells close with an arc capped at `TERRITORY_CAP`. A
+player who holds nothing is a **zero-vertex buffer, which is a native crash**,
+not an empty mesh — `build_wash` emits one invisible triangle instead.
+Browsing a seed (no view) falls back to soft region blobs.
+
+**Lanes are dots along a bow, not ribbons.** Each dot is its own quad through
+`disc.fp`; the bow is a quadratic bezier whose bulge is a pure function of the
+lane's endpoint indices (no RNG stream, same formula in the sketch), capped at
+7% of the lane because captains, route previews and playback markers travel the
+*straight* line — a marker must never sit visibly off its own path. The dot
+count varies per lane, so `build_lanes` collects positions first and sizes the
+buffer second: `Builder:apply` demands the buffer be filled exactly. The same
+layer carries the province border strokes ("solid" is discs overlapped tighter
+than their radius), which is why `repaint` rebuilds lanes alongside wash and
+owners: borders follow a playback's rewound owners. `build_wash` runs first in
+both `present()` and `repaint()` and caches the cells for `build_lanes` — that
+ordering is the cache's contract.
+
+Two consequences worth knowing when tuning: `build_stars` captures
+`knowledge()`'s first return into a local before building the quad —
+its two-value return expands into argument lists, and an expanded `owner` would
+land in `u0`; and the two player palettes in `galaxy/config.lua` are twins by
+index — `player_palette` (bright, for the dark chrome) and `player_palette_ink`
+(dark, for everything drawn on the paper) — same hue, same order, and the
+digest hashes structure rather than RGB, so retuning a tone is free while
+reordering is not.
 
 **A rebuild of the same galaxy must not disturb the view.** `present()` in
 `main/galaxy.script` builds every mesh, and it runs whenever a turn resolves
@@ -969,9 +1037,25 @@ caller:
 ### Zoom and the backdrop
 
 **Zoom is three buttons on the right of the map**, under the overview:
-in, out, and frame-the-whole-galaxy. Before them there was no way to zoom at
+in, out, and out-to-the-widest. Before them there was no way to zoom at
 all - pinch is the only other route and multi-touch cannot be injected from a
 workstation, so every device screenshot ever taken was at the fit zoom.
+
+**The whole-map view is deliberately unreachable.** `ZOOM_OUT_LIMIT` in
+`main/camera.script` holds the zoom floor at twice the whole-map fit: the map
+is mostly scenery, the widest useful view is a stretch of regions, and the
+floor is also what keeps the smallest-ever emoji glyph legible. Three things
+changed with it, all in the camera or `present()`:
+
+- the widest-view button keeps the player's centre instead of gliding to the
+  galaxy's - recentring on the middle of a map you cannot fully see carries
+  you away from your own empire - and it now *sets* `user_zoomed`, because
+  the result is still a view the player chose;
+- opening a game focuses your capital once (`present()` posts `focus` for a
+  new seed when the view knows one), since the opening frame can no longer
+  show everything;
+- a playback still ends on the widest view for an arrival digest, which is now
+  "as wide as allowed" rather than the poster.
 
 They are on the *top* right, which costs some thumb reach, because the bottom
 right is not a stable place to put anything: the order bar spans the full width
@@ -984,7 +1068,8 @@ Three details, each of which the first run of the buttons found:
 - **`ZOOM_MAX` is 3.0.** It was 9.0, and nothing had ever been there. 9.0 is 80
   world units across and lanes run 60 to 200, so the whole screen sits *between*
   two systems - a bare lane, no star. 3.0 is a system and the ones it is joined
-  to, which is as close as there is anything to see.
+  to, which is as close as there is anything to see - and it is also the number
+  the emoji sheet's cell size was chosen against.
 - **A button zoom pivots on the selected system**, if there is one and it is
   somewhere visible; otherwise on the middle of `store.hud_band`. Never the
   middle of the *window*: with a tall sheet up that point is behind a panel, and
@@ -999,19 +1084,23 @@ Three details, each of which the first run of the buttons found:
 The camera owns the step size and the range; the buttons only say which
 direction, so there is one description of how far a press goes.
 
-At that range a fixed-resolution
-backdrop stretched over the world is a smear, so `main/galaxy.script` fades the
-nebula and dust out between zoom 0.6 and 2.2, and eases the region wash back to
-45%. Fading is done with a `tint` fragment constant set via
-`go.set("/backdrop#nebula", "tint", …)` — a mesh material's USER constants are
-settable as component properties, which is far cheaper than rebuilding the
-vertex buffers every frame.
+**The backdrop texture carries only the mottle; the paper is the clear
+colour.** `tools/make_textures.py` writes `main/assets/nebula.png` (the name
+survives the re-theme - same mesh, same material) as a parchment-tinted stain
+whose alpha is its strength, over a clear colour that IS the parchment base -
+set in `game.project [render]` and mirrored as the render script's fallback.
+The old close-zoom fade (`main/galaxy.script`, zoom 0.6 to 2.2, driven through
+the `tint` USER constant via `go.set`) was kept untouched, because what it now
+does is fade the mottle to clean flat paper as a fixed-resolution stain would
+otherwise smear - the right behaviour, inherited for free. The wash still eases
+back to 45% with it.
 
-`main/render/galaxy.render_script` owns the layer order and blend modes, which
-together *are* the visual treatment:
+`main/render/galaxy.render_script` owns the layer order and blend modes.
+Everything blends with alpha - on paper there is no light to add, so the old
+additive dust/glow entries emptied out of the `ADDITIVE` table (kept, one line
+to give a future layer back):
 
-    nebula   alpha     dust  additive   wash  alpha
-    lanes    alpha     glow  additive   stars alpha    gui alpha
+    nebula   wash   lanes   glow(shadows)   owners   stars   gui - all alpha
 
 Textures are premultiplied by Defold at build time, so alpha layers use
 `ONE / ONE_MINUS_SRC_ALPHA` (not `SRC_ALPHA / ...`) and the shader premultiplies
@@ -1358,15 +1447,43 @@ the same clearance below it that the order bar's does; six units against the
 bar's sixteen reads as the replay being jammed against the bottom of the screen
 while nothing else is.
 
-**A turn that lands while the map is open is held, not shown.** A popup must not
-drop on top of somebody mid-read, but the digest must not be lost either — and
-advancing `seen_turn` on a background poll is exactly how it was being lost: the
-next request asks for events *since* that turn, so the server would never send
-them again. Turns that resolved while the player watched produced no report,
-ever. The digest is now parked in `store.pending_report` with `seen_turn` left
-alone, the turn card in the overview goes accent and reads "new — tap to read",
-and **opening it is what marks it read**. Nothing is lost if the player never
-taps: the poll keeps returning the same window.
+**A turn that lands while you are watching plays out on the spot.** It used to
+be parked behind the turn card — accent, "new, tap to read" — which is an odd
+thing to offer somebody looking straight at the map it happened on. It plays
+immediately instead, with no title card, because they were not away. The HUD
+declines mid-aim or under a popup — interrupting somebody part-way through an
+action is worse than being a moment late — and declining costs nothing:
+**`seen_turn` advances only when a playback actually starts**, so the next poll
+offers the same digest again. Advancing it on the background poll was exactly
+how digests used to be lost — the next request asks for events *since* that
+turn, so the server would never send them again. Watching is what marks it
+read, and a *live* turn is marked read even when there is nothing to animate:
+your own purchases, a build, a bot marching in the dark. Lighting the card over
+a turn where visibly nothing happened is the badge earning distrust. Only an
+*arrival* digest with nothing to animate stays parked in `store.pending_report`
+for the card to offer in the player's own time — nothing is lost if they never
+tap. And afterwards a live playback restores the camera the player had rather
+than the whole-map fit: they had chosen a view, which is why they saw it
+happen. An arrival or card-opened digest still ends on the fit, because there
+was no chosen view to give back.
+
+Two traps live turns exposed, both fixed where the class lives rather than the
+symptom:
+
+- **Leaving mid-replay left `playback_active` set**, and the map's poll is
+  gated on it - so the next game opened never polled and silently stopped
+  advancing. The leave-time store clear resets it (and `playback_owners`,
+  which would have painted the next game's map with this one's past). Before
+  live turns a replay only ran because the player had just chosen to open one;
+  now leaving during one is an ordinary exit.
+- **Tapping DONE also pressed END TURN underneath.** The HUD feeds every Druid
+  instance every action and the chrome is not rebuilt for a playback, so the
+  order bar's button was still registered under the transport - and a single
+  tap fired both, silently sending an empty batch that both ends the turn and
+  *replaces* any orders already in. This predates live turns (every DONE tap
+  ever did it) but they made it constant. While a replay is up, a touch inside
+  `pb_zone` now goes to the transport's instance alone - ownership by
+  geometry, the same rule as the map boundary.
 
 **Arriving is a title card, then a replay - never a list.** Coming back to a game
 used to open the digest as a screen of rows, which is a changelog in front of a
@@ -1558,12 +1675,14 @@ prettiest forty stars and none of the six that mattered. **Colour carries
 ownership** now, so whose space it is reads without being read, and the label
 budget is a filter (22 at most) rather than the truncation of a much larger set.
 
-**Star size encodes what a system is for.** `kind_scale` in `main/galaxy.script`
-draws a colony half again as large and a waypoint at little over half, which is
-the only cue on the map for the difference. Note it has to be declared *above*
-the mesh builders — a Lua local is not visible to a function defined before it,
-and putting it lower silently broke every build with `attempt to call global
-'kind_scale'`.
+**Glyph size still ranks what a system is for, but the emoji itself is the
+cue now.** `star_half` in `main/galaxy.script` scales a colony at 1.45, an
+outpost at 1.15, a waypoint at 0.70 and a capital at 1.9, with star-class
+variance deliberately damped (`0.85 + 0.3r`) — a glyph squeezed small stops
+being readable long before a disc does. Note the sizing helpers have to be
+declared *above* the mesh builders — a Lua local is not visible to a function
+defined before it, and putting one lower silently breaks every build with
+`attempt to call global ...`.
 
 **`druid.no_auto_input = 1` is set in game.project, and the project would be
 unusable without it.** Druid manages input focus for you: an instance posts
@@ -1989,6 +2108,26 @@ The game is a foundation being built back up, so most of what is missing is
 missing on purpose. These are the things that are *not* on that plan, or that
 will bite whoever touches them.
 
+- **Only the map wears the atlas theme.** Every GUI screen - lobby, setup,
+  sheet, transfer, battle, report - is still the dark chrome, deliberately (the
+  mockup kept it dark too), but the interface kit's tokens have never been
+  looked at next to the parchment and a re-theme of the chrome is an open
+  project of its own.
+- **The label zoom tiers are still anchored to the old fit zoom.**
+  `STAR_LABEL_MIN_ZOOM` (0.30) and the lowest `LABEL_TIER_ZOOM` entries sit
+  below the new zoom floor (~0.7), so they are always-on rather than wrong -
+  the visible behaviour was judged fine on screenshots - but the constants no
+  longer describe a reachable range.
+- **Ownership rings read oversized on waypoint glyphs.** The ring is 1.6x the
+  glyph's half-extent everywhere; a sparkle occupies much less of its quad than
+  a castle does, so its ring floats. A per-kind ring scale is the obvious fix.
+- **The emoji sheet ships uncompressed.** 1024x1024 RGBA plus mips is ~5.3 MB
+  of texture memory - fine today, but `galaxy.texture_profiles` is where
+  device compression would go if it ever matters.
+- **The Android digest constant is unverified since the rename.** Seed 424242's
+  `3805718957` is confirmed on macOS and standalone LuaJIT; the arm64 Android
+  runtime has not printed it yet (names are pure string work, so agreement is
+  expected, not proven).
 - **The battle screen's visual treatment is unresolved.** What is there is the
   *derived* reading: pips that thin out, a list of exchanges, nothing drawn that
   the simulation does not know. It is not what the mock-up it came from

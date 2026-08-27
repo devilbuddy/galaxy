@@ -52,6 +52,26 @@ return {
 		{ 0.55, 0.55, 0.72 }, -- slate
 	},
 
+	-- The same ten players, as inks: hand-darkened same-hue twins for the
+	-- parchment map, where the bright set above washes out (white on cream is
+	-- invisible). The chrome keeps the bright set - it is still dark - so a
+	-- player is the same hue everywhere, at the value each ground needs.
+	-- Same order and length as player_palette, always: index is identity, and
+	-- the digest hashes structure (never these values), so retuning a tone is
+	-- free while reordering is not.
+	player_palette_ink = {
+		{ 0.13, 0.36, 0.62 }, -- blue
+		{ 0.62, 0.20, 0.14 }, -- red
+		{ 0.16, 0.45, 0.20 }, -- green
+		{ 0.58, 0.42, 0.05 }, -- amber
+		{ 0.44, 0.20, 0.58 }, -- violet
+		{ 0.08, 0.44, 0.42 }, -- cyan
+		{ 0.60, 0.24, 0.42 }, -- pink
+		{ 0.38, 0.42, 0.12 }, -- olive
+		{ 0.42, 0.36, 0.30 }, -- white -> umber
+		{ 0.30, 0.30, 0.44 }, -- slate
+	},
+
 	-- Region tints, chosen to stay distinguishable against a near-black field
 	-- and against each other when two regions border.
 	region_palette = {

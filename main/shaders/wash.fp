@@ -1,8 +1,11 @@
 #version 140
 
-// Region territory wash: a very wide, very soft radial falloff. Many of these
-// overlap per region and merge into the territory's silhouette, so each one is
-// faint by design.
+// Two jobs, one falloff. Browsing a seed, the wash is soft region blobs: wide
+// radial falloff, many overlapping per region. In a game it is the political
+// map's province FILL: main/territory.lua fans each owned cell into triangles
+// whose UVs are pinned to the quad centre, where this falloff evaluates to 1 -
+// so the same shader paints them flat, edge to edge. The province's drawn
+// border is not here; build_lanes strokes it along the cell edges.
 
 in mediump vec2 var_texcoord0;
 in mediump vec4 var_color;

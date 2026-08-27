@@ -24,17 +24,35 @@ Builder.__index = Builder
 --
 -- The capacity is exact rather than generous on purpose: leftover vertices
 -- would still be uploaded and rasterised as degenerate triangles every frame.
+--- A builder sized in raw vertices, for layers that emit triangles rather
+--- than quads (the territory fills). `new` keeps its quad units - every other
+--- layer thinks in sprites.
+function M.new_verts(count)
+	return M.new_impl(count)
+end
+
 function M.new(quads)
-	local verts = quads * 6
-	local buf = buffer.create(verts, DECLARATION)
+	return M.new_impl(quads * 6)
+end
+
+function M.new_impl(count)
+	local buf = buffer.create(count, DECLARATION)
 	return setmetatable({
 		buf = buf,
 		pos = buffer.get_stream(buf, STREAM_POSITION),
 		uv = buffer.get_stream(buf, STREAM_TEXCOORD),
 		col = buffer.get_stream(buf, STREAM_COLOR),
 		n = 0,
-		capacity = verts,
+		capacity = count,
 	}, Builder)
+end
+
+--- One flat triangle, UVs pinned to the quad centre so a radial-falloff
+--- shader (wash.fp) evaluates to full strength across it.
+function Builder:tri(ax, ay, bx, by, cx, cy, z, r, g, b, a)
+	self:vertex(ax, ay, z, 0.5, 0.5, r, g, b, a)
+	self:vertex(bx, by, z, 0.5, 0.5, r, g, b, a)
+	self:vertex(cx, cy, z, 0.5, 0.5, r, g, b, a)
 end
 
 function Builder:vertex(x, y, z, u, v, r, g, b, a)
@@ -66,6 +84,18 @@ function Builder:sprite(x, y, half, z, r, g, b, a)
 		x + half, y + half,
 		x - half, y + half,
 		z, r, g, b, a, 0, 0, 1, 1)
+end
+
+--- A sprite reading an explicit UV rect - a cell of the emoji sheet rather
+--- than the whole texture. v0 is the bottom edge, v1 the top, matching the
+--- corner order `quad` documents.
+function Builder:sprite_uv(x, y, half, z, r, g, b, a, u0, v0, u1, v1)
+	self:quad(
+		x - half, y - half,
+		x + half, y - half,
+		x + half, y + half,
+		x - half, y + half,
+		z, r, g, b, a, u0, v0, u1, v1)
 end
 
 --- An axis-aligned quad with independent half-extents.

@@ -14,11 +14,12 @@ samples = 4
 [graphics]
 max_font_batches = 512
 max_draw_calls = 2048
+texture_profiles = /galaxy.texture_profiles
 
 [render]
-clear_color_red = 0.012
-clear_color_green = 0.014
-clear_color_blue = 0.030
+clear_color_red = 0.935
+clear_color_green = 0.870
+clear_color_blue = 0.745
 clear_color_alpha = 1.0
 
 [input]

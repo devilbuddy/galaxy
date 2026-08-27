@@ -1,0 +1,66 @@
+{
+ "cell": 256,
+ "flip_v": true,
+ "glyph": 224,
+ "glyphs": {
+  "asteroids": {
+   "cell": 0,
+   "codepoint": "26cf"
+  },
+  "black_hole": {
+   "cell": 1,
+   "codepoint": "1f573"
+  },
+  "capital": {
+   "cell": 2,
+   "codepoint": "1f3f0"
+  },
+  "colony": {
+   "cell": 3,
+   "codepoint": "1f3d9"
+  },
+  "derelict": {
+   "cell": 4,
+   "codepoint": "2699"
+  },
+  "dizzy": {
+   "cell": 5,
+   "codepoint": "1f4ab"
+  },
+  "energetic": {
+   "cell": 6,
+   "codepoint": "2b50"
+  },
+  "factory": {
+   "cell": 7,
+   "codepoint": "1f3ed"
+  },
+  "houses": {
+   "cell": 8,
+   "codepoint": "1f3d8"
+  },
+  "nebula": {
+   "cell": 9,
+   "codepoint": "1f300"
+  },
+  "relay": {
+   "cell": 10,
+   "codepoint": "1f6f0"
+  },
+  "ruins": {
+   "cell": 11,
+   "codepoint": "1f3db"
+  },
+  "saucer": {
+   "cell": 12,
+   "codepoint": "1f6f8"
+  },
+  "waypoint": {
+   "cell": 13,
+   "codepoint": "2728"
+  }
+ },
+ "grid": 4,
+ "ref": "v2.047",
+ "uv_inset": 8
+}

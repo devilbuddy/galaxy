@@ -1,5 +1,6 @@
 material: "/main/materials/galaxy_star.material"
 vertices: "/main/meshes/stars.buffer"
+textures: "/main/assets/emoji/sheet.png"
 primitive_type: PRIMITIVE_TRIANGLES
 position_stream: "position"
 normal_stream: ""

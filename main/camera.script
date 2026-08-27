@@ -19,6 +19,13 @@ local gestures = require("main.gestures")
 -- to see.
 local ZOOM_MAX = 3.0
 local ZOOM_MIN_FLOOR = 0.05
+
+-- The zoom-out floor, as a multiple of the whole-map fit. Seeing the entire
+-- galaxy at once is deliberately impossible: the map is mostly scenery, and
+-- the widest useful view is a stretch of regions, not the poster. Raising the
+-- floor also raises the smallest an emoji glyph ever renders, which is what
+-- keeps the map legible at its widest.
+local ZOOM_OUT_LIMIT = 2.0
 local WHEEL_STEP = 1.18
 
 -- One press of an on-screen zoom button. The range from fit to ZOOM_MAX is
@@ -147,17 +154,19 @@ local function set_zoom_target(self, target)
 	self.user_zoomed = true
 end
 
---- Recompute the zoom floor so the whole populated map fits the window.
+--- Recompute the zoom floor from the populated map's extent.
 --
--- The usable height excludes the HUD bar, so the galaxy is framed in the space
--- the player can actually see rather than partly behind the controls.
+-- The usable height excludes the HUD bar, so the frame is judged against the
+-- space the player can actually see rather than partly behind the controls.
+-- The floor sits ZOOM_OUT_LIMIT above the whole-map fit: the widest view is a
+-- neighbourhood of the galaxy, never all of it.
 local function refresh_zoom_bounds(self)
 	local w, h = viewport(self)
 	local bar = store.hud_bar_height or 0
 	local usable_h = math.max(1, h - bar)
 	local pad = 1.08
 	local fit = math.min(w / (self.content_w * pad), usable_h / (self.content_h * pad))
-	self.zoom_min = math.max(ZOOM_MIN_FLOOR, fit)
+	self.zoom_min = math.max(ZOOM_MIN_FLOOR, fit * ZOOM_OUT_LIMIT)
 	self.zoom = math.max(self.zoom_min, math.min(ZOOM_MAX, self.zoom))
 	-- Shift the framed centre up by half the HUD bar so the map sits in the
 	-- visible area rather than the geometric centre of the window.
@@ -258,23 +267,20 @@ local function cancel_glide(self)
 	self.zoom_target = nil
 end
 
---- Frame the whole galaxy again.
+--- Zoom out to the widest allowed view.
 --
--- The way *back* is the control that matters most. Nine times the fit zoom over
--- a 2600-unit world is a long way from anywhere, and stepping out of it one
--- press at a time is the kind of thing a player does once and then stops
--- zooming in at all.
+-- The way *back* is the control that matters most: stepping out of a deep
+-- zoom one press at a time is the kind of thing a player does once and then
+-- stops zooming in at all. It used to frame the whole galaxy; with the floor
+-- above the fit, the widest view no longer holds everything - so it keeps
+-- the player's centre rather than gliding to the galaxy's. Recentring on the
+-- middle of a map you cannot fully see would carry you away from your own
+-- empire, which is the opposite of getting your bearings.
 local function zoom_fit(self)
 	self.zoom_target = self.zoom_min
-	-- Asking to see the whole map is also asking to be re-framed when the
-	-- window changes, which is what `user_zoomed` gates - so this is the one
-	-- zoom that clears it rather than sets it.
-	self.user_zoomed = false
-	-- Where the view will come to rest, computed at the zoom it will rest *at*:
-	-- frame_offset_y is in world units and so depends on the zoom, and reading
-	-- it mid-glide would aim at a moving point.
-	local bar = store.hud_bar_height or 0
-	focus_on(self, self.centre_x, self.centre_y + (bar * 0.5) / self.zoom_min)
+	-- Still a view the player chose, so a window change must not re-frame it
+	-- out from under them.
+	self.user_zoomed = true
 end
 
 function update(self, dt)

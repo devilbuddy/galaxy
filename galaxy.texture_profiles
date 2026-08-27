@@ -1,0 +1,36 @@
+path_settings {
+  path: "/main/assets/emoji/**"
+  profile: "emoji"
+}
+path_settings {
+  path: "**"
+  profile: "default"
+}
+profiles {
+  name: "default"
+  platforms {
+    os: OS_ID_GENERIC
+    formats {
+      format: TEXTURE_FORMAT_RGBA
+      compression_level: NORMAL
+      compression_type: COMPRESSION_TYPE_DEFAULT
+    }
+    mipmaps: false
+    max_texture_size: 0
+    premultiply_alpha: true
+  }
+}
+profiles {
+  name: "emoji"
+  platforms {
+    os: OS_ID_GENERIC
+    formats {
+      format: TEXTURE_FORMAT_RGBA
+      compression_level: NORMAL
+      compression_type: COMPRESSION_TYPE_DEFAULT
+    }
+    mipmaps: true
+    max_texture_size: 0
+    premultiply_alpha: true
+  }
+}

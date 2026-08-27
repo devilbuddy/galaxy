@@ -1,0 +1,13 @@
+Map emoji
+=========
+
+Google Noto color emoji, from the googlefonts/noto-emoji repository at tag
+v2.047. The 512px PNGs were downscaled to 224px, centred in 256px cells and packed
+into sheet.png by tools/import_emoji.py; the artwork itself is unmodified.
+Which glyphs the map uses is decided by main/theme.lua, and MANIFEST.json
+here records exactly which codepoint landed in which cell.
+
+LICENCE: Apache License, Version 2.0 - see NotoEmoji-LICENSE.txt beside this
+file. Re-running the importer after editing main/theme.lua regenerates the
+sheet and main/emoji_sheet.lua together, so the mapping and the art cannot
+drift apart.
