@@ -22,7 +22,6 @@ local monarch = require("monarch.monarch")
 local store = require("main.store")
 local ui = require("main.ui")
 local sim_units = require("realm.sim.units")
-local emoji_ui = require("main.emoji_ui")
 
 local CARD_W = 620
 local PAD = 28
@@ -135,9 +134,9 @@ local function build(self)
 		y = y - ROW_H
 		local row = ui.panel(inner, y + ROW_H - 8, text_w, ROW_H - 12,
 			why and ui.CARD or ui.CARD_ALT)
-		ui.emoji(inner + 16, y + ROW_H - 20, GLYPH, emoji_ui[spec.id],
+		ui.emoji(inner + 16, y + ROW_H - 20, GLYPH, ui.unit_image(spec.id),
 			why and 0.4 or 1)
-		ui.body(inner + 16 + GLYPH + 16, y + 58, spec.name,
+		ui.body(inner + 16 + GLYPH + 16, y + 58, (ui.unit_name(spec)),
 			why and ui.FAINT or ui.TEXT)
 		ui.small(inner + 16 + GLYPH + 16, y + 32,
 			why or string.format("%d ready   %d on guard", ready, standing),

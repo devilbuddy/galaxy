@@ -2,6 +2,7 @@
  "cell": 256,
  "flip_v": true,
  "glyph": 224,
+ "glyph_px": 224,
  "glyphs": {
   "barrow": {
    "cell": 0,
@@ -39,16 +40,70 @@
  "grid": 4,
  "ref": "v2.047",
  "ui_glyphs": {
+  "ashai_bombard": {
+   "codepoint": "1f383"
+  },
+  "ashai_escort": {
+   "codepoint": "2620"
+  },
+  "ashai_interceptor": {
+   "codepoint": "1f987"
+  },
   "bombard": {
    "codepoint": "1f4a3"
+  },
+  "cartel_bombard": {
+   "codepoint": "1f4a3"
+  },
+  "cartel_escort": {
+   "codepoint": "2693"
+  },
+  "cartel_interceptor": {
+   "codepoint": "1f99c"
   },
   "escort": {
    "codepoint": "1f6e1"
   },
   "interceptor": {
-   "codepoint": "1f680"
+   "codepoint": "2694"
+  },
+  "kepler_bombard": {
+   "codepoint": "1f409"
+  },
+  "kepler_escort": {
+   "codepoint": "1f9ff"
+  },
+  "kepler_interceptor": {
+   "codepoint": "1f9da"
+  },
+  "silicate_bombard": {
+   "codepoint": "1f4a5"
+  },
+  "silicate_escort": {
+   "codepoint": "1faa8"
+  },
+  "silicate_interceptor": {
+   "codepoint": "1f410"
+  },
+  "terran_bombard": {
+   "codepoint": "1f417"
+  },
+  "terran_escort": {
+   "codepoint": "1f404"
+  },
+  "terran_interceptor": {
+   "codepoint": "1f415"
+  },
+  "vorn_bombard": {
+   "codepoint": "1f528"
+  },
+  "vorn_escort": {
+   "codepoint": "1f6e1"
+  },
+  "vorn_interceptor": {
+   "codepoint": "1f40e"
   }
  },
- "ui_px": 224,
+ "ui_px": 128,
  "uv_inset": 8
 }

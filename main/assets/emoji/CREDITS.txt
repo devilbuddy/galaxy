@@ -1,20 +1,19 @@
-Map emoji
-=========
+Map and interface emoji
+=======================
 
 Google Noto color emoji, from the googlefonts/noto-emoji repository at tag
 v2.047. The artwork itself is unmodified; only its size and packing changed.
 
   sheet.png   the map's glyphs, downscaled to 224px and centred in 256px cells.
-              Sampled by UV rect from a mesh shader.
-  ui/         the interface's glyphs, one 224px PNG apiece, packed by Defold
-              into /main/emoji.atlas. A GUI node draws a whole named image and
-              cannot be handed a UV rect, which is why these are not in the
-              sheet.
+              A leftover of the mesh renderer; nothing reads it any more.
+  ui/         one PNG apiece, packed by Defold into /main/emoji.atlas. Map
+              glyphs at 224px because a sprite is scaled to the hex; interface
+              glyphs at 128px because a rack slot is 94 design units.
 
 Which glyphs each vocabulary uses is decided by main/theme.lua, and
 MANIFEST.json here records exactly which codepoint became which.
 
 LICENCE: Apache License, Version 2.0 - see NotoEmoji-LICENSE.txt beside this
 file. Re-running the importer after editing main/theme.lua regenerates the
-sheet, main/emoji_sheet.lua, main/emoji.atlas and main/emoji_ui.lua together,
-so the mapping and the art cannot drift apart.
+art, main/emoji.atlas and main/emoji_ui.lua together, so the mapping and the
+art cannot drift apart.

@@ -1,17 +1,23 @@
 Commander portraits
 ===================
 
-Art by **Batareya**, from a set distributed as "PORTRAITS (by Batareya)".
+Google Noto color emoji, from the googlefonts/noto-emoji repository at tag
+v2.047. Each face is one unmodified Noto glyph, scaled to 78% of a 128px disc
+of ui.CARD_ALT and masked round; ui.portrait draws its ring on top of that
+edge.
 
-Seventy-two of the five hundred images in that set were imported, resized to
-128x128 and grouped into twelve per playable race. The source is not labelled,
-but it is drawn in species, and the six races already declare colours that land
-on those groups - so the grouping is measured from each image's dominant hue
-rather than classified by hand. See tools/import_portraits.py for the method and
-MANIFEST.json for exactly which images the current set is.
+Eight faces per theme, filling the `portrait_<race>_NN` ids
+realm/sim/commanders.lua names. **The order is load-bearing**: an officer's
+face is its number modulo the cast, so the nth officer a player raises always
+has both the same name and the same face. Reordering a theme in
+main/theme.lua's M.FACE_EMOJI silently reassigns every existing commander's
+portrait; MANIFEST.json beside this file is what records which codepoint
+became which face.
 
-LICENCE: NOT ESTABLISHED. The source archive carried no licence file. These are
-in the repository so the game builds and can be looked at, but the terms for
-using them in a released build have not been checked. Confirm the licence with
-the artist before shipping, or replace the set - swapping the seventy-two files
-keeps every commander's portrait mapping intact.
+LICENCE: Apache License, Version 2.0 - see NotoEmoji-LICENSE.txt beside this
+file.
+
+This replaced seventy-two pieces of pixel art whose licence was never
+established. It and its importer (tools/import_portraits.py) are gone; the ids
+they filled are unchanged, which is why nothing in the simulation, the wire or
+ui.portrait had to move.

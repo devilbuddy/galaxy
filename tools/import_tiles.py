@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Import the map's hex ground tiles from the `foundation_tiles` art pack.
 
-Like import_portraits.py and import_emoji.py, this is an **import** of
+Like import_emoji.py, this is an **import** of
 third-party art rather than a regeneration step: the output is somebody else's
 drawing, not something derived from parameters here. So alongside the images it
 records provenance - which source file became which, at what size, under what
@@ -192,9 +192,13 @@ file, and both are regenerated together by tools/import_tiles.py, so the mapping
 and the art cannot drift apart.
 
 LICENCE: NOT ESTABLISHED. The pack as received carries no licence file, no
-author attribution and no terms of use. It is used here on the same footing as
-main/assets/portraits/ - fine for a prototype, and a thing that must be resolved
-before anything ships. Whoever resolves it should record the outcome here.
+author attribution and no terms of use - fine for a prototype, and a thing that
+must be resolved before anything ships. Whoever resolves it should record the
+outcome here.
+
+This is now the **only** unresolved licence in the project.
+main/assets/portraits/ was the other one and no longer is: those faces are Noto
+emoji under Apache 2.0, imported by tools/import_emoji.py.
 """ % (args.src, tile_w, tile_h, tile_w // 2, len(biomes)))
 
     with open(os.path.join(OUT_DIR, "MANIFEST.json"), "w") as f:

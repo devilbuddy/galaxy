@@ -918,20 +918,32 @@ do
 	check("and the same officer of another race is a different species",
 		commanders.portrait(4, nil, "terran") ~= commanders.portrait(4, nil, "vorn"))
 	check("every race has a face for every officer", (function()
+		-- The cast size is deliberately not asserted here. It has been twelve
+		-- and is now eight, and pinning the number makes this test a thing to
+		-- edit rather than a thing that catches something. What has to hold is
+		-- the shape: every race draws from a set of its own, the sets are the
+		-- same size, and forty officers wrap rather than running out.
 		local ids = races.ids()
-		local seen = {}
+		local seen, per_race = {}, nil
 		for i = 1, #ids do
+			local mine = {}
 			for n = 1, 40 do
 				local id = commanders.portrait(n, nil, ids[i])
-				if not id:find(ids[i], 1, true) then return false end
+				if not id:find(ids[i], 1, true) then return false, ids[i] end
+				mine[id] = true
 				seen[id] = true
 			end
+			local count = 0
+			for _ in pairs(mine) do count = count + 1 end
+			if count >= 40 then return false, "does not wrap: " .. ids[i] end
+			per_race = per_race or count
+			if count ~= per_race then return false, "uneven cast: " .. ids[i] end
 		end
-		local count = 0
-		for _ in pairs(seen) do count = count + 1 end
-		-- Wraps rather than running out, so forty officers of six races draw
-		-- from a fixed set.
-		return count == #ids * 12
+		local total = 0
+		for _ in pairs(seen) do total = total + 1 end
+		-- No face shared between two races: a Freeholder and a revenant wearing
+		-- the same drawing is the whole point of a cast per people.
+		return total == #ids * per_race, total
 	end)())
 	check("an unknown race still gets one",
 		commanders.portrait(1, nil, "clangers")

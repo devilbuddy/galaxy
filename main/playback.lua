@@ -144,7 +144,7 @@ function M.build(digest, tiles)
 				step.moves[#step.moves + 1] = {
 					player = e.player, commander = e.commander,
 					from = e.from, path = e.path or {},
-					name = e.name, rank = e.rank,
+					name = e.name, rank = e.rank, portrait = e.portrait,
 					-- A sighting is drawn like a march but is not one: it is
 					-- only the part that was in range, so it starts and stops
 					-- in mid-air on purpose.

@@ -94,9 +94,12 @@ local function draw_legend(x, y, types, hold)
 	for i = 1, #types do
 		local spec = types[i]
 		local n = (hold and hold[spec.id]) or 0
+		-- Your own types, in your own theme. The column opposite is a wall and
+		-- a name, so a rival's legend is not a thing this screen ever draws.
+		local name = ui.unit_name(spec)
 		ui.dot(at, y, 14, TYPE_COLOUR[spec.id] or ui.TEXT)
-		ui.small(at + 20, y - 7, string.format("%s %d", spec.name, n), ui.FAINT)
-		at = at + 24 + ui.text_width(spec.name .. " " .. n, ui.SMALL) + 22
+		ui.small(at + 20, y - 7, string.format("%s %d", name, n), ui.FAINT)
+		at = at + 24 + ui.text_width(name .. " " .. n, ui.SMALL) + 22
 	end
 end
 

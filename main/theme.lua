@@ -62,6 +62,14 @@ M.BIOMES = { "greenlands", "sandlands", "drylands", "deadlands", "icelands" }
 M.TILE_PX = { w = 238, h = 207 }
 M.GLYPH_PX = 224
 
+-- The *interface* vocabulary is exported smaller than the map's, because it is
+-- drawn smaller: a unit sits in a 62-unit slot, which is ~124 physical pixels on
+-- a 2x phone, while a map glyph is a sprite scaled to the hex and can fill the
+-- screen at the closest zoom. One size for both meant paying 224px for art
+-- nothing ever draws above 128 - and with six themes' worth of units that is the
+-- difference between one atlas page and two.
+M.UI_PX = 128
+
 -- How much of a tile's width a glyph covers. A glyph has to read as sitting *on*
 -- the hex rather than covering it - the hex's own art is what says the ground is
 -- forest, and a glyph big enough to hide it would be saying it twice.
@@ -100,9 +108,42 @@ M.EMOJI = {
 -- it is keyed by `realm.sim.units` id rather than by map meaning, so the
 -- mapping is exhaustive by construction and `tools/test_wire.lua` can prove it.
 M.UNIT_EMOJI = {
+	-- The fallback, used for a race that declares no art of its own. Deliberately
+	-- plain: these are the shapes the three *roles* have, before a theme puts a
+	-- cow or a drake in the slot.
 	escort      = "1f6e1", -- shield: takes the hits so the rest do not
-	interceptor = "1f680", -- rocket: hunts ships
+	interceptor = "2694",  -- crossed swords: hunts what is standing there
 	bombard     = "1f4a3", -- bomb: breaks defences
+
+	-- terran
+	terran_escort            = "1f404",  -- ox: plods forward and takes it
+	terran_interceptor       = "1f415",  -- hound: runs down what runs
+	terran_bombard           = "1f417",  -- boar: goes through the gate
+
+	-- vorn
+	vorn_escort              = "1f6e1",  -- shield: the wall that walks
+	vorn_interceptor         = "1f40e",  -- horse: rides past the line
+	vorn_bombard             = "1f528",  -- hammer: breaks the wall
+
+	-- ashai
+	ashai_escort             = "2620",   -- bones: already dead, hard to kill again
+	ashai_interceptor        = "1f987",  -- bat: a swarm nobody can hold
+	ashai_bombard            = "1f383",  -- gourd: rots the stone
+
+	-- kepler
+	kepler_escort            = "1f9ff",  -- ward: turns the blow aside
+	kepler_interceptor       = "1f9da",  -- sprite: gets behind them
+	kepler_bombard           = "1f409",  -- drake: burns the gate down
+
+	-- cartel
+	cartel_escort            = "2693",   -- anchor: holds the ground
+	cartel_interceptor       = "1f99c",  -- parrot: the ship that catches you
+	cartel_bombard           = "1f4a3",  -- bomb: opens the hull
+
+	-- silicate
+	silicate_escort          = "1faa8",  -- stone: does not move
+	silicate_interceptor     = "1f410",  -- goat: over ground nobody else crosses
+	silicate_bombard         = "1f4a5",  -- blast: takes the mountain out
 }
 
 -- A feature is drawn as itself. One entry per productive feature in
@@ -140,5 +181,239 @@ function M.emoji_for(realm, id, is_seat)
 	if kind == tiles.WILDS then return nil end
 	return FEATURE_EMOJI[realm.tiles[id].feature]
 end
+
+
+-- The faces an officer can wear, eight per theme.
+--
+-- **A portrait is a role, not a medium.** These fill exactly the ids
+-- `realm/sim/commanders.lua` already names - `portrait_<race>_NN` - so nothing
+-- in the simulation, the wire or `ui.portrait` had to learn that the art
+-- changed. What changed is where it comes from: seventy-two pieces of art whose
+-- licence was never established, for Noto under Apache 2.0.
+--
+-- Eight rather than twelve because a player raises at most four officers
+-- (`rules.commander_cap_max`), and eight readably different emoji per theme is
+-- achievable where twelve is not - past that a cast is one person eight times,
+-- which is the failure the old importer's MIN_SPACING existed to avoid.
+--
+-- Order is load-bearing: an officer's face is its *number* modulo the cast, so
+-- the nth officer a player raises always has both the same name and the same
+-- face. Reordering a theme silently reassigns every existing commander's face.
+M.FACE_EMOJI = {
+	-- **The first four of each cast are the ones that must not look alike.** A
+	-- face is an officer's number modulo the cast and a player may raise four,
+	-- so slots 01-04 are the only ones ever on screen together in the commander
+	-- strip. Those are picked for silhouette - a hat, a helmet, a colour - and
+	-- the near-twins every family of emoji contains are parked at 05-08, where
+	-- they are only ever reached after the index has wrapped.
+
+	-- terran: Freeholders
+	terran_01      = "1f9d1_200d_1f33e",  -- straw hat
+	terran_02      = "1f920",             -- cowboy hat
+	terran_03      = "1f9d1_200d_1f373",  -- cook's toque
+	terran_04      = "1f9d3",             -- grey
+	terran_05      = "1f469_200d_1f33e",  -- farmer
+	terran_06      = "1f468_200d_1f33e",  -- farmer
+	terran_07      = "1f475",             -- grandmother
+	terran_08      = "1f9d4",             -- beard
+
+	-- vorn: Iron Order
+	vorn_01        = "1f934",             -- crown
+	vorn_02        = "1f482",             -- busby
+	vorn_03        = "1f93a",             -- fencer, in white
+	vorn_04        = "1f977",             -- ninja, in black
+	vorn_05        = "1f478",             -- crown
+	vorn_06        = "1fac5",             -- crown
+	vorn_07        = "1f473",             -- turban
+	vorn_08        = "1f3c7",             -- mounted
+
+	-- ashai: The Barrow
+	ashai_01       = "1f9df",             -- green revenant
+	ashai_02       = "1f9db",             -- red collar
+	ashai_03       = "1f47b",             -- white ghost
+	ashai_04       = "1f479",             -- red oni
+	ashai_05       = "1f9df_200d_2640",   -- revenant
+	ashai_06       = "1f9db_200d_2640",   -- revenant
+	ashai_07       = "1f47a",             -- tengu
+	ashai_08       = "1f480",             -- bare skull
+
+	-- kepler: The Circle
+	kepler_01      = "1f9d9",             -- blue hat
+	kepler_02      = "1f9dd",             -- elf
+	kepler_03      = "1f9de",             -- blue genie
+	kepler_04      = "1f9dc",             -- merfolk
+	kepler_05      = "1f9d9_200d_2640",   -- mage
+	kepler_06      = "1f9dd_200d_2640",   -- elf
+	kepler_07      = "1f9d1_200d_1f393",  -- mortarboard
+	kepler_08      = "1f9cc",             -- troll
+
+	-- cartel: Free Company
+	cartel_01      = "1f9b9",             -- purple
+	cartel_02      = "1f9d1_200d_2708",   -- captain's cap
+	cartel_03      = "1f575",             -- detective's hat
+	cartel_04      = "1f978",             -- an obvious disguise
+	cartel_05      = "1f9b9_200d_2640",   -- purple
+	cartel_06      = "1f935",             -- black tie
+	cartel_07      = "1f9d1_200d_1f3a4",  -- loud
+	cartel_08      = "1f412",             -- the ship's monkey
+
+	-- silicate: Stonekin
+	silicate_01    = "1f5ff",             -- carved head
+	silicate_02    = "1f477",             -- hard hat
+	silicate_03    = "1f916",             -- made, not born
+	silicate_04    = "1f9d1_200d_1f3ed",  -- the works
+	silicate_05    = "1f9d1_200d_1f527",  -- spanner
+	silicate_06    = "1f9d1_200d_1f52c",  -- glass and reagents
+	silicate_07    = "1f468_200d_1f3ed",  -- the works
+	silicate_08    = "1f469_200d_1f3ed",  -- the works
+}
+
+-- What a theme calls the three unit types.
+--
+-- Nested, unlike the codepoint tables above, because `tools/import_emoji.py`
+-- never reads this one - only the tables it has to fetch art for must stay flat
+-- for its regex. See `theme_table()` there.
+--
+-- A pair is `{ singular, plural }`; the plural is omitted wherever "s" is right,
+-- which is everywhere but the ox. `ui.plural_word` already takes both, because
+-- the order bar counts a mix out as "2 Oxen, 1 Boar".
+--
+-- **The ids, costs and powers underneath are untouched.** A theme is art and
+-- names, never numbers: the moment one changes a cost the sweep's medians stop
+-- describing the game.
+M.UNIT_NAME = {
+	terran = {
+		escort       = { "Ox", "Oxen" },
+		interceptor  = { "Hound" },
+		bombard      = { "Boar" },
+	},
+	vorn = {
+		escort       = { "Shield" },
+		interceptor  = { "Rider" },
+		bombard      = { "Ram" },
+	},
+	ashai = {
+		escort       = { "Skeleton" },
+		interceptor  = { "Bat" },
+		bombard      = { "Blight" },
+	},
+	kepler = {
+		escort       = { "Ward" },
+		interceptor  = { "Sprite" },
+		bombard      = { "Drake" },
+	},
+	cartel = {
+		escort       = { "Anchor" },
+		interceptor  = { "Corsair" },
+		bombard      = { "Keg" },
+	},
+	silicate = {
+		escort       = { "Boulder" },
+		interceptor  = { "Goat" },
+		bombard      = { "Blast" },
+	},
+}
+
+-- What a theme calls the five buildings. Names only - a building draws one of
+-- the interface kit's icons rather than a glyph of its own (`BUILDING_ICON` in
+-- `main/hud.gui_script`), so this costs no art.
+--
+-- The blurb is *derived* rather than listed: a dwelling's is "<what it makes>,
+-- ready to buy.", built from M.UNIT_NAME above. A second table would be the
+-- place the Barn goes on saying "Escorts" after the Ox was renamed.
+M.BUILDING_NAME = {
+	terran = {
+		berths           = "Barn",
+		interceptor_bay  = "Kennel",
+		foundry          = "Sty",
+		bastion          = "Stockade",
+		admiralty        = "Moot Hall",
+	},
+	vorn = {
+		berths           = "Barracks",
+		interceptor_bay  = "Stables",
+		foundry          = "Smithy",
+		bastion          = "Keep",
+		admiralty        = "Great Hall",
+	},
+	ashai = {
+		berths           = "Crypt",
+		interceptor_bay  = "Roost",
+		foundry          = "Blight Pit",
+		bastion          = "Bone Wall",
+		admiralty        = "Ossuary",
+	},
+	kepler = {
+		berths           = "Sanctum",
+		interceptor_bay  = "Grove",
+		foundry          = "Hatchery",
+		bastion          = "Wardstone",
+		admiralty        = "Conclave",
+	},
+	cartel = {
+		berths           = "Shipwright",
+		interceptor_bay  = "Crow's Nest",
+		foundry          = "Powder House",
+		bastion          = "Sea Fort",
+		admiralty        = "Captain's Table",
+	},
+	silicate = {
+		berths           = "Quarry",
+		interceptor_bay  = "Pasture",
+		foundry          = "Delve",
+		bastion          = "Rampart",
+		admiralty        = "Deep Hall",
+	},
+}
+
+local function themed(source, race, key)
+	local by_race = race and source[race]
+	return by_race and by_race[key] or nil
+end
+
+--- The M.UNIT_EMOJI name for a unit type as *this* theme draws it.
+--
+-- Falls back to the bare unit id, which is always in the table, so a race added
+-- to `realm/sim/races.lua` without art draws the plain role rather than an empty
+-- circle where the player's army should be. `tools/test_wire.lua` is what stops
+-- that fallback going unnoticed.
+function M.unit_emoji(race, id)
+	local name = race and (race .. "_" .. id)
+	if name and M.UNIT_EMOJI[name] then return name end
+	return id
+end
+
+--- A unit type's name in this theme, singular and plural.
+--
+-- `spec` is the wire record (`view.units[i]`) or a catalogue entry - anything
+-- carrying `id` and `name` - so the caller never needs a second lookup to find
+-- the fallback.
+function M.unit_name(race, spec)
+	local id = (type(spec) == "table") and spec.id or spec
+	local entry = themed(M.UNIT_NAME, race, id)
+	if entry then return entry[1], entry[2] or (entry[1] .. "s") end
+	local plain = ((type(spec) == "table") and spec.name) or id
+	return plain, plain .. "s"
+end
+
+--- A building's name and blurb in this theme.
+--
+-- `spec` is the wire record (`view.buildings[i]`): `id`, `name`, `blurb`, and
+-- `makes` for the three that arm somebody. The blurb follows the unit name so
+-- the two cannot drift; a building that makes nothing keeps the catalogue's own,
+-- which is already theme-neutral ("Harder to take. Arms nobody.").
+function M.building_name(race, spec)
+	local id = (type(spec) == "table") and spec.id or spec
+	local name = themed(M.BUILDING_NAME, race, id)
+		or ((type(spec) == "table") and spec.name) or id
+	local blurb = (type(spec) == "table") and spec.blurb or nil
+	local makes = (type(spec) == "table") and spec.makes or nil
+	local entry = makes and themed(M.UNIT_NAME, race, makes)
+	if entry then
+		blurb = (entry[2] or (entry[1] .. "s")) .. ", ready to buy."
+	end
+	return name, blurb
+end
+
 
 return M

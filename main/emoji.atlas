@@ -1,9 +1,33 @@
 images {
+  image: "/main/assets/emoji/ui/emoji_ashai_bombard.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_ashai_escort.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_ashai_interceptor.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
   image: "/main/assets/emoji/ui/emoji_barrow.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
   image: "/main/assets/emoji/ui/emoji_bombard.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_cartel_bombard.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_cartel_escort.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_cartel_interceptor.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
@@ -20,6 +44,18 @@ images {
 }
 images {
   image: "/main/assets/emoji/ui/emoji_interceptor.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_kepler_bombard.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_kepler_escort.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_kepler_interceptor.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
@@ -40,6 +76,42 @@ images {
 }
 images {
   image: "/main/assets/emoji/ui/emoji_shrine.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_silicate_bombard.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_silicate_escort.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_silicate_interceptor.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_terran_bombard.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_terran_escort.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_terran_interceptor.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_vorn_bombard.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_vorn_escort.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_vorn_interceptor.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 margin: 2

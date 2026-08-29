@@ -118,12 +118,17 @@ or on desktop through `tools/drive.py`.
 of its script, not hand-authored art.
 
 **Two importers, and neither is a regeneration.** Both bring in third-party art
-and record provenance beside it, the `import_portraits.py` convention:
+and record provenance beside it - which source became which, at what size, under
+what terms:
 
 | | reads | writes |
 |---|---|---|
 | `tools/import_tiles.py` | `M.TILES` x `M.BIOMES` in `main/theme.lua` | `main/assets/tiles/*.png` + `main/tiles.atlas` |
-| `tools/import_emoji.py` | `M.EMOJI` + `M.UNIT_EMOJI` in `main/theme.lua` | `main/assets/emoji/ui/*.png` + `main/emoji.atlas` + `main/emoji_ui.lua` |
+| `tools/import_emoji.py` | `M.EMOJI` + `M.UNIT_EMOJI` + `M.FACE_EMOJI` in `main/theme.lua` | `main/assets/emoji/ui/*.png` + `main/emoji.atlas` + `main/emoji_ui.lua`, **and** `main/assets/portraits/*.png` + `main/portraits.atlas` |
+
+There used to be a third, `tools/import_portraits.py`, and it is gone: the
+officers' faces are Noto emoji now, so they come from the same place and the
+same script as every other glyph. See **Commander portraits** below.
 
 `import_tiles.py --src` points at the `foundation_tiles` pack (default
 `~/Downloads/foundation_tiles`). It copies the 30 selected ground tiles **byte
@@ -140,6 +145,14 @@ either — so both go through `main/emoji.atlas` and `main/emoji_ui.lua`, and
 `sheet.png` and `emoji_sheet.lua` are gone. Changing which emoji anything uses is
 still one edit to `main/theme.lua` plus a re-run; `test_wire.lua` fails if the
 resolver can name art the atlas lacks.
+
+**Three tables, two sizes.** `M.EMOJI` is the map and exports at `M.GLYPH_PX`
+(224), because a map glyph is a sprite scaled to the hex and can fill the screen
+at the closest zoom. `M.UNIT_EMOJI` and `M.FACE_EMOJI` are the interface and
+export at `M.UI_PX` (128), because a rack slot is 94 design units and a face in
+the commander strip is 62 — paying the map's size for six themes' worth of unit
+art is the difference between one atlas page and two. Both numbers are declared
+in `main/theme.lua` and read back out by the importer, never restated in it.
 
 Note the texture profile: `realm.texture_profiles` mipmaps `/main/tiles.atlas`
 and `/main/emoji.atlas` **by name**. A profile matches the *generated* texture,
@@ -360,11 +373,16 @@ of them stronger, without making the sheet's arithmetic a lie.
 
 #### Three types, and an army is aimed rather than large
 
-| | vs fortification | vs army | cost |
+| id | vs fortification | vs army | cost |
 |---|---|---|---|
-| **Line** | 1 | 1 | 20 |
-| **Lance** | 1 | 3 | 34 |
-| **Siege** | 3 | 1 | 34 |
+| `escort` | 1 | 1 | 20 |
+| `interceptor` | 1 | 3 | 34 |
+| `bombard` | 3 | 1 | 34 |
+
+**What they are *called* depends on the theme** — a Freeholder buys an Ox, a
+Hound and a Boar; the Barrow buys a Skeleton, a Bat and a Blight. The ids, the
+costs and the powers are the same three rows for everyone. See **Themes** under
+Rendering.
 
 Small integers on purpose: a player has to be able to add their hold up in their
 head and compare it against two numbers on the sheet. Anything larger, or
@@ -1061,7 +1079,7 @@ The non-obvious choices behind it:
   **Do not reintroduce a transcendental without reintroducing the ladder with
   it** — `realm/generate.lua` says so at the top.
 - **The digest agrees across runtimes, and that is checked rather than assumed.**
-  Seed 424242 gives `2277256399` on standalone LuaJIT and in Nakama's gopher-lua;
+  Seed 424242 gives `111246289` on standalone LuaJIT and in Nakama's gopher-lua;
   the server logs its digest per generated seed, so the two can be compared
   directly.
 
@@ -1192,6 +1210,31 @@ constant size at every zoom and carry a crisp glyph, which is exactly what the
 labels already do. Map labels are held inside the horizontal safe-area insets,
 and any name that will not fit on either side of its tile is simply not drawn —
 a name sliced by the screen edge is worse than no name.
+
+**An army marker is the officer's own face**, the same portrait the commander
+strip carries, so a commander picked off the strip can be found on the map
+without reading a label. Four nodes, because the marker carries four things and
+a face can only be one of them:
+
+| | |
+|---|---|
+| the face | *which* officer, from `view.commanders[].portrait` — or, for a rival, `view.contacts[].portrait`, which the sim has put on the wire since contacts existed and nothing drew until now |
+| the ring | **whose** it is, in `player_ink` |
+| the pip | where it is going: `icon_chevron_right`, just outside the ring, rotated to the heading. A parked army has none |
+| the caption | the name and the army power, in the same colour as the ring |
+
+**The ring exists because a portrait cannot be tinted.** The marker used to be a
+tinted `icon_warship` — the glyph *was* the player colour — and until the
+ownership wash is drawn that tint is the only thing on the map saying whose army
+it is. It had to move somewhere, and a face in a coloured ring is the vocabulary
+the commander strip already uses.
+
+**The face does not rotate.** The ship it replaced pointed along the tile; a face
+turned sideways stops being a face, which is why the heading is a separate pip.
+And **route segments are created before the markers** so a marker draws over its
+own line — that ordering was the wrong way round and never showed, because a
+marker used to be a small glyph with a lot of nothing around it. An opaque disc
+with a route drawn across it reads as a fault.
 
 ### Zoom, and how much realm you can see at once
 
@@ -1431,7 +1474,8 @@ Two things on the map animate, and the line between them is deliberate.
 
 - **A force under way pulses**; a parked one is still. Position only changes when
   a turn resolves, so without this an army crossing a tile looks exactly like one
-  sitting on a world.
+  sitting on a world. The heading pip says the same thing a second way, which is
+  what keeps it readable at the top of the pulse's breath.
 - **A committed route flows** - the nodes slide along their legs toward the
   destination, which is pinned and larger. A staged route does not: it is a plan
   in the bar, not a force in motion.
@@ -2028,65 +2072,125 @@ fontTools refuses rather than inventing one.
   on the safe-area insets arriving, and without this each rebuild leaked a whole
   layout until the scene ran out of nodes.
 
+### Themes
+
+**A race is a theme, and a theme is art and names — never numbers.** The six
+peoples in `realm/sim/races.lua` were star nations left over from before the map
+became a realm; they are Freeholders, the Iron Order, the Barrow, the Circle,
+the Free Company and Stonekin now. **The ids did not move** (`terran`, `vorn`,
+`ashai`, `kepler`, `cartel`, `silicate`), because renaming them would strand
+every stored game and every seat a bot has claimed — read an id as a slot, not
+as a name.
+
+| theme | escort | interceptor | bombard | berths / bay / foundry |
+|---|---|---|---|---|
+| Freeholders | 🐄 Ox | 🐕 Hound | 🐗 Boar | Barn / Kennel / Sty |
+| Iron Order | 🛡️ Shield | 🐎 Rider | 🔨 Ram | Barracks / Stables / Smithy |
+| The Barrow | ☠️ Skeleton | 🦇 Bat | 🎃 Blight | Crypt / Roost / Blight Pit |
+| The Circle | 🧿 Ward | 🧚 Sprite | 🐉 Drake | Sanctum / Grove / Hatchery |
+| Free Company | ⚓ Anchor | 🦜 Corsair | 💣 Keg | Shipwright / Crow's Nest / Powder House |
+| Stonekin | 🪨 Boulder | 🐐 Goat | 💥 Blast | Quarry / Pasture / Delve |
+
+**The moment a theme changes a cost or a power, the sweep's medians stop
+describing the game.** Nothing under `realm/sim/` knows a theme exists: the unit
+ids, costs and powers are one table for everyone, and the only sim-side change
+the reskin made was `label` and `blurb`.
+
+**The art lives in `main/theme.lua`, keyed by race id.** `realm/sim/races.lua`
+is loaded by gopher-lua on Nakama, a server that never draws anything, and its
+whole stated purpose is to be a modifier bundle. `theme.lua` is already the one
+file `tools/import_emoji.py` parses, `tools/render_map.py` resolves through and
+`test_wire.lua` joins against.
+
+Three resolvers, each falling back to the plain catalogue so an unthemed race
+draws the bare role rather than nothing: `theme.unit_emoji(race, id)`,
+`theme.unit_name(race, spec)` → singular and plural, and
+`theme.building_name(race, spec)` → name and blurb.
+
+**A building's blurb is derived, not listed.** A dwelling's is "<what it makes>,
+ready to buy.", built from `M.UNIT_NAME` — a second table would be the place the
+Barn goes on saying "Escorts" after the Ox was renamed.
+
+**There is only ever one theme on screen**, and `ui.my_race()` is the one place
+that decides it. Everything the interface lets a player *act on* is theirs: a
+rack you can trade with is a garrison on ground you hold or your own commander's
+hold, a card offering an upgrade is your city. So art and names follow the
+*viewer* rather than the thing being drawn — and the one place that is not true,
+a rival's hold in a battle, is drawn as a wall and a name precisely because you
+were never told what was in it. `ui.unit_image`, `ui.unit_name` and
+`ui.building_name` bind the viewer's theme so no call site repeats the lookup.
+
+**Two tables must stay flat and two must not.** `tools/import_emoji.py` parses
+`M.EMOJI`, `M.UNIT_EMOJI` and `M.FACE_EMOJI` with a regex whose block ends at
+the first column-0 `}`, so those are keyed `<race>_<thing>` rather than nested.
+`M.UNIT_NAME` and `M.BUILDING_NAME` are nested by race precisely because nothing
+parses them.
+
+**The race picker shows a face, not a colour swatch.** A swatch promised
+something untrue: a player's colour comes from their *seat*
+(`config.player_palette`), not from who they are, so two Freeholders are
+different colours. The picker draws `commanders.portrait(1, nil, id)` — the
+first officer that player will actually raise.
+
+**Half of each race is still inert**, unchanged by any of this: `modifiers.of`
+folds only speed, hops, vision, attack and defence, and `EFFECT_LABEL` — the one
+piece of client code that ever rendered a `mods` table into words — is dead in
+`main/screens/lobby.gui_script`. **The modifiers are currently invisible to the
+player**, who sees a name, a face and a blurb.
+
 ### Commander portraits
 
-Seventy-two faces in `main/assets/portraits/`, their own atlas
-(`main/portraits.atlas`), drawn by `ui.portrait`. **Third-party art, not a build
-artifact** - unlike everything in `main/assets/ui/`, these are not regenerable
-from a script, and `main/assets/portraits/CREDITS.txt` records the artist and
-that the licence has not been established.
+Forty-eight faces in `main/assets/portraits/`, their own atlas
+(`main/portraits.atlas`), drawn by `ui.portrait`. They are **Noto emoji**, from
+the same `googlefonts/noto-emoji` release and the same importer as the map's
+glyphs, composited onto a disc of `ui.CARD_ALT` at `FACE_FILL` and masked round.
 
-**They are grouped by race, twelve each.** The source set of five hundred is not
-labelled, but it is drawn in species, and every race already declares a colour
-that lands on one of those groups almost exactly - so the grouping is *measured*
-from each image's dominant hue rather than classified by hand:
+**They used to be seventy-two pieces of pixel art whose licence was never
+established**, sorted into races by dominant hue by a `tools/import_portraits.py`
+that no longer exists. That was the last thing in the project blocking a
+release, and swapping the source closed it: Noto is Apache 2.0, recorded in
+`main/assets/portraits/NotoEmoji-LICENSE.txt` beside the art. **A portrait is a
+role, not a medium** - it is still the face standing for an officer, and every
+id it fills is unchanged, which is why nothing in the simulation, the wire or
+`ui.portrait` had to move.
 
-| race | hue | what it looks like |
-|---|---|---|
-| terran | blue | uniformed, armoured humanoids - a navy |
-| vorn | red | devils and revenants |
-| ashai | green | orc and plant folk |
-| kepler | violet | tentacled, scholarly, strange |
-| cartel | gold | ornate and flashy |
-| silicate | cyan | ice and glass |
+**Eight per theme, and the first four are the ones that matter.** A face is an
+officer's number modulo the cast (`commanders.portrait`), a player may raise
+four (`rules.commander_cap_max`), so slots 01-04 are the only faces ever on
+screen together in the commander strip. Those are picked for silhouette - a hat,
+a helmet, a colour - and the near-twins every family of emoji contains
+(🧟/🧟‍♀️, 🧙/🧙‍♀️) are parked at 05-08 where they are only reached after the
+index has wrapped. `tools/test_wire.lua` fails if a theme repeats a codepoint
+inside its first four.
 
-Two things are traded off inside a band and both matter: **fit**, how much of the
-subject is actually that hue, so a race reads as one species rather than a
-colour-wash; and **variety**, because the source is ordered by character with
-several variants of each in a row, so the best-fitting dozen are otherwise one
-person twelve times. Picks are kept a minimum apart in the source order for that
-reason.
+Eight rather than one per surname, because six themes would be 240 images and a
+player raises at most four officers. Past eight the index wraps.
 
-Twelve per race rather than one per surname, because six races would be 240
-images and a player currently raises exactly one officer. Past twelve the index
-wraps.
+Faces are masked to a disc at import and drawn with a ring (`ui.portrait`,
+`ui.ring`), so the ring covers the mask's soft edge instead of leaving a pale
+halo behind it. `FACE_FILL` is 0.78 rather than 1.0 because an emoji is drawn to
+the edges of its own square, and at full size the round mask clips a farmer's
+hat and a wizard's staff.
 
-Portraits are masked to a disc at import and drawn with a ring
-(`ui.portrait`, `ui.ring`), so the ring covers the mask's soft edge instead of
-leaving a pale halo behind it.
+**The order is load-bearing.** A portrait is chosen by the player's race plus
+the same index as the surname, so the nth officer a player of a given theme
+raises always has both the same name and the same face; reordering a cast in
+`M.FACE_EMOJI` silently reassigns every existing commander's portrait.
+`MANIFEST.json` alongside the images is what says which codepoint became which
+face, and is the only way to see that a reorder moved everyone.
 
-`tools/import_portraits.py` records the provenance. **The order is
-load-bearing.** A portrait is chosen by the player's race plus the same index as
-the surname (`commanders.portrait`), so the nth officer a player of a given race
-raises always has both the same name and the same face; changing the bands, the
-count or the tie-breaks silently reassigns every existing commander's portrait.
-The bands are a *method*, not a record - `MANIFEST.json` alongside the images is
-what says which five hundred became which seventy-two, and is the only way to
-see that a threshold tweak moved everyone's face. There is a fallback from
-surname to index for records raised before officers carried a number, without
-which every one of them shared a single face.
+`tools/import_emoji.py` reads `PORTRAITS_PER_RACE` out of
+`realm/sim/commanders.lua` and refuses to run unless every theme declares
+exactly that many - a theme one short would leave the sim naming an image the
+atlas lacks. `tools/test_wire.lua` is the other half: it checks that every id
+the sim can name resolves in the atlas. Nothing connects the two but a string,
+and `ui.portrait` swallows a missing one on purpose - so a mismatch would
+quietly put the whole roster in the fallback face rather than erroring.
 
-`tools/test_wire.lua` checks that every id the sim can name resolves in the
-atlas. Nothing connects the two but a string, and `ui.portrait` swallows a
-missing one on purpose - so a mismatch would quietly put the whole roster in the
-fallback face rather than erroring.
+There is a fallback from surname to index for records raised before officers
+carried a number, without which every one of them shared a single face.
 
-The importer also makes the baked-in black background transparent, by flooding
-inward from the border. Keying out *every* black pixel is not an option - this
-is pixel art and its outlines are black, so that punches holes through the
-character.
-
-### Safe area
+### Safe area### Safe area
 
 The device's notch, punch-hole and gesture strip are respected by
 [extension-safearea](https://defold.com/extension-safearea/), in **custom mode**
@@ -2283,6 +2387,29 @@ camera of `(-191.75, 243.29)` at zoom `0.37181` against the true
 but not the tile sheet's own buttons. `state` and `tapstar` are unaffected -
 they do not depend on it - and `click` works for anything it can see.
 
+**A y from `find`/`text` cannot be handed to `tap` unchecked, and the
+correction is not a constant.** The bridge measures GUI nodes from a different
+origin than the one the render script lays out in, and the discrepancy depends
+on the window the editor happened to open. Two runs, same build: at a 1440x1970
+framebuffer (720x985 view) every reported y was 985 too large and both axes
+needed halving; at 720x1280 - where the window matches the design resolution
+exactly - the reported figures were already right. So **calibrate once per
+session** rather than trusting a formula: take a `shot`, find one unmistakable
+label in it, and compare against what `find` says for the same label. That gives
+the scale and the offset for every other tap that session.
+
+`drive.py state` publishes `view_width`, `view_height`, `pixel_width` and
+`pixel_height`, which is what makes the scale recoverable; the offset is the
+part to measure. Feeding `tap` an uncorrected y puts the press off the bottom of
+the screen, where it silently does nothing - which reads exactly like a dead
+button, and cost an hour before it was noticed.
+
+`click` resolves the element server-side and mostly lands correctly, but it
+matches text by **substring**, so `click START` on the lobby also matches
+"Waiting to start" and refuses as ambiguous; `--first` then picks the wrong one.
+For a control whose label is a substring of another, compute the pixel and
+`tap`.
+
 ## File formats
 
 Defold source files (`.collection`, `.go`, `.atlas`, `.gui`, `.sprite`, `.input_binding`, …) are **protobuf text format**, not JSON — `.gitattributes` maps them to JSON5 only so GitHub highlights them. They are hand-editable and diff cleanly; match the existing style (unquoted keys, `key: value`, nested `block { … }`, quoted strings). References inside them are absolute project paths and point at *compiled* artifacts — note the trailing `c` in `main_collection = /main/main.collectionc`.
@@ -2364,6 +2491,13 @@ will bite whoever touches them.
   hours later, so this is a real hole. The place for it is the aim flow in the
   order bar, where the decision is being made.
 - **A rival commander standing on a tile is no longer named on its card.**
+  Their *face* is on the map marker now, which is what the wire always
+  intended - but the card still says nothing about them.
+- **The marker's heading pip has not been seen on screen.** The face, the
+  ring, the caption and a parked marker with no pip are all verified on
+  desktop; a commander actually *under way* was not reachable in the
+  session that built it, so the chevron's placement and rotation are
+  argued rather than observed.
 - **Only one commander's rack is shown when two are standing on the same tile.**
 - **Half of each race is still inert.** `modifiers.of` folds speed, hops, vision,
   attack and defence; growth, industry, research, capacity and the cost keys are
@@ -2403,8 +2537,8 @@ will bite whoever touches them.
 - The safearea extension logs `ERROR:ENGINE: Could not find '@render' socket`
   once at startup on Android. Benign, but noise in every log.
 - The turn digest is capped at 40 turns server-side and 140 rows client-side.
-- **The tile art's licence is not established.** The `foundation_tiles` pack
-  ships no licence file, no author and no terms;
-  `main/assets/tiles/CREDITS.txt` records that. Same footing as
-  `main/assets/portraits/` — fine for a prototype, must be resolved before
-  anything ships.
+- **The tile art's licence is not established, and it is now the only one.** The
+  `foundation_tiles` pack ships no licence file, no author and no terms;
+  `main/assets/tiles/CREDITS.txt` records that. `main/assets/portraits/` used to
+  be on the same footing and no longer is — those faces are Noto under Apache
+  2.0. Fine for a prototype, must be resolved before anything ships.

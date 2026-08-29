@@ -490,6 +490,12 @@ local function movement(realm, state, mods, events)
 				player = commander.owner, commander = commander.id,
 				name = commander.name, from = from, at = commander.at,
 				rank = commanders.rank(commander.level or 1),
+				-- The face, so a replay can draw the marker the map draws.
+				-- Display data like `name` and `rank` beside it, and public for
+				-- the same reason `view.contacts` has carried it all along: a
+				-- sighting copies this field rather than deriving its own.
+				portrait = commanders.portrait(commander.number, commander.name,
+					(state.players[commander.owner] or {}).race),
 				path = walked, bound_for = commander.route[#commander.route],
 				visible_to = { commander.owner },
 			})
@@ -918,7 +924,8 @@ local function sighted_movement(state, events, visible)
 							-- `player` is who it belongs to, as everywhere else;
 							-- `visible_to` is the single player who saw it.
 							player = ev.player, commander = ev.commander,
-							rank = ev.rank, from = journey[first],
+							rank = ev.rank, portrait = ev.portrait,
+							from = journey[first],
 							path = path, at = journey[last],
 							visible_to = { p },
 						}

@@ -87,9 +87,10 @@ local function build_picker(self, x, y, text_w, view, at)
 		ui.icon(x + 16, row_y + ROW_H - 26, 30,
 			BUILDING_ICON[spec.id] or "icon_tile",
 			have and ui.GOOD or (afford and ui.TEXT or ui.FAINT))
-		ui.body(x + 62, row_y + 44, spec.name,
+		local name, blurb = ui.building_name(spec)
+		ui.body(x + 62, row_y + 44, name,
 			(afford and not have) and ui.TEXT or ui.FAINT)
-		ui.small(x + 62, row_y + 20, spec.blurb or "", ui.FAINT)
+		ui.small(x + 62, row_y + 20, blurb or "", ui.FAINT)
 		if have then
 			ui.small(x + text_w - 16, row_y + 32, "BUILT", ui.GOOD,
 				{ pivot = gui.PIVOT_E, bold = true })
@@ -100,7 +101,7 @@ local function build_picker(self, x, y, text_w, view, at)
 			if afford then
 				self.druid:new_button(row, function()
 					request({ kind = "build", at = at,
-						building = spec.id, label = spec.name })
+						building = spec.id, label = name })
 				end)
 			end
 		end
@@ -115,8 +116,9 @@ local function build_action(self, x, y, text_w, view, at, id)
 	local rates = view.rates or {}
 
 	ui.icon(x, y - 20, 40, BUILDING_ICON[id] or "icon_tile", ui.TEXT)
-	ui.h2(x + 56, y - 40, (spec and spec.name) or id)
-	ui.small(x, y - 104, spec and spec.blurb or "", ui.DIM,
+	local name, blurb = ui.building_name(spec or id)
+	ui.h2(x + 56, y - 40, name)
+	ui.small(x, y - 104, blurb or "", ui.DIM,
 		{ width = text_w, anchor_top = true })
 
 	local bottom = y - 160

@@ -346,15 +346,111 @@ do
 	-- ui.emoji swallows a miss on purpose - so a mismatch would quietly draw an
 	-- empty circle where a player's army is, which is the one thing on that
 	-- card there is no other way to read.
-	check("every unit type has an interface glyph", (function()
+	check("every unit type has an interface glyph, in every theme", (function()
 		local theme = require("main.theme")
 		local units = require("realm.sim.units")
 		local ok, atlas = pcall(require, "main.emoji_ui")
 		if not ok then return false, "no main/emoji_ui.lua - run tools/import_emoji.py" end
-		for i = 1, #units.CATALOGUE do
-			local id = units.CATALOGUE[i].id
-			if not theme.UNIT_EMOJI[id] then return false, "theme: " .. id end
-			if not atlas[id] then return false, "atlas: " .. id end
+		local ids = races.ids()
+		-- `nil` is the race before a game is open, and is what exercises the
+		-- fallback: a screen built early must draw the plain role rather than
+		-- nothing at all.
+		for r = 0, #ids do
+			local race = (r > 0) and ids[r] or nil
+			for i = 1, #units.CATALOGUE do
+				local id = units.CATALOGUE[i].id
+				local name = theme.unit_emoji(race, id)
+				if not theme.UNIT_EMOJI[name] then
+					return false, "theme: " .. tostring(race) .. "/" .. id
+				end
+				if not atlas[name] then
+					return false, "atlas: " .. name
+				end
+			end
+		end
+		return true
+	end)())
+
+	-- Names, for the same reason as the glyphs: a theme that named no units
+	-- would fall back to the naval catalogue silently, so a Freeholder would
+	-- buy an "Escort" into a Barn and nothing anywhere would complain.
+	--
+	-- The plural matters too. `ui.plural_word` appends "s" unless it is given
+	-- one, and the order bar counts a mix out - so an Ox that forgot its plural
+	-- becomes "2 Oxs" in the one line a player reads before sending a turn.
+	check("every theme names every unit and every building", (function()
+		local theme = require("main.theme")
+		local units = require("realm.sim.units")
+		local buildings = require("realm.sim.buildings")
+		local ids = races.ids()
+		for r = 1, #ids do
+			local race = ids[r]
+			for i = 1, #units.CATALOGUE do
+				local spec = units.CATALOGUE[i]
+				local singular, plural = theme.unit_name(race, spec)
+				if not theme.UNIT_NAME[race] or not theme.UNIT_NAME[race][spec.id] then
+					return false, "unit: " .. race .. "/" .. spec.id
+				end
+				if type(singular) ~= "string" or singular == "" then
+					return false, "singular: " .. race .. "/" .. spec.id
+				end
+				if type(plural) ~= "string" or plural == "" then
+					return false, "plural: " .. race .. "/" .. spec.id
+				end
+			end
+			for i = 1, #buildings.CATALOGUE do
+				local spec = buildings.CATALOGUE[i]
+				local name, blurb = theme.building_name(race, spec)
+				if not theme.BUILDING_NAME[race] or not theme.BUILDING_NAME[race][spec.id] then
+					return false, "building: " .. race .. "/" .. spec.id
+				end
+				if type(name) ~= "string" or name == "" then
+					return false, "name: " .. race .. "/" .. spec.id
+				end
+				if spec.blurb and (type(blurb) ~= "string" or blurb == "") then
+					return false, "blurb: " .. race .. "/" .. spec.id
+				end
+			end
+		end
+		return true
+	end)())
+
+	-- The cast has to be exactly what `commanders.portrait` will ask for. The
+	-- atlas join above proves the images exist; this proves main/theme.lua is
+	-- what put them there, so a hand-edited atlas cannot paper over a theme that
+	-- is a face short.
+	check("every theme declares a full cast of faces", (function()
+		local theme = require("main.theme")
+		local ids = races.ids()
+		local per_race = 0
+		while theme.FACE_EMOJI[string.format("%s_%02d", ids[1], per_race + 1)] do
+			per_race = per_race + 1
+		end
+		if per_race == 0 then return false, "no faces for " .. ids[1] end
+		local seen = 0
+		for r = 1, #ids do
+			for n = 1, per_race do
+				local key = string.format("%s_%02d", ids[r], n)
+				if not theme.FACE_EMOJI[key] then return false, key end
+				seen = seen + 1
+			end
+		end
+		-- Nothing left over: a key naming a race that no longer exists would
+		-- otherwise sit in the atlas for ever.
+		local total = 0
+		for _ in pairs(theme.FACE_EMOJI) do total = total + 1 end
+		if total ~= seen then
+			return false, string.format("%d faces declared, %d reachable", total, seen)
+		end
+		-- The first four are the only ones ever on screen together, so they are
+		-- the ones that must not be the same drawing twice.
+		for r = 1, #ids do
+			local first = {}
+			for n = 1, math.min(4, per_race) do
+				local cp = theme.FACE_EMOJI[string.format("%s_%02d", ids[r], n)]
+				if first[cp] then return false, ids[r] .. " repeats " .. cp .. " in its first four" end
+				first[cp] = true
+			end
 		end
 		return true
 	end)())

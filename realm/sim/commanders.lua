@@ -52,15 +52,20 @@ local SURNAMES = {
 	"Eriksen", "Zamora",
 }
 
--- Portraits per race in main/portraits.atlas. The set is grouped by species -
--- see tools/import_portraits.py - so a Vorn officer is a crimson devil and an
--- Ashai one is green, which is most of what makes a race feel like a people
--- rather than a modifier bundle.
+-- Faces per theme in main/portraits.atlas. Each theme has a cast of its own -
+-- see M.FACE_EMOJI in main/theme.lua - so a Barrow officer is a revenant and a
+-- Freeholder is somebody off a farm, which is most of what makes a people feel
+-- like a people rather than a modifier bundle.
 --
--- Twelve rather than one per surname: six races would be 240 images, and a
--- player currently raises exactly one officer. It is enough that a full table
--- never repeats a face; past it the index wraps.
-local PORTRAITS_PER_RACE = 12
+-- Eight rather than one per surname: six themes would be 240 images, and a
+-- player raises at most four officers (`rules.commander_cap_max`), so a cast
+-- this size never repeats a face inside one empire. Past it the index wraps.
+--
+-- tools/import_emoji.py reads this number and refuses to run unless every theme
+-- declares exactly that many, because a theme one short would leave
+-- `M.portrait` below naming an image the atlas lacks - and ui.portrait swallows
+-- a miss on purpose, so the whole roster would quietly wear the fallback face.
+local PORTRAITS_PER_RACE = 8
 
 --- The portrait that goes with an officer's number and their empire's race.
 --

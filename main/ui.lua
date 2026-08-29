@@ -24,6 +24,8 @@
 
 local store = require("main.store")
 local races = require("realm.sim.races")
+local theme = require("main.theme")
+local emoji_ui = require("main.emoji_ui")
 
 local M = {}
 
@@ -199,8 +201,8 @@ function M.pill_line(x, y, w, h, colour)
 	return node
 end
 
---- A small filled circle, for status marks and legend swatches.
---- A commander's portrait. `id` is what the simulation reports (portrait_07).
+--- A commander's portrait. `id` is what the simulation reports
+--- (`portrait_<race>_NN`, from realm/sim/commanders.lua).
 --
 -- Square, and drawn at whatever size the caller asks for; the source is 128px so
 -- anything up to that is a downscale. Falls back to nothing rather than erroring
@@ -212,9 +214,9 @@ function M.portrait(x, y, size, id, opts)
 		vmath.vector3(size, size, 0)))
 	gui.set_pivot(node, gui.PIVOT_NW)
 	gui.set_texture(node, M.PORTRAIT_ATLAS)
-	-- Portraits are grouped by race (tools/import_portraits.py), so there is no
-	-- generic first portrait to fall back to - the default race's is the
-	-- stand-in, the same one realm/sim/commanders.lua falls back to.
+	-- Each people has a cast of its own (M.FACE_EMOJI in main/theme.lua), so
+	-- there is no generic first portrait to fall back to - the default race's is
+	-- the stand-in, the same one realm/sim/commanders.lua falls back to.
 	local ok = pcall(gui.play_flipbook, node, id or "portrait_terran_01")
 	if not ok then pcall(gui.play_flipbook, node, "portrait_terran_01") end
 	-- The ring goes on top, so it covers the mask's soft edge rather than
@@ -231,6 +233,7 @@ function M.ring(x, y, size, colour)
 	return M.sprite(x, y, size, size, "pill_line", colour or M.BORDER)
 end
 
+--- A small filled circle, for status marks and legend swatches.
 function M.dot(x, y, size, colour)
 	return M.sprite(x, y, size, size, "pill", colour)
 end
@@ -859,6 +862,44 @@ end
 --- A race's display name, tolerating an id the client has never heard of.
 function M.race_label(id)
 	return races.by_id(id).label
+end
+
+--- Whose theme everything on screen is wearing.
+--
+-- **There is only ever one.** A rack you can trade with is a garrison on ground
+-- you hold or a hold your own commander is carrying; a card offering an upgrade
+-- is your city. Everything the interface lets a player *act on* is theirs, so
+-- the art and the names follow the viewer rather than the thing being drawn -
+-- and the one place that is not true, a rival's hold in a battle, is drawn as a
+-- wall and a name precisely because you were never told what was in it.
+--
+-- Nil before a game is open. Every resolver in main/theme.lua takes that and
+-- falls back to the plain catalogue, so a screen built early is plain rather
+-- than blank.
+function M.my_race(view)
+	view = view or store.game_view
+	local you = view and view.you
+	local roster = view and view.players
+	local player = you and roster and roster[you]
+	return player and player.race or nil
+end
+
+--- The atlas image id for a unit type, as this player's theme draws it.
+function M.unit_image(id, view)
+	return emoji_ui[theme.unit_emoji(M.my_race(view), id)]
+end
+
+--- A unit type's name in this player's theme: singular, then plural.
+--
+-- `spec` is the wire record (`view.units[i]`), so the fallback to the
+-- catalogue's own name needs no second lookup.
+function M.unit_name(spec, view)
+	return theme.unit_name(M.my_race(view), spec)
+end
+
+--- A building's name and blurb in this player's theme.
+function M.building_name(spec, view)
+	return theme.building_name(M.my_race(view), spec)
 end
 
 --- Black or white, whichever is legible on `colour`.

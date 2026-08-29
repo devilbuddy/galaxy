@@ -76,7 +76,10 @@ local function describe(event, me)
 		for i = 1, #((store.game_view and store.game_view.units) or {}) do
 			local spec = store.game_view.units[i]
 			local n = (event.took or {})[spec.id] or 0
-			if n > 0 then mix[#mix + 1] = n .. " " .. spec.name end
+			if n > 0 then
+				local singular, plural = ui.unit_name(spec)
+				mix[#mix + 1] = n .. " " .. ui.plural_word(n, singular, plural)
+			end
 		end
 		return {
 			icon = "icon_industry", tone = ui.GOOD,
@@ -107,7 +110,12 @@ local function describe(event, me)
 	elseif kind == "built" then
 		return {
 			icon = "icon_industry", tone = ui.GOOD,
-			title = (event.name or "A building") .. " at " .. tile_name(event.at),
+			-- The event carries the catalogue's own name; the theme's is a
+			-- client fact, so it is resolved here from the id and falls back to
+			-- what the server said rather than to a bare `interceptor_bay`.
+			title = ((event.building
+					and ui.building_name({ id = event.building, name = event.name }))
+				or event.name or "A building") .. " at " .. tile_name(event.at),
 			subtitle = string.format("%d gold", event.cost or 0),
 		}
 

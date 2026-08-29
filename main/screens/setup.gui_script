@@ -16,6 +16,7 @@ local store = require("main.store")
 local ui = require("main.ui")
 local backend = require("main.backend")
 local races = require("realm.sim.races")
+local commanders = require("realm.sim.commanders")
 
 local PAD = 24
 -- Opponent counts a player can pick from. Four is the shape the game is
@@ -46,8 +47,16 @@ local function build_races(self, x, y, width)
 		local tile = ui.panel(tx, ty, tile_w, 64,
 			chosen and ui.ACCENT_SOFT or ui.CARD_ALT)
 		if chosen then ui.panel_line(tx, ty, tile_w, 64, ui.ACCENT) end
-		ui.dot(tx + 18, ty - 24, 16, ui.race_colour(id))
-		ui.body(tx + 46, ty - 32, race.label, chosen and ui.TEXT or ui.DIM)
+		-- The first face of this people's cast, not a colour swatch. A swatch
+		-- was promising something untrue: a player's colour comes from their
+		-- seat (config.player_palette), not from who they are, so two
+		-- Freeholders are different colours and the dot said otherwise. The
+		-- face is what they will actually be looking at all game - it is the
+		-- first officer they will raise, since a portrait is the officer's
+		-- number modulo the cast.
+		ui.portrait(tx + 12, ty - 10, 44, commanders.portrait(1, nil, id),
+			{ ring_colour = chosen and ui.ACCENT or ui.BORDER })
+		ui.body(tx + 68, ty - 32, race.label, chosen and ui.TEXT or ui.DIM)
 		self.race_tiles[#self.race_tiles + 1] = tile
 		self.body_druid:new_button(tile, function()
 			store.race = id
