@@ -7,22 +7,42 @@ parameters here - so alongside the sheet it records provenance: which glyphs,
 from which release, packed into which cells (MANIFEST.json), under what terms
 (NotoEmoji-LICENSE.txt, CREDITS.txt).
 
-The glyph list is not declared here: it is parsed out of `main/theme.lua`'s
-M.EMOJI table, which is the single source of truth for what the map can draw.
-Run this after changing that table. It writes:
+The glyph list is not declared here: it is parsed out of `main/theme.lua`, which
+is the single source of truth for what the game can draw. There are two
+vocabularies there and they land in two different places, because the map and
+the interface draw glyphs by entirely different mechanisms:
+
+  M.EMOJI       the *map*, drawn as mesh quads that sample one packed sheet by
+                UV rect (main/shaders/emoji.fp).
+  M.UNIT_EMOJI  the *interface*, drawn as GUI box nodes. A GUI node plays a whole
+                named atlas image and cannot be handed a UV rect, so these are
+                exported one PNG apiece into an atlas of their own. They are
+                deliberately not in the sheet: it is a 4x4 grid with no cells to
+                spare, and mesh UVs must not shift when an icon is added.
+
+Run this after changing either table. It writes:
 
     main/assets/emoji/sheet.png           4x4 grid of 256px cells, 1024x1024
+    main/assets/emoji/ui/emoji_<name>.png one 192px glyph apiece, for the GUI
     main/assets/emoji/MANIFEST.json       provenance + cell assignments
     main/assets/emoji/CREDITS.txt         attribution
     main/assets/emoji/NotoEmoji-LICENSE.txt
     main/emoji_sheet.lua                  name -> UV rect (generated, never
                                           hand-edited - like main/ui.atlas)
+    main/emoji_ui.lua                     name -> atlas image id, the GUI twin
+    main/emoji.atlas                      generated from main/assets/emoji/ui/
 
-Glyphs are downscaled 512 -> 224 (LANCZOS) and centred, leaving a 16px
+Sheet glyphs are downscaled 512 -> 224 (LANCZOS) and centred, leaving a 16px
 transparent gutter per cell; the UV rects are inset a further 8px so linear
 sampling and mip generation never bleed a neighbouring glyph into an edge.
-The sheet is straight alpha - Defold premultiplies at build time, the same
+Everything is straight alpha - Defold premultiplies at build time, the same
 contract as every other texture in the project.
+
+Note the texture profile: galaxy.texture_profiles mipmaps /main/assets/emoji/**,
+which is what the sheet needs and what a GUI atlas does not. A profile matches
+the *generated* texture, and that is /main/emoji.atlas - which falls under `**`
+and gets the default no-mip profile. Nothing to configure; worth remembering if
+the atlas ever moves under main/assets/.
 """
 import io
 import json
@@ -41,7 +61,10 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 THEME = os.path.join(ROOT, "main", "theme.lua")
 OUT_DIR = os.path.join(ROOT, "main", "assets", "emoji")
 SHEET = os.path.join(OUT_DIR, "sheet.png")
+UI_DIR = os.path.join(OUT_DIR, "ui")
 UV_MODULE = os.path.join(ROOT, "main", "emoji_sheet.lua")
+UI_MODULE = os.path.join(ROOT, "main", "emoji_ui.lua")
+UI_ATLAS = os.path.join(ROOT, "main", "emoji.atlas")
 CACHE = os.path.join(ROOT, "build", "emoji_cache")
 
 GRID = 4          # cells per side
@@ -50,21 +73,31 @@ GLYPH = 224       # glyph size inside the cell (16px gutter each side)
 INSET = 8         # UV inset from the cell edge, px
 SHEET_PX = GRID * CELL
 
+# One GUI glyph, unpacked. A slot on the system sheet is 94 design units, which
+# is 188 physical pixels on a 2x framebuffer, so 192 is a downscale everywhere
+# that matters and never a magnification.
+UI_PX = 192
+
 # Defold flips PNGs to GL convention at build time, so v=0 is the bottom of
 # the image. If the first engine build shows the castle upside down, this is
 # the one switch to flip.
 FLIP_V = True
 
 
-def theme_emoji():
-    """name -> codepoint, parsed from main/theme.lua's M.EMOJI block."""
+def theme_table(name):
+    """name -> codepoint, parsed from one `M.<name> = { ... }` block.
+
+    Anchored at the start of a line (re.M), because an unanchored pattern for
+    EMOJI is free to match inside a longer table name and hand back the wrong
+    vocabulary. Everything downstream would still run.
+    """
     src = open(THEME).read()
-    block = re.search(r"M\.EMOJI\s*=\s*\{(.*?)\n\}", src, re.S)
+    block = re.search(r"^M\.%s\s*=\s*\{(.*?)\n\}" % name, src, re.S | re.M)
     if not block:
-        sys.exit("import_emoji: no M.EMOJI block found in main/theme.lua")
+        sys.exit("import_emoji: no M.%s block found in main/theme.lua" % name)
     pairs = re.findall(r'(\w+)\s*=\s*"([0-9a-f_]+)"', block.group(1))
     if not pairs:
-        sys.exit("import_emoji: M.EMOJI block parsed empty")
+        sys.exit("import_emoji: M.%s block parsed empty" % name)
     return dict(pairs)
 
 
@@ -82,8 +115,72 @@ def fetch(url, path):
     return data
 
 
+def write_ui_atlas(names):
+    """Rewrite main/emoji.atlas from the exported GUI glyphs.
+
+    Generated rather than hand-maintained, exactly like main/ui.atlas: adding an
+    interface glyph is one command and cannot be half-done. Written from the
+    names main/theme.lua declared rather than from a directory listing, so a
+    file left behind by an older run cannot creep back into the build. Same
+    margin and extrude as that atlas, and no `max_page_size` line - bob 1.13
+    rejects the field outright rather than ignoring it.
+    """
+    blocks = [
+        'images {\n  image: "/main/assets/emoji/ui/emoji_%s.png"\n'
+        "  sprite_trim_mode: SPRITE_TRIM_MODE_OFF\n}" % n
+        for n in names
+    ]
+    body = "\n".join(blocks) + "\nmargin: 2\nextrude_borders: 2\ninner_padding: 0\n"
+    with open(UI_ATLAS, "w") as f:
+        f.write(body)
+    print("main/emoji.atlas: %d images" % len(names))
+
+
+def export_ui(units):
+    """One PNG per interface glyph, plus the atlas and the name -> id module."""
+    names = sorted(units)
+    os.makedirs(UI_DIR, exist_ok=True)
+
+    # A glyph dropped from main/theme.lua leaves its PNG behind, and a stale one
+    # on disk is indistinguishable from a live one when you go looking.
+    wanted = set("emoji_%s.png" % n for n in names)
+    for stale in sorted(os.listdir(UI_DIR)):
+        if stale.endswith(".png") and stale not in wanted:
+            os.remove(os.path.join(UI_DIR, stale))
+            print("removed stale %s" % stale)
+
+    for name in names:
+        cp = units[name]
+        raw = fetch(NOTO_URL % (NOTO_REF, cp),
+                    os.path.join(CACHE, "emoji_u%s.png" % cp))
+        img = Image.open(io.BytesIO(raw)).convert("RGBA")
+        img = img.resize((UI_PX, UI_PX), Image.LANCZOS)
+        img.save(os.path.join(UI_DIR, "emoji_%s.png" % name))
+    print("main/assets/emoji/ui/: %d glyphs at %dpx" % (len(names), UI_PX))
+
+    write_ui_atlas(names)
+
+    # The GUI twin of main/emoji_sheet.lua. A GUI node needs an atlas image id
+    # rather than a UV rect, so this is a plain name -> id map - but it exists
+    # for the same reason: nothing but a string connects main/theme.lua to the
+    # art, and tools/test_wire.lua checks the join across this table.
+    lines = [
+        "-- Generated by tools/import_emoji.py - do not edit by hand.",
+        "-- Noto emoji %s exported one glyph apiece into /main/emoji.atlas," % NOTO_REF,
+        "-- for GUI scenes; the map's own glyphs live in main/emoji_sheet.lua.",
+        "return {",
+    ]
+    for name in names:
+        lines.append('\t%s = "emoji_%s",' % (name, name))
+    lines.append("}")
+    with open(UI_MODULE, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print("main/emoji_ui.lua: %d entries" % len(names))
+
+
 def main():
-    emoji = theme_emoji()
+    emoji = theme_table("EMOJI")
+    units = theme_table("UNIT_EMOJI")
     names = sorted(emoji)
     if len(names) > GRID * GRID:
         sys.exit("import_emoji: %d glyphs do not fit a %dx%d sheet"
@@ -132,6 +229,8 @@ def main():
         f.write("\n".join(lines) + "\n")
     print("main/emoji_sheet.lua: %d entries" % len(names))
 
+    export_ui(units)
+
     license_text = fetch(LICENSE_URL % NOTO_REF,
                          os.path.join(CACHE, "LICENSE-%s" % NOTO_REF)).decode()
     with open(os.path.join(OUT_DIR, "NotoEmoji-LICENSE.txt"), "w") as f:
@@ -146,20 +245,29 @@ def main():
 =========
 
 Google Noto color emoji, from the googlefonts/noto-emoji repository at tag
-%s. The 512px PNGs were downscaled to %dpx, centred in %dpx cells and packed
-into sheet.png by tools/import_emoji.py; the artwork itself is unmodified.
-Which glyphs the map uses is decided by main/theme.lua, and MANIFEST.json
-here records exactly which codepoint landed in which cell.
+%s. The artwork itself is unmodified; only its size and packing changed.
+
+  sheet.png   the map's glyphs, downscaled to %dpx and centred in %dpx cells.
+              Sampled by UV rect from a mesh shader.
+  ui/         the interface's glyphs, one %dpx PNG apiece, packed by Defold
+              into /main/emoji.atlas. A GUI node draws a whole named image and
+              cannot be handed a UV rect, which is why these are not in the
+              sheet.
+
+Which glyphs each vocabulary uses is decided by main/theme.lua, and
+MANIFEST.json here records exactly which codepoint became which.
 
 LICENCE: Apache License, Version 2.0 - see NotoEmoji-LICENSE.txt beside this
 file. Re-running the importer after editing main/theme.lua regenerates the
-sheet and main/emoji_sheet.lua together, so the mapping and the art cannot
-drift apart.
-""" % (NOTO_REF, GLYPH, CELL))
+sheet, main/emoji_sheet.lua, main/emoji.atlas and main/emoji_ui.lua together,
+so the mapping and the art cannot drift apart.
+""" % (NOTO_REF, GLYPH, CELL, UI_PX))
 
     with open(os.path.join(OUT_DIR, "MANIFEST.json"), "w") as f:
         json.dump({"ref": NOTO_REF, "grid": GRID, "cell": CELL, "glyph": GLYPH,
-                   "uv_inset": INSET, "flip_v": FLIP_V, "glyphs": manifest_cells},
+                   "uv_inset": INSET, "flip_v": FLIP_V, "glyphs": manifest_cells,
+                   "ui_px": UI_PX,
+                   "ui_glyphs": {n: {"codepoint": units[n]} for n in units}},
                   f, indent=1, sort_keys=True)
         f.write("\n")
     print("MANIFEST.json, CREDITS.txt, NotoEmoji-LICENSE.txt written")

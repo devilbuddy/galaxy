@@ -1,9 +1,10 @@
 --- One upgrade slot, opened from the system sheet.
 --
--- **The card was out of room, and the choice deserved the screen.** Four
+-- **The card was out of room, and the choice deserved the screen.** Five
 -- buildings with a name, a line of what they do and a price is a catalogue, and
 -- it sat at the bottom of the longest card in the game where it pushed
--- everything else off. The sheet now shows two boxes; this is what a box opens.
+-- everything else off. The sheet shows four boxes at the top of the card now;
+-- this is what a box opens.
 --
 -- Two jobs, because a slot has two states:
 --
@@ -27,9 +28,14 @@ local CARD_W = 620
 local PAD = 28
 local ROW_H = 78
 
+-- Kept in step with the same table in main/hud.gui_script: a filled slot has to
+-- be recognisable from the card and from here as the same thing. It was not -
+-- these were still the pre-rename ids, so three of the five drew the fallback
+-- star while the card beside them drew the right glyph.
 local BUILDING_ICON = {
-	yards = "icon_warship",
-	works = "icon_industry",
+	berths = "icon_warship",
+	interceptor_bay = "icon_speed",
+	foundry = "icon_industry",
 	bastion = "icon_defence",
 	admiralty = "icon_flag",
 }
@@ -64,7 +70,7 @@ local function build_picker(self, x, y, text_w, view, at)
 
 	ui.h2(x, y - 40, "Build here")
 	ui.small(x, y - 84,
-		"A colony only ever gets two, and they do not stack - so this is what "
+		"A colony only ever gets four, and they do not stack - so this is what "
 		.. "this world is for.", ui.DIM, { width = text_w, anchor_top = true })
 
 	local row_y = y - 150

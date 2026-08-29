@@ -251,6 +251,25 @@ do
 		end
 		return true
 	end)())
+
+	-- The same join, for the *interface*. The system sheet draws a unit as the
+	-- emoji main/theme.lua's UNIT_EMOJI names, and main/emoji_ui.lua turns that
+	-- into an atlas image id. Nothing connects the three but strings, and
+	-- ui.emoji swallows a miss on purpose - so a mismatch would quietly draw an
+	-- empty circle where a player's army is, which is the one thing on that
+	-- card there is no other way to read.
+	check("every unit type has an interface glyph", (function()
+		local theme = require("main.theme")
+		local units = require("galaxy.sim.units")
+		local ok, atlas = pcall(require, "main.emoji_ui")
+		if not ok then return false, "no main/emoji_ui.lua - run tools/import_emoji.py" end
+		for i = 1, #units.CATALOGUE do
+			local id = units.CATALOGUE[i].id
+			if not theme.UNIT_EMOJI[id] then return false, "theme: " .. id end
+			if not atlas[id] then return false, "atlas: " .. id end
+		end
+		return true
+	end)())
 end
 
 print(failures == 0 and "\nALL WIRE TESTS PASSED" or ("\n" .. failures .. " FAILURE(S)"))

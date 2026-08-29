@@ -62,5 +62,17 @@
  },
  "grid": 4,
  "ref": "v2.047",
+ "ui_glyphs": {
+  "bombard": {
+   "codepoint": "1f4a3"
+  },
+  "escort": {
+   "codepoint": "1f6e1"
+  },
+  "interceptor": {
+   "codepoint": "1f680"
+  }
+ },
+ "ui_px": 192,
  "uv_inset": 8
 }

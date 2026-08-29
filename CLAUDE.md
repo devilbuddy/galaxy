@@ -102,13 +102,30 @@ of its script, not hand-authored art. Adding an interface glyph means adding a
 function to the `ICONS` table and re-running — nothing to wire up by hand.
 
 `tools/import_emoji.py` is an *import*, not a regeneration — the
-`import_portraits.py` convention: it parses `main/theme.lua`'s `M.EMOJI` table
-(the single source of what the map can draw), downloads those Noto glyphs at a
-pinned release tag, packs `main/assets/emoji/sheet.png`, and generates
-`main/emoji_sheet.lua` (UV rects — never hand-edited) plus provenance
-(`MANIFEST.json`, `CREDITS.txt`, `NotoEmoji-LICENSE.txt`, Apache-2.0). Changing
-which emoji the map uses means editing `theme.lua` and re-running it;
-`test_wire.lua` fails if the resolver can name a glyph the sheet lacks.
+`import_portraits.py` convention: it parses `main/theme.lua`, downloads those
+Noto glyphs at a pinned release tag, and writes provenance beside them
+(`MANIFEST.json`, `CREDITS.txt`, `NotoEmoji-LICENSE.txt`, Apache-2.0).
+
+**Two vocabularies, because the map and the interface draw a glyph by entirely
+different mechanisms** — and they must not share a sheet:
+
+| in `theme.lua` | drawn by | becomes |
+|---|---|---|
+| `M.EMOJI` | mesh quads, UV-sampled by `main/shaders/emoji.fp` | `main/assets/emoji/sheet.png` + `main/emoji_sheet.lua` (UV rects) |
+| `M.UNIT_EMOJI` | GUI box nodes (`ui.emoji`) | `main/assets/emoji/ui/*.png` + `main/emoji.atlas` + `main/emoji_ui.lua` (image ids) |
+
+A GUI node plays a whole *named* atlas image and cannot be handed a UV rect, so
+the interface's glyphs cannot come out of the packed sheet — and the sheet is a
+4x4 grid with no cells to spare, so adding to it would shift mesh UVs anyway.
+Both generated modules are never hand-edited. Changing which emoji anything uses
+means editing `theme.lua` and re-running; `test_wire.lua` fails if the resolver
+can name a map glyph the sheet lacks, or if a unit type has no interface glyph.
+
+Note the texture profile: `galaxy.texture_profiles` mipmaps
+`/main/assets/emoji/**`, which is what ~220 minified map glyphs need and what a
+GUI atlas does not. A profile matches the *generated* texture, and that is
+`/main/emoji.atlas` — under `**`, so the default no-mip profile. Nothing to
+configure, but it moves if the atlas ever does.
 
 ### Android
 
@@ -946,8 +963,10 @@ outpost worth holding, ✨ bare terrain. `main/theme.lua` is the one resolver
 from system to glyph name (the game, `tools/render_map.py` and `tools/test_wire.lua`
 all go through it, so the wire and the offline fallback cannot disagree);
 `main/emoji_sheet.lua` (generated) maps names to UV rects in
-`main/assets/emoji/sheet.png` (imported — see the tooling section). A new look
-is tried in `tools/render_map.py` first; its constants mirror the engine's
+`main/assets/emoji/sheet.png` (imported — see the tooling section). The
+*interface* draws emoji too — the system sheet's unit slots — but through a
+separate atlas and `ui.emoji`, never this sheet, because a GUI node cannot be
+handed a UV rect. A new look is tried in `tools/render_map.py` first; its constants mirror the engine's
 (`CORE_SCALE × KIND_SCALE × (0.85 + 0.3r)`), so an approved sketch transfers 1:1.
 
 Seven mesh components, one per layer, each with a dynamic vertex buffer built
@@ -1165,7 +1184,7 @@ found nothing.
 | `map` | `main/screens/map.collection` | the galaxy view (was the old bootstrap) |
 | `report` | `main/screens/report.collection` | turn digest; a **popup** over the map |
 | `slot` | `main/screens/slot.collection` | one upgrade slot; a **popup** over the map |
-| `transfer` | `main/screens/transfer.collection` | a colony's garrison and the captain on it; a **popup** |
+| `buy` | `main/screens/buy.collection` | what to put in an empty berth; a **popup** |
 
 **The map screen sets `screen_keeps_input_focus_when_below_popup`.** Monarch
 defaults that to *false*, so showing a popup posts `release_input_focus` to the
@@ -1520,98 +1539,136 @@ of which was learned by watching the interface fail at them:
   galaxy fits the *window* at fit zoom, the camera is pinned by
   `clamp_position`, and a system under the sheet can never be lifted out.
 
-**The system sheet is read top to bottom, in the order a player thinks.** It was
-rebuilt from a playtest whose verdict was "way too incomprehensible", and every
-rule below came out of one specific thing on it that could not be read:
+**The system sheet is a rack of slots, not a document.** It was read top to
+bottom - a name, a region, a captain, a sentence of capture arithmetic, a
+shipyard of labelled rows with `-  n  +` steppers, a button through to a second
+screen, and four upgrade boxes at the very bottom, past 900 units of card with
+no scroll behind it. That is a page, and a page on the bottom half of a map is a
+page nobody reads. Everything that was a *sentence* has gone.
 
 | in order | and why |
 |---|---|
-| a colour dot, the name, and CAPITAL | whose it is, and whether it decides the game |
-| the region | the only fact on the card the map does not draw |
-| **the captain standing here** | everything under it reads differently with one |
-| what it takes to capture | see below |
-| SHIPYARD | what can be bought, and with what |
-| UPGRADES | two slots, and what is in them |
+| a colour dot, the name, CAPITAL, and `X` | whose it is, whether it decides the game, and the way out |
+| UPGRADES | four boxes: what this world can be made into |
+| SHIPYARD | `garrison_cap` circles: what is standing here |
+| CAPTAIN | `max_units` circles: what leaves with them |
+
+**The order is the order the decisions happen in**, which is why upgrades moved
+from last to first: dwellings decide what there is to buy at all, so a colony
+with none now has an empty shipyard for a reason the card can see. You buy into
+the garrison, so that comes next; you load out of the garrison, so the hold sits
+directly under what fills it.
 
 - **Whose it is, before what it is.** The dot is the same mark the map draws
-  round the system, so the two are read the same way and the common case needs
-  no sentence at all; only a rival's name is worth spelling out, and it goes on
-  the region line in `BAD`. "Colony   Antares   Anomaly" went with the rest: the
-  kind is already told by what the sheet offers below - a shipyard is a colony -
-  and the feature is flavour.
+  round the system, so the two are read the same way and the card needs no
+  sentence for the common case. The region line and "Held by X" went with the
+  prose: colour already says whose, and what kind of place it is is told by what
+  the card offers underneath - a shipyard is a colony.
 - **"CAPITAL", not "Your capital".** Whose it is, the dot has already said.
-
-- **A number needs a sentence, not a label.** "DEFENDS AT / Fortification 9" was
-  a heading and a number with no verb between them. Your own world now says
-  "Takes 21 to capture" - the same number, as the thing an enemy has to beat.
-  Somebody else's keeps the two comparisons, because those *are* combat, and
-  spells them out: "to take it, you need 16 against its defences - you bring
-  only 6".
-- **The two halves of a fight get an icon each, everywhere.** "1 vs walls 1 vs
-  ships" is a sentence a player parses three times over on one card and cannot
-  scan at all. `draw_halves` in `main/hud.gui_script` draws a shield and a hull
-  instead, and the unit rows, the captain, the rival contact and the target are
-  all measured in the same two marks.
-- **Buying is a stepper, not a row you tap.** Tapping a row added one and there
-  was no way to take one back short of dropping the whole order. `−  n  +` says
-  both what it does and that there is a number here to change - and it is 60
-  design units, because the 44 it started at is 25 dp, which is a target you
-  have to aim at.
-- **Both controls grey out for their own reason.** `+` when the purse, the
-  berths or the hold cannot take another; `−` at zero. A disabled control that
-  still animates a press is indistinguishable from a broken one, which is what
-  `ui.icon_button`'s `set_enabled` exists for.
+- **A system that is not yours is a dot, a name and an `X`.** Nothing else. That
+  is why `SHEET_MIN` came down from 200 to 120: at 200 a bare system sat in an
+  empty box that read as broken rather than as brief.
+- **`X` is the first dismiss gesture the card has ever had.** The sheet
+  publishes its own rectangle into `store.hud_zones` and `gestures.lua` latches
+  `blocked` on any touch starting inside one, so a tap on the card never reaches
+  `pick_star` and could not deselect. The only way out was a tap on bare map.
+- **`SHEET_MAX` has stopped binding.** Three rows of slots is around 530 whatever
+  is built, against a 960 cap. It is kept because the clamp costs nothing and
+  the camera reads the height either way (`store.hud_band`, which is what stops
+  a tall card trapping its own star).
 - **The unit names say what the unit is for.** They were Line, Lance and Siege,
   which mean something only to somebody who already knows the rule. Escort,
   Interceptor and Bombard say which one to buy for what. A hold in storage is
   keyed by id, so `units.normalise` carries the old keys across - without that
   every captain in flight comes back empty, and nobody notices until their army
   has quietly evaporated.
-- **`SHEET_MAX` is a real ceiling, not a guess.** The sheet has no scroll, so
-  content past it is drawn over the order bar. Two slot boxes took the card back
-  from ~930 units to ~700, but the cap is 960 and adding a row means checking
-  that sum.
 
-**The shipyard says what *this world* makes.** Only the types it has a dwelling
-for - the mapping is on the wire, since every building declares what it makes -
-so a colony with one dwelling is one row, and a Foundry with nothing out of it
-yet still says "0 ready" rather than vanishing until something appears. Each row
-carries three numbers that mean different things: what it costs, what is ready
-to buy, and what is already standing here.
+**What this gives up is the two comparisons** - "you need 16 against its
+defences, you bring only 6" - which were the one piece of arithmetic a player
+does before committing a captain to a turn that resolves twelve hours later.
+They are shown nowhere else in the client now. If they come back, the place for
+them is the aim flow in the order bar, where that decision is actually being
+made, rather than on a card about somewhere you are standing. `draw_halves` and
+`best_powers` went with them.
 
-Buying fills the garrison, so the steppers need no captain present and spend no
-order — the bar reads "0 of 3 orders used" while a purchase is staged, which is
-the whole point of it being free.
+#### Two racks, and the whole colony loop between them
 
-**MOVE UNITS opens the transfer popup**, and only when there is something to
-trade: a control that opens two empty columns is a control that has taught the
-player it does nothing.
+A slot is 94 design units - 54 dp, well over the 48 dp floor the rest of the kit
+holds to, and it matters more here than anywhere else in the interface because
+these are *drag* targets: an off-by-one slot is a wrong army. Six across is
+exactly the card's inner width, and the rack wraps at six, so a veteran carrying
+nine gets two rows rather than nine smaller circles.
 
-**`main/screens/transfer.gui_script` is where the whole combat design is visible
-at once.** Every fight is two comparisons a player does in their head before
-committing, and this is the one screen where both move as they decide — the
-captain's two halves and the world's two halves, live, as the split changes.
-Push with these, or hold with them.
+**Both racks show what will be there when the turn resolves**, with an accent
+ring on anything that is not there yet - the same vocabulary as a staged order
+in the bar. Nothing on the card is a delta the player has to add up.
 
-Steppers rather than sliders, and it was close. A slider can *show* the shared
-capacity as a dead zone on the track, which beats three `+` buttons greying for
-a reason that is off-screen. Against it: the ranges are tiny (a captain carries
-six, a veteran nine), the three rows share one budget, and a step would be about
-35 dp — under a fingertip, on the one screen where an off-by-one is a wrong
-army. The deciding argument was vocabulary: buying and transferring are the same
-act, deciding a composition against a budget, and one control for both is worth
-more than a gesture. TAKE ALL is what the slider was actually for — the tap
-count.
+**Neither rack is colony-only.** `resolve.transfers` checks that a captain is
+standing on ground its owner holds and nothing else, so an outpost with units
+left on it is a real place with a real garrison and the card says so. Only
+*buying* needs dwellings. The captain rack is drawn only when one of yours is
+actually standing here - a captain under way has no rack, because there is
+nothing to trade with.
 
-The popup rebuilds itself whole on every change rather than patching, because
-the row set changes as a type empties on one side and every number on the card
-depends on the split. Gated on an actual change, so it is not per-frame work.
+**The captain's face sits on the caption line, not in the leading slot.** The
+mock-up put it there and it only works while capacity is exactly six: it is
+`captain_units + level - 1`, so a veteran needs nine or ten cells and a face in
+the grid spills the rack onto a second row for nothing.
 
-**Upgrades are two boxes, and each one opens a popup.** They were four rows with
+**A tap is the fast path, a drag is the deliberate one.**
+
+| | |
+|---|---|
+| tap a filled slot | that unit goes to the other rack |
+| tap an empty shipyard slot | the buy popup, if this world makes anything |
+| drag a filled slot | you say which rack it lands in |
+
+Filling a hold is six taps, which is what stands in for the transfer screen's
+TAKE ALL. Both directions go through `stage_transfer`, which takes the hold the
+captain should **end the turn with** rather than a delta - so a move reads
+whatever is already staged, changes it by one, and states the whole thing again.
+An order that asks for the hold the captain already has is dropped rather than
+sent, so tapping a unit across and back leaves the plan exactly as it was.
+
+**The gesture is hand-rolled, not a Druid drag component**, for the reason
+`ui.install_druid_picking` exists at all: Druid resolves positions against
+Defold's *configured* display and this project lays out in a view space of its
+own. `build_sheet` records every slot's rectangle into `self.slot_rects` in the
+same layout space as the nodes and shifts both together, so there is one
+description of where a slot is. **Rectangles, not nodes** - the sheet is rebuilt
+on every staged change, and a gesture holding a node reference would be holding
+a deleted one by the time it ended. The drag ghost is deliberately *not*
+collected by `ui.collect` for the same reason.
+
+It runs before the Druid dispatch in `on_input` and claims the release as well
+as the press: a gesture starting on a slot has to pre-empt the upgrade boxes
+under it, and a drag that ended on a control must not fire it.
+
+**Buying is a popup, because one slot is one unit.** `main/screens/buy.gui_script`
+lists only what this world has a dwelling for - the mapping is on the wire, since
+every building declares what it makes - and buys exactly one, then closes. The
+rack behind it is already the running total, so the picker needs no count of its
+own; the steppers it replaced had to carry one because nothing else on the card
+could show it. A row is closed for one of three reasons and says which, because
+a disabled control that does not explain itself is indistinguishable from a
+broken one.
+
+Buying fills the garrison, so it needs no captain present and spends no order —
+the bar reads "0 of 3 orders used" while a purchase is staged, which is the whole
+point of it being free. And because buys settle before transfers
+(`galaxy/sim/resolve.lua`), a unit bought this turn can be dragged aboard the
+same turn: the rack counts the staged basket as standing here.
+
+**The transfer screen is gone.** Its two columns of steppers were the one place
+the whole combat design was visible at once, and the racks are that now - the
+same split, on the card, with no screen to open. What went with it is TAKE ALL /
+LEAVE ALL, and the tap fast path is the answer to the tap count that argued for
+them.
+
+**Upgrades are four boxes, and each one opens a popup.** They were four rows with
 a name, a line of what they do and a price - a catalogue on the bottom of the
 longest card in the game, which never said the one fact that matters: a colony
-gets *two* of these, ever. Two boxes say that without a sentence, and "1 of 2
-slots used" went with the sentence.
+gets *four* of these, ever. Four boxes say that without a sentence.
 
 | box | says | opens |
 |---|---|---|
@@ -1624,12 +1681,14 @@ slots used" went with the sentence.
 rather than acting: staging spends the turn's allowance and only the HUD knows
 what is left of it, and a popup cannot act after Monarch has begun tearing it
 down. `store.slot_popup` is the request to open one and `store.slot_request` is
-what it decided, both consumed in the HUD's `update`.
+what it decided, both consumed in the HUD's `update`. `store.buy_popup` /
+`store.buy_request` are the same handshake for the shipyard rack.
 
-**A slot that promises a verb has to have one.** Yards, Works and a Bastion work
-by standing there, so their boxes say "built" and their popup says so; only the
-Admiralty says "tap to use". Labelling all four the same and then opening a card
-that says there is nothing to do is how an interface loses the word.
+**A slot that promises a verb has to have one.** Berths, an Interceptor Bay, a
+Foundry and a Bastion work by standing there, so their boxes say "built" and
+their popup says so; only the Admiralty says "tap to use". Labelling all five the
+same and then opening a card that says there is nothing to do is how an
+interface loses the word.
 
 **Ordering a captain starts in one place: the round face in the strip.** Tapping
 it aims, tapping the same face again cancels - aiming takes the whole map, and a
@@ -2109,10 +2168,11 @@ missing on purpose. These are the things that are *not* on that plan, or that
 will bite whoever touches them.
 
 - **Only the map wears the atlas theme.** Every GUI screen - lobby, setup,
-  sheet, transfer, battle, report - is still the dark chrome, deliberately (the
+  sheet, buy, battle, report - is still the dark chrome, deliberately (the
   mockup kept it dark too), but the interface kit's tokens have never been
   looked at next to the parchment and a re-theme of the chrome is an open
-  project of its own.
+  project of its own. The system sheet's unit slots are the first Noto glyphs
+  to appear on the dark side, and they were drawn for parchment.
 - **The label zoom tiers are still anchored to the old fit zoom.**
   `STAR_LABEL_MIN_ZOOM` (0.30) and the lowest `LABEL_TIER_ZOOM` entries sit
   below the new zoom floor (~0.7), so they are always-on rather than wrong -
@@ -2149,9 +2209,19 @@ will bite whoever touches them.
   obvious thing for a fifth building to buy, and the obvious thing to scale with
   empire size; neither exists, so a large empire and a small one get the same
   number of decisions.
-- **The system sheet has no scroll.** It is capped at `SHEET_MAX` and content
-  past that is drawn over the order bar. A colony of yours with an embarkation,
-  four buildings, a captain and a rival in sight is close to the cap already.
+- **The two comparisons are shown nowhere in the client.** "To take it, you need
+  16 against its defences - you bring only 6" was on the system sheet and went
+  with the rest of its prose. That arithmetic is the whole of combat and the
+  thing a player does before committing a captain to a turn that resolves twelve
+  hours later, so this is a real hole rather than a simplification. The place
+  for it is the aim flow in the order bar, where the decision is being made.
+- **A rival captain standing on a system is no longer named on its card.** The
+  contact rows went with the prose too; the marker on the map still carries
+  their fleet number.
+- **Only one captain's rack is shown when two are standing on the same world.**
+  The rack follows the strip's selection and falls back to the first, which is
+  right almost always - the cap is four across the whole empire - but there is
+  no way to trade with the second without selecting it in the strip first.
 - **Half of each race is still inert.** `modifiers.of` now folds speed, hops,
   vision, attack and defence, so races differ meaningfully - but growth,
   industry, research, capacity and the cost keys are read by nothing until
@@ -2176,13 +2246,26 @@ will bite whoever touches them.
   the next resolution. There is no migration and there should not be one.
 - **Combat is unverified on a device.** The sim, the server and the full RPC
   round trip are covered, and the desktop client has been driven through a
-  battle, but the strength badge, the "N to take" line and the battle rows in
-  the digest have only been seen on desktop. The *economy* is device-verified —
-  a build → buy → garrison → transfer loop has been driven on hardware through
-  the real RPCs — so what is left unseen there is the fighting.
+  battle, but the strength badge and the battle rows in the digest have only
+  been seen on desktop. The *economy* is device-verified — buy → garrison →
+  drag aboard → SEND → the unit standing in the captain's rack next turn has
+  been driven on hardware through the real RPCs, including the drag, which is
+  the one gesture a workstation cannot fully stand in for — so what is left
+  unseen there is the fighting. (`"N to take"` went with the sheet's prose; see
+  the two-comparisons gap above.)
 - **`drive.py` cannot see the system sheet's own buttons.** The bridge's element
-  query returns star labels and the top bar but not the sheet, so those still
-  have to be tapped by position. `state` and `tapstar` are unaffected.
+  query returns star labels, the top bar and a popup's own text, but not the
+  sheet or the order bar, so those still have to be tapped by position - and the
+  card is docked on top of a bar that grows as the plan does, so a coordinate
+  read from one screenshot is stale the moment an order is staged. `state` and
+  `tapstar` are unaffected.
+- **The bridge redirects, and the redirect downgrades POST to GET.** On desktop
+  the engine service port from the editor's log answers `302` to
+  `http://<lan-ip>:<other-port>/automation-bridge/v2/...`, and the Python client
+  follows it with a GET - so every `/input/*` call comes back
+  `405 method_not_allowed: use POST` while `elements` and `screenshot` work
+  fine. Pass `--port` the *redirect target* (`lsof -nP -iTCP -sTCP:LISTEN | grep
+  dmengine` lists both) rather than the port the log names.
 - **A route can only be set one waypoint at a time from the map.** The
   simulation takes a full waypoint list and expands it lane by lane, and the
   order shape and tests cover it, but the only gesture wired up is "tap a

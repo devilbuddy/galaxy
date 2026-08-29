@@ -18,6 +18,9 @@
 -- the codepoints are its contract with the Noto assets. Spare glyphs are
 -- packed but unmapped so retuning a muddy assignment is a one-line edit here,
 -- with no re-import.
+--
+-- `M.UNIT_EMOJI` is the same contract for the *interface*, and its names land in
+-- `main/emoji_ui.lua` rather than the sheet - see the note on it below.
 
 local systems = require("galaxy.sim.systems")
 
@@ -42,6 +45,21 @@ M.EMOJI = {
 	houses = "1f3d8",     -- houses
 	factory = "1f3ed",    -- factory
 	saucer = "1f6f8",     -- flying saucer
+}
+
+-- Interface glyphs, drawn by GUI scenes rather than by the map mesh, and so
+-- exported as individual atlas images instead of being packed into sheet.png:
+-- a GUI box node draws a whole named image and cannot be handed a UV rect, and
+-- the 4x4 sheet has no cells to spare besides.
+--
+-- Keyed by `galaxy.sim.units` id, so the mapping is exhaustive by construction
+-- and `tools/test_wire.lua` can prove it. Same semantic rule as above - the
+-- glyph says what the unit is *for*, not what it would look like through a
+-- telescope.
+M.UNIT_EMOJI = {
+	escort      = "1f6e1", -- shield: takes the hits so the rest do not
+	interceptor = "1f680", -- rocket: hunts ships
+	bombard     = "1f4a3", -- bomb: breaks defences
 }
 
 -- An outpost is drawn as the thing that makes it one. Feature first, then

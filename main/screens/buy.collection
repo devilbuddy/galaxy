@@ -1,8 +1,8 @@
-name: "transfer"
+name: "buy"
 scale_along_z: 0
 instances {
-  id: "transfer"
-  prototype: "/main/screens/transfer.go"
+  id: "buy"
+  prototype: "/main/screens/buy.go"
   position { x: 0.0 y: 0.0 z: 0.0 }
   rotation { x: 0.0 y: 0.0 z: 0.0 w: 1.0 }
   scale3 { x: 1.0 y: 1.0 z: 1.0 }

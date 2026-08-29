@@ -19,6 +19,10 @@ textures {
   name: "portraits"
   texture: "/main/portraits.atlas"
 }
+textures {
+  name: "emoji"
+  texture: "/main/emoji.atlas"
+}
 material: "/builtins/materials/gui.material"
 adjust_reference: ADJUST_REFERENCE_DISABLED
 max_nodes: 1280

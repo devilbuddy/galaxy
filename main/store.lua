@@ -93,17 +93,17 @@ M.leave_requested = nil
 M.slot_popup = nil
 M.slot_request = nil
 
--- A colony and the captain standing on it, when the player has asked to move
--- units between them: `{ at = <system>, captain = <id> }`. Shown by the HUD
--- for the same reason as the slot popup - a screen cannot open one from inside
--- the region Monarch is part way through tearing down.
-M.transfer_popup = nil
-M.transfer_request = nil
-
--- A colony and the captain standing on it, when the player has asked to move
--- units between them: `{ at = <system>, captain = <id> }`. Shown by the HUD for
--- the same reason as the slot popup - a screen cannot open one from inside the
--- region Monarch is part way through tearing down.
+-- An empty garrison slot the player has just tapped: `{ at = <system> }`. The
+-- popup that opens lists what this world has a dwelling for and what it costs,
+-- and answers with `buy_request = { at = <system>, type = <unit id> }` - one
+-- unit, because one slot is one unit.
+--
+-- Shown by the HUD for the same two reasons as the slot popup: staging spends
+-- the turn's allowance and only the HUD knows what is left of it, and a screen
+-- cannot open a popup from inside the region Monarch is part way through
+-- tearing down.
+M.buy_popup = nil
+M.buy_request = nil
 
 -- A turn digest that arrived on a background poll rather than on arrival at the
 -- map. Held rather than shown, because a popup must not land on top of a player

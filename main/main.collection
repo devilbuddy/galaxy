@@ -111,13 +111,13 @@ embedded_instances {
   scale3 { x: 1.0 y: 1.0 z: 1.0 }
 }
 embedded_instances {
-  id: "transfer_screen"
+  id: "buy_screen"
   data: "components {\n"
   "  id: \"screen\"\n"
   "  component: \"/monarch/screen_proxy.script\"\n"
   "  properties {\n"
   "    id: \"screen_id\"\n"
-  "    value: \"transfer\"\n"
+  "    value: \"buy\"\n"
   "    type: PROPERTY_TYPE_HASH\n"
   "  }\n"
   "  properties {\n"
@@ -129,7 +129,7 @@ embedded_instances {
   "embedded_components {\n"
   "  id: \"collectionproxy\"\n"
   "  type: \"collectionproxy\"\n"
-  "  data: \"collection: \\\"/main/screens/transfer.collection\\\"\\n\"\n"
+  "  data: \"collection: \\\"/main/screens/buy.collection\\\"\\n\"\n"
   "  \"\"\n"
   "}\n"
   ""

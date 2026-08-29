@@ -1,0 +1,192 @@
+--- What to put in an empty berth, opened from the system sheet's shipyard rack.
+--
+-- **One slot is one unit**, so this buys exactly one and gets out of the way.
+-- That is what makes it a picker rather than a basket: the rack behind it is
+-- already the running total, the slot fills in accent the moment this closes,
+-- and a second one is another tap on the next empty circle. The steppers this
+-- replaced had to carry a count because there was nothing else on the card that
+-- could show one.
+--
+-- **Only what this world has a dwelling for.** Every building declares what it
+-- makes and that mapping is on the wire, so the list describes *this place*
+-- rather than reprinting the catalogue - and a Foundry with nothing out of it
+-- yet still says the world makes Bombards, because "0 ready" is a fact about
+-- this turn and a row that vanished would read as the building not existing.
+--
+-- **It answers through the store, not directly.** Staging spends the turn's
+-- allowance and only the HUD knows what is left of it; and a popup cannot act
+-- after Monarch has started tearing it down (see menu.gui_script).
+
+local druid = require("druid.druid")
+local monarch = require("monarch.monarch")
+local store = require("main.store")
+local ui = require("main.ui")
+local sim_units = require("galaxy.sim.units")
+local emoji_ui = require("main.emoji_ui")
+
+local CARD_W = 620
+local PAD = 28
+local ROW_H = 96
+local GLYPH = 56
+
+local function close()
+	monarch.hide(hash("buy"))
+end
+
+local function request(at, type_id)
+	store.buy_request = { at = at, type = type_id }
+	close()
+end
+
+--- What is already staged to be bought here, so the card counts it against both
+--- the purse and the room left in the garrison.
+local function basket_at(at)
+	for i = 1, #store.orders do
+		local o = store.orders[i]
+		if o.kind == "buy" and o.at == at then return o.units end
+	end
+	return nil
+end
+
+--- The types this colony has a dwelling for, plus anything already standing
+--- here - so a garrison taken along with the world is still accounted for.
+local function offered(view, sys)
+	local built = (sys and sys.buildings) or {}
+	local garrison = sim_units.normalise(sys and sys.garrison)
+	local out = {}
+	for k = 1, #(view.units or {}) do
+		local spec = view.units[k]
+		local dwelt = false
+		for b = 1, #built do
+			for c = 1, #(view.buildings or {}) do
+				local shape = view.buildings[c]
+				if shape.id == built[b] and shape.makes == spec.id then
+					dwelt = true
+				end
+			end
+		end
+		if dwelt or (garrison[spec.id] or 0) > 0 then out[#out + 1] = spec end
+	end
+	return out
+end
+
+local function build(self)
+	local w, h = store.screen.width, store.screen.height
+	self.druid = druid.new(self)
+	ui.shade(0.72)
+
+	local data = monarch.data(hash("buy")) or {}
+	local view = store.game_view or {}
+	local at = data.at
+	local sys = view.systems and view.systems[tostring(at)]
+
+	-- **The card is sized to its content, and the content is laid out first** -
+	-- the same trick as the system sheet and the slot popup. Guessing the
+	-- height instead is what stranded the battle screen's controls in a field
+	-- of nothing.
+	local moving = {}
+	local previous = ui.collect(moving)
+
+	local card, edge = ui.card(0, 0, CARD_W, 100)
+	local inner = PAD
+	local text_w = CARD_W - PAD * 2
+
+	local basket = basket_at(at)
+	local spent = basket and sim_units.price(basket) or 0
+	local left = (view.supply or 0) - spent
+	local garrison = sim_units.normalise(sys and sys.garrison)
+	local room = ((view.rates or {}).garrison_cap or 6)
+		- sim_units.count(garrison)
+		- (basket and sim_units.count(basket) or 0)
+
+	ui.h2(inner, -40, "Buy")
+	-- The purse is the one number that has to be on this card. It is in the
+	-- overview bar too, but this is where it is being spent, and a player
+	-- deciding between a 20 and a 34 should not have to look up to do it.
+	ui.small(inner + text_w, -40, ui.number(left) .. " in the purse", ui.DIM,
+		{ pivot = gui.PIVOT_E })
+
+	local rows = offered(view, sys)
+	local y = -80
+
+	if #rows == 0 then
+		y = y - 46
+		ui.small(inner, y, "This world makes nothing yet - build a dwelling "
+			.. "before there is anything to buy.", ui.FAINT,
+			{ width = text_w, anchor_top = true })
+		y = y - 40
+	end
+
+	for i = 1, #rows do
+		local spec = rows[i]
+		local ready = ((sys and sys.available) or {})[spec.id] or 0
+		local picked = (basket and basket[spec.id]) or 0
+		local standing = garrison[spec.id] or 0
+		local cost = spec.cost or 0
+
+		-- Three reasons a row can be closed, and it says which one. A disabled
+		-- control that does not explain itself is indistinguishable from a
+		-- broken one.
+		local why = nil
+		if picked >= ready then why = "none ready here"
+		elseif left < cost then why = "not enough supply"
+		elseif room < 1 then why = "the garrison is full" end
+
+		y = y - ROW_H
+		local row = ui.panel(inner, y + ROW_H - 8, text_w, ROW_H - 12,
+			why and ui.CARD or ui.CARD_ALT)
+		ui.emoji(inner + 16, y + ROW_H - 20, GLYPH, emoji_ui[spec.id],
+			why and 0.4 or 1)
+		ui.body(inner + 16 + GLYPH + 16, y + 58, spec.name,
+			why and ui.FAINT or ui.TEXT)
+		ui.small(inner + 16 + GLYPH + 16, y + 32,
+			why or string.format("%d ready   %d on guard", ready, standing),
+			why and ui.WARN or ui.FAINT)
+		ui.small(inner + text_w - 16, y + 46, tostring(cost),
+			why and ui.FAINT or ui.GOOD,
+			{ pivot = gui.PIVOT_E, bold = true })
+
+		if not why then
+			self.druid:new_button(row, function() request(at, spec.id) end)
+		end
+	end
+
+	local depth = y - 20
+	local card_h = -depth + ui.CONTROL + PAD
+	ui.button(self.druid, inner, depth - 16, text_w, ui.CONTROL,
+		"CLOSE", close, { size = ui.CAPS })
+
+	ui.collect(previous)
+
+	gui.set_size(card, vmath.vector3(CARD_W, card_h, 0))
+	gui.set_size(edge, vmath.vector3(CARD_W, card_h, 0))
+
+	local dx = (w - CARD_W) * 0.5
+	local dy = (h + card_h) * 0.5
+	for i = 1, #moving do
+		local p = gui.get_position(moving[i])
+		gui.set_position(moving[i], vmath.vector3(p.x + dx, p.y + dy, 0))
+	end
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	ui.install_druid_picking()
+	build(self)
+end
+
+function final(self)
+	if self.druid then self.druid:final() end
+end
+
+function update(self, dt)
+	if self.druid then self.druid:update(dt) end
+end
+
+function on_input(self, action_id, action)
+	return ui.modal_input(self.druid, action_id, action)
+end
+
+function on_message(self, message_id, message, sender)
+	if self.druid then self.druid:on_message(message_id, message, sender) end
+end

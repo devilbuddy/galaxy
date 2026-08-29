@@ -1,4 +1,4 @@
-script: "/main/screens/transfer.gui_script"
+script: "/main/screens/buy.gui_script"
 fonts {
   name: "ui"
   font: "/main/fonts/ui.font"
@@ -7,18 +7,14 @@ fonts {
   name: "ui_bold"
   font: "/main/fonts/ui_bold.font"
 }
-fonts {
-  name: "map"
-  font: "/main/fonts/map.font"
-}
 textures {
   name: "ui"
   texture: "/main/ui.atlas"
 }
 textures {
-  name: "portraits"
-  texture: "/main/portraits.atlas"
+  name: "emoji"
+  texture: "/main/emoji.atlas"
 }
 material: "/builtins/materials/gui.material"
 adjust_reference: ADJUST_REFERENCE_DISABLED
-max_nodes: 1024
+max_nodes: 512
