@@ -25,8 +25,8 @@ for _, seed in ipairs(seeds) do
 		local d = digest.of(g)
 		if r == 1 then
 			first = d
-			stats = string.format("%3d stars %3d lanes %d regions",
-				g.stats.star_count, g.stats.lane_count, g.stats.region_count)
+			stats = string.format("%3d land %3d sea %d regions",
+				g.stats.star_count, g.stats.water_count, g.stats.region_count)
 		elseif d ~= first then
 			ok = false
 			print(string.format("MISMATCH seed=%d run=%d %d ~= %d", seed, r, d, first))

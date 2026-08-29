@@ -1,6 +1,6 @@
 --- One turn of the simulation.
 --
--- `M.turn(galaxy, state, orders, lengths)` advances exactly one turn and
+-- `M.turn(galaxy, state, orders)` advances exactly one turn and
 -- returns the events it produced. It is a pure function of its inputs plus a
 -- per-turn seeded stream, so a turn replays identically and a whole game is
 -- reconstructable from `(seed, order history)`.
@@ -52,7 +52,7 @@ end
 -- and a preview computed by a different implementation is a preview that can
 -- lie. There is one function, and the server runs it for both purposes - see
 -- `game.route` in server/modules/game_rpc.lua.
-function M.expand_route(galaxy, lengths, from, fixed, waypoints, hops_allowed)
+function M.expand_route(galaxy, from, fixed, waypoints, hops_allowed)
 	local route, hops = {}, 0
 	-- A captain already in a lane must finish it before turning, so the current
 	-- leg is fixed and everything is plotted from its far end.
@@ -64,7 +64,7 @@ function M.expand_route(galaxy, lengths, from, fixed, waypoints, hops_allowed)
 	for w = 1, #waypoints do
 		local to = floor(waypoints[w])
 		if to ~= from then
-			local leg = path_mod.find(galaxy, lengths, from, to, hops_allowed - hops)
+			local leg = path_mod.find(galaxy, from, to, hops_allowed - hops)
 			if not leg or #leg == 0 then return nil, "no route" end
 			for h = 1, #leg do route[#route + 1] = leg[h] end
 			hops = hops + #leg
@@ -82,7 +82,7 @@ local expand_route = M.expand_route
 -- client can say what happened. Whether an order is *legal* depends on state
 -- that has moved on since the player issued it, which is why the check is here
 -- and not in the RPC.
-local function captain_orders(galaxy, state, orders, mods, lengths, events, pending)
+local function captain_orders(galaxy, state, orders, mods, events, pending)
 	for i = 1, #orders do
 		local order = orders[i]
 		local who = order.player
@@ -169,7 +169,7 @@ local function captain_orders(galaxy, state, orders, mods, lengths, events, pend
 				else
 					local fixed = state_mod.next_hop(captain)
 					local from = fixed or captain.at
-					local route, why = expand_route(galaxy, lengths, from,
+					local route, why = expand_route(galaxy, from,
 						fixed, waypoints, m.hops)
 					if not route or #route == 0 then
 						reject(why or "no route", {
@@ -360,7 +360,7 @@ end
 -- A captain crosses a whole number of lanes and always ends the turn *at* a
 -- system. Movement used to be a distance covered along a lane, which meant a
 -- captain could sit partway down one - a state the player could neither see at
--- fit zoom nor predict, because lane lengths are never drawn.
+-- fit zoom nor predict, because it is not drawn.
 --
 -- Unclaimed systems are taken in passing and do not stop it, so a route through
 -- a chain of empty systems sweeps them all up.
@@ -932,8 +932,7 @@ end
 
 -- The turn ----------------------------------------------------------------------
 
-function M.turn(galaxy, state, orders, lengths)
-	lengths = lengths or path_mod.lane_lengths(galaxy)
+function M.turn(galaxy, state, orders)
 	orders = orders or {}
 
 	state.turn = state.turn + 1
@@ -954,7 +953,7 @@ function M.turn(galaxy, state, orders, lengths)
 	-- Orders that spend rather than move are gathered here and settled in the
 	-- logistics phase, so they see the map as it ends the turn.
 	local pending = {}
-	captain_orders(galaxy, state, orders, mods, lengths, events, pending)
+	captain_orders(galaxy, state, orders, mods, events, pending)
 	movement(galaxy, state, mods, events)
 	-- After movement, because everything here happens where the turn *ends*: a
 	-- colony taken this turn can be built on and bought from this turn, and a

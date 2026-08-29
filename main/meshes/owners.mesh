@@ -1,5 +1,0 @@
-material: "/main/materials/galaxy_owner.material"
-vertices: "/main/meshes/owners.buffer"
-primitive_type: PRIMITIVE_TRIANGLES
-position_stream: "position"
-normal_stream: ""

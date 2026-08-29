@@ -1,5 +1,0 @@
-material: "/main/materials/galaxy_glow.material"
-vertices: "/main/meshes/glow.buffer"
-primitive_type: PRIMITIVE_TRIANGLES
-position_stream: "position"
-normal_stream: ""

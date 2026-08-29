@@ -29,7 +29,6 @@ if star_count then config.star_count = star_count end
 
 local t0 = os.clock()
 local galaxy = gen.build(seed)
-local lengths = path.lane_lengths(galaxy)
 
 local race_ids = races.ids()
 local players = {}
@@ -58,7 +57,7 @@ local events_total = 0
 
 for turn = 1, max_turns do
 	local orders = bots.all_orders(galaxy, state)
-	local events = res.turn(galaxy, state, orders, lengths)
+	local events = res.turn(galaxy, state, orders)
 	events_total = events_total + #events
 
 	if not quiet and (turn % 25 == 0 or turn == 1) then

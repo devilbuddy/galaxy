@@ -6,35 +6,53 @@ return {
 	-- round trip through a Defold go.property, which is float32.
 	default_seed = 424242,
 
-	-- How many star systems to aim for. The sampler solves for the spacing that
-	-- lands near this number, so it is a genuine target rather than a hint.
-	star_count = 220,
+	-- How many land tiles the continent is grown to. An exact count, not a
+	-- target: galaxy/land.lua's loop bound is this number, so every seed gets a
+	-- map of the same size. That matters more than it sounds - habitability,
+	-- province size and the victory threshold are all fractions of it.
+	land_target = 220,
 
-	-- Fraction of systems that must end up habitable, and therefore colonies -
+	-- What fraction of the hex field the continent is allowed to fill. The field
+	-- only has to be big enough that the growth is never cornered by the rim; if
+	-- it is, the coast becomes the field boundary and reads as a straight edge.
+	-- 0.55 grows 220 land tiles inside a radius-12 disc of 469, with two further
+	-- rings of sea around the coast (galaxy/land.lua's SEA_MARGIN) - about 220
+	-- water tiles, so the whole map is roughly 440 sprites.
+	--
+	-- A looser disc buys a better coastline and costs sprites, monotonically:
+	--
+	--   fill  disc  land cells on the disc edge  corridor cells  sprites
+	--   0.75   10            17.8                    11.4          399
+	--   0.65   11            11.2                    14.0          420
+	--   0.55   12             7.8                    15.9          438
+	--   0.45   13             4.6                    17.2          453
+	--
+	-- "on the disc edge" is coast that is the boundary rather than geography -
+	-- a suspiciously circular arc. 438 sprites is far inside the 1024 cap, so
+	-- the raggedest affordable coast is the one worth having.
+	field_fill = 0.55,
+
+	-- World units from a hex's centre to any of its six corners. Neighbouring
+	-- centres are `sqrt(3) * hex_size` apart, so 70 gives a 121-unit step - the
+	-- middle of the 60-200 range the old lane network spanned, which keeps the
+	-- whole map at roughly the scale the camera and the zoom limits were tuned
+	-- against. The art is 238x207, exactly the bounding box at size 119, so this
+	-- is also the number the sprite scale is derived from.
+	hex_size = 70,
+
+	-- Fraction of land tiles that must end up habitable, and therefore colonies -
 	-- the only places that hold population and host every building.
 	--
-	-- Habitability is a per-star roll off the class table, and on a small map
-	-- the variance is brutal: 120 stars produced anywhere from 13 to 26
-	-- colonies across seeds, and 13 is not a playable four-player game. The
-	-- generator promotes the best remaining candidates until it reaches this
-	-- floor, so every seed is fair without making the roll itself uniform.
+	-- Habitability is a per-tile roll off the terrain table, and on a map this
+	-- size the variance is brutal. The generator promotes the best remaining
+	-- candidates until it reaches this floor, so every seed is fair without
+	-- making the roll itself uniform.
 	colony_fraction = 0.20,
 
-	-- Mean lanes per system. Below ~2.4 the map degenerates towards a tree with
-	-- no strategic choices; above ~3.4 it stops reading as a lane network.
-	lane_degree = 2.9,
-
-	-- How strongly lane selection is randomised away from "shortest first".
-	lane_jitter = 0.45,
-
-	-- Roughly one region per this many stars, clamped to the range below.
+	-- Roughly one region per this many tiles, clamped to the range below.
 	stars_per_region = 28,
 	min_regions = 5,
 	max_regions = 10,
-
-	-- World size in pixels. The map is deliberately much larger than a portrait
-	-- phone viewport; panning across it is the point.
-	world_size = 2600,
 
 	-- Player colours. Deliberately more saturated than the region palette so
 	-- ownership never reads as terrain, and ordered so the first few are the

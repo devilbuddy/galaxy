@@ -22,14 +22,13 @@ function M.of(g)
 	for i = 1, #g.stars do
 		local s = g.stars[i]
 		parts[#parts + 1] = table.concat({
-			num(s.x), num(s.y), s.name, s.class, s.feature,
-			num(s.region), num(s.size_jitter), tostring(s.habitable),
+			num(s.q), num(s.r), s.name, s.terrain, s.biome, s.feature,
+			num(s.region), tostring(s.habitable),
 		}, "|")
 	end
-	for i = 1, #g.lanes do
-		local l = g.lanes[i]
-		parts[#parts + 1] = table.concat({ num(l.a), num(l.b), tostring(l.border) }, "|")
-	end
+	-- No edge list to fold in: adjacency is the six neighbours, so it is a pure
+	-- function of the tile coordinates already hashed above. Folding it would
+	-- hash the same fact twice.
 	for i = 1, #g.regions do
 		local r = g.regions[i]
 		parts[#parts + 1] = table.concat({

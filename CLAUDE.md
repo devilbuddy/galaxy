@@ -4,15 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-`galaxy` — a portrait-orientation mobile prototype of a 4X-style star map. A
-single integer seed deterministically generates a spiral galaxy of ~220 star
-systems joined by a non-crossing hyperlane network, carved into named regions,
-rendered on a world much larger than the viewport that the player pans and
-zooms around.
+`galaxy` — a portrait-orientation mobile prototype of a 4X-style map. A single
+integer seed deterministically generates **one continent on a hex lattice**:
+~220 land tiles grown cell by cell out of a sea, carved into named provinces,
+drawn as hand-drawn hexagonal terrain art with a Noto emoji on the places worth
+holding, on a world much larger than the viewport that the player pans and zooms
+around.
 
 A local **Nakama** backend (docker compose) authenticates by device id and is
-authoritative for the map: it generates the galaxy and ships it to the client.
-The client keeps its own copy of the generator purely as an offline fallback.
+authoritative for the map: it generates it and ships it to the client. The client
+keeps its own copy of the generator purely as an offline fallback.
+
+**The fiction is a medieval realm; the code has not been renamed yet.** The
+modules still say `galaxy`, `stars`, `captain`, `region`; the art, the names and
+everything the player reads say continent, tile, commander, province. That gap is
+deliberate and temporary — the rename is a mechanical commit of its own, held
+back so the vocabulary is settled by what exists rather than by what was planned.
+Read `stars` as tiles wherever it appears.
 
 Git: a single `main` branch pushed straight to `origin`; there is no review flow.
 
@@ -74,58 +82,59 @@ Hot-reload is the normal edit loop: change a `.script`/`.lua`, POST `hot-reload`
 `galaxy/` is pure Lua with no engine dependency, so the whole generator runs
 under standalone `luajit` (installed at `/opt/homebrew/bin/luajit`, the same
 LuaJIT 2.1 the engine embeds). This is by far the fastest way to iterate on
-generation — no build, no window, ~50 ms per galaxy:
+generation — no build, no window, ~5 ms per map:
 
 ```bash
 luajit tools/verify_determinism.lua        # digests for a spread of seeds
-luajit tools/preview_map.lua 1337 > /tmp/m.json && python3 tools/render_map.py /tmp/m.json /tmp/m.png
+luajit tools/preview_map.lua 1337 4 > /tmp/m.json && python3 tools/render_map.py /tmp/m.json /tmp/m.png
 ```
 
-`tools/render_map.py` is an offline sketch of the renderer (numpy + PIL). It is
-not the game renderer, but its layer order, colours and sizing maths are the
-spec the Defold one follows (it draws the real Noto glyphs, downloaded into a
-gitignored cache), so it is the right place to try a visual change first —
-`... /tmp/m.png detail` renders at 3x and crops the centre, roughly the game's
-mid zoom. Pass a third argument to `preview_map.lua` to place that many
-capitals with the real opening-state picker, so 🏰 can be judged with no game
-running.
+`tools/render_map.py` is an offline sketch of the renderer (PIL). It is not the
+game renderer, but it draws **the same art the engine does, resolved by the same
+module**: `tools/preview_map.lua` carries `tiles[].tile` and `tiles[].emoji` out
+of `main/theme.lua`, so a look approved in the sketch is a sketch of the same
+decisions rather than a parallel guess. It is the right place to try a visual
+change first — `... /tmp/m.png detail` renders at 3x and crops the centre,
+roughly the game's mid zoom. The second argument to `preview_map.lua` places that
+many capitals with the real opening-state picker, so 🏰 can be judged with no
+game running.
 
 There is no automated check of the interface itself; it is verified by building
-to the device and reading screenshots (`adb exec-out screencap -p > shot.png`).
+to the device and reading screenshots (`adb exec-out screencap -p > shot.png`),
+or on desktop through `tools/drive.py`.
 
-`tools/make_textures.py` regenerates the parchment backdrop in `main/assets/`
-(still named `nebula.png` — same mesh, same material), and
-`tools/make_ui_textures.py` regenerates the interface atlas in
-`main/assets/ui/` **and rewrites `main/ui.atlas`**. Re-run whichever applies
-after changing a parameter; every PNG in those directories is a build artifact
-of its script, not hand-authored art. Adding an interface glyph means adding a
-function to the `ICONS` table and re-running — nothing to wire up by hand.
+`tools/make_ui_textures.py` regenerates the interface atlas in `main/assets/ui/`
+**and rewrites `main/ui.atlas`**; every PNG in that directory is a build artifact
+of its script, not hand-authored art.
 
-`tools/import_emoji.py` is an *import*, not a regeneration — the
-`import_portraits.py` convention: it parses `main/theme.lua`, downloads those
-Noto glyphs at a pinned release tag, and writes provenance beside them
-(`MANIFEST.json`, `CREDITS.txt`, `NotoEmoji-LICENSE.txt`, Apache-2.0).
+**Two importers, and neither is a regeneration.** Both bring in third-party art
+and record provenance beside it, the `import_portraits.py` convention:
 
-**Two vocabularies, because the map and the interface draw a glyph by entirely
-different mechanisms** — and they must not share a sheet:
-
-| in `theme.lua` | drawn by | becomes |
+| | reads | writes |
 |---|---|---|
-| `M.EMOJI` | mesh quads, UV-sampled by `main/shaders/emoji.fp` | `main/assets/emoji/sheet.png` + `main/emoji_sheet.lua` (UV rects) |
-| `M.UNIT_EMOJI` | GUI box nodes (`ui.emoji`) | `main/assets/emoji/ui/*.png` + `main/emoji.atlas` + `main/emoji_ui.lua` (image ids) |
+| `tools/import_tiles.py` | `M.TILES` x `M.BIOMES` in `main/theme.lua` | `main/assets/tiles/*.png` + `main/tiles.atlas` |
+| `tools/import_emoji.py` | `M.EMOJI` + `M.UNIT_EMOJI` in `main/theme.lua` | `main/assets/emoji/ui/*.png` + `main/emoji.atlas` + `main/emoji_ui.lua` |
 
-A GUI node plays a whole *named* atlas image and cannot be handed a UV rect, so
-the interface's glyphs cannot come out of the packed sheet — and the sheet is a
-4x4 grid with no cells to spare, so adding to it would shift mesh UVs anyway.
-Both generated modules are never hand-edited. Changing which emoji anything uses
-means editing `theme.lua` and re-running; `test_wire.lua` fails if the resolver
-can name a map glyph the sheet lacks, or if a unit type has no interface glyph.
+`import_tiles.py --src` points at the `foundation_tiles` pack (default
+`~/Downloads/foundation_tiles`). It copies the 30 selected ground tiles **byte
+for byte at their native 238x207** and never resizes or trims them — that is
+exactly the bounding box of a flat-top hexagon of size 119, which is what lets
+plain sprite quads tessellate, so `SPRITE_TRIM_MODE_OFF` in the atlas is
+load-bearing rather than a default.
 
-Note the texture profile: `galaxy.texture_profiles` mipmaps
-`/main/assets/emoji/**`, which is what ~220 minified map glyphs need and what a
-GUI atlas does not. A profile matches the *generated* texture, and that is
-`/main/emoji.atlas` — under `**`, so the default no-mip profile. Nothing to
-configure, but it moves if the atlas ever does.
+**There is one art vocabulary now, not two.** The map used to pack its glyphs
+into a sheet sampled by UV rect from a mesh shader, while the interface used
+named atlas images, because a GUI node cannot be handed a UV rect. Drawing the
+map with *sprites* removed that asymmetry — a sprite cannot take a UV rect
+either — so both go through `main/emoji.atlas` and `main/emoji_ui.lua`, and
+`sheet.png` and `emoji_sheet.lua` are gone. Changing which emoji anything uses is
+still one edit to `main/theme.lua` plus a re-run; `test_wire.lua` fails if the
+resolver can name art the atlas lacks.
+
+Note the texture profile: `galaxy.texture_profiles` mipmaps `/main/tiles.atlas`
+and `/main/emoji.atlas` **by name**. A profile matches the *generated* texture,
+not the source directory, so listing `main/assets/tiles/**` would silently do
+nothing.
 
 ### Android
 
@@ -160,8 +169,8 @@ separate, testable module rather than inline in the camera script.
 
 ### Tests
 
-No unit-test framework is configured. Two scripts carry the load, both exit non-zero on
-failure and so work in CI as-is:
+No unit-test framework is configured. A handful of scripts carry the load, all
+exiting non-zero on failure and so working in CI as-is:
 
 `tools/lint_shared.lua` is the first thing to run: it is the only check that
 knows `galaxy/` has to satisfy two different Lua runtimes, and both of the
@@ -171,30 +180,36 @@ idioms it bans work perfectly under LuaJIT.
 of a global that should have been a local. It asks LuaJIT for a bytecode listing
 and looks at the `GGET` opcodes, so it is exact rather than a regex guess, and it
 ignores *writes* because a Defold script legitimately assigns `init`, `update`
-and `on_input` as globals. It exists because `main/galaxy.script` passed a global
-`seed` to `build_dust` from the first commit onwards: the file compiled,
-`rng.stream(nil, …)` falls back to zero rather than erroring, and the dust
-rendered - so the only symptom was that the starfield backdrop was byte-identical
-for every galaxy in the game.
+and `on_input` as globals.
 
 ```bash
 luajit tools/lint_globals.lua         # no stray global reads
 sh tools/verify_cross_runtime.sh      # BitOp and arithmetic paths agree
 luajit tools/verify_determinism.lua   # a seed reproduces exactly, across processes
+luajit tools/test_hex.lua             # the lattice, the continent, the graph it makes
 luajit tools/test_sim.lua             # turn resolution, combat, fog of war
 luajit tools/test_wire.lua            # client/server wire format round-trips
 luajit tools/test_gestures.lua        # pan / pinch / tap recognition
 luajit tools/test_playback.lua        # the past, rebuilt from the event log
 luajit tools/test_plan.lua            # staged orders survive a send; a turn consumes them
-luajit tools/test_territory.lua       # provinces tile, fuse, and rebuild identically
 luajit tools/lint_shared.lua          # no idioms gopher-lua miscompiles
+luajit tools/play.lua                 # pacing: one full game
+luajit tools/sweep.lua                # the economy, over twenty seeds
 ```
 
+`tools/test_hex.lua` exists because the map rests on two claims that are cheap to
+state and expensive to discover wrong: that 238x207 is exactly a flat-top
+hexagon's bounding box (get it wrong and the map tiles with gaps nobody can
+explain), and that the land is one connected piece (get it wrong and a player is
+islanded with no move, several turns into a real game). It checks connectivity by
+flooding rather than by trusting the growth that produced it, so it can fail
+independently of the thing it is testing.
+
 To check a *runtime* agrees with standalone LuaJIT, compare digests — the game
-logs one at startup, and it must equal what `luajit` prints for the same seed.
-Seed 424242 gives `3805718957` on macOS and standalone LuaJIT (re-baked when
-the name generator was re-voiced for the atlas theme — names are hashed, so
-touching `galaxy/names.lua` moves every seed's digest):
+logs one at startup, and Nakama logs one per generated seed, and both must equal
+what `luajit` prints for the same seed. **Seed 424242 gives `2277256399`,
+confirmed on macOS LuaJIT and on gopher-lua inside Nakama.** Names are hashed, so
+touching `galaxy/names.lua` moves every seed's digest:
 
 ```bash
 luajit -e 'package.path="./?.lua;"..package.path
@@ -207,7 +222,7 @@ luajit -e 'package.path="./?.lua;"..package.path
 
 | | |
 |---|---|
-| `galaxy/` | Pure Lua generation. Runs on **both** the Defold client (LuaJIT) and the Nakama server (gopher-lua). No engine dependencies. |
+| `galaxy/` | Pure Lua generation. Runs on **both** the Defold client (LuaJIT) and the Nakama server (gopher-lua). No engine dependencies. `hex` the lattice, `land` the continent, `terrain` what a tile is made of, `graph` the province carving, `generate` the pipeline, `wire`/`digest` the contract. |
 | `main/` | Defold client: rendering, camera, HUD, backend client. |
 | `server/modules/` | Nakama entry points. `docker-compose.yml` mounts `./galaxy` into Nakama's module path, so there is one generator, not two. |
 | `tools/` | Offline harnesses and tests, run under `luajit`. |
@@ -377,26 +392,56 @@ which is what lets a turn resolve early once everyone has said it.
 
 #### Three kinds of place
 
-Every system carries a star class, a feature and a habitability flag, all public
-map data. `systems.lua` turns those into three kinds of place:
+Every tile carries a **terrain**, a **biome**, a **feature** and a habitability
+flag, all public map data. `systems.lua` turns those into three kinds of place:
 
 | kind | derived from |
 |---|---|
 | **colony** | `habitable` |
-| **outpost** | a productive feature or an energetic class |
-| **waypoint** | everything else |
+| **outpost** | any feature but `none` |
+| **waypoint** | everything else - open country |
 
-None of them currently produce anything - the distinction is what capitals are
-placed on, what counts towards a region, **what it costs to take** (see
-`systems.defence`), and what city upgrades will be priced against. `profile.industry` and `profile.science` are carried for the same
-reason: they are derived from the star itself and cost nothing to keep.
+**An outpost is exactly a tile with a feature**, and nothing else. The star map
+also promoted energetic star classes, which meant an outpost could exist with
+nothing drawn to say why. Here the feature *is* drawn - old ruins, a mine, a
+shrine, a barrow, a wild gate, a gem seam - so the glyph is the reason, and a
+player can price a conquest on the far side of the map by looking at it.
+
+None of them currently produce anything beyond supply - the distinction is what
+capitals are placed on, what counts towards a province, **what it costs to take**
+(see `systems.defence`), and what city upgrades are priced against.
+`profile.industry` and `profile.science` come off the terrain and feature tables
+in `galaxy/terrain.lua`, which is where all the per-kind numbers live; there is
+no second copy in the simulation.
+
+**The terrain mix is fixed by ranking, not by thresholds.**
+`terrain.classify` takes a tile's *rank* in the map's elevation and moisture
+fields - its position in the sorted order, in [0,1) - rather than the raw noise.
+So `> 0.88` means "the top 12% of the continent by height" and reads as the
+fraction it actually is. That is not cosmetic: fractal noise is a sum of uniforms
+and clusters hard around 0.5, so an absolute threshold of 0.72 is nearly two
+standard deviations out and picked 3.6% of the map rather than the ~25% it looks
+like. The first pass shipped 8 mountains on a 220-tile map for exactly that
+reason. Ranking also makes the mix identical on every seed while leaving *where*
+the mountains are entirely to the noise - the same trade `galaxy/land.lua` makes
+to get an exact land count.
+
+**Biome is a climate, and the order of the tests is the whole tuning.** Blight
+first (deadlands are a scar, not a climate, and can appear anywhere), then the
+ice caps by latitude, then a hot-and-arid desert belt, then merely dry, then
+greenlands for the rest. Each test only sees what the ones above it did not
+claim, so a loose early threshold starves everything below - `sandlands` at
+`warmth > 0.68 and moisture < 0.40` took 40% of the continent and left drylands
+with the scraps. The shipped mix is roughly 48% greenlands, 18% drylands, 18%
+sandlands, 10% deadlands, 7% icelands.
 
 **The generator guarantees a colony floor** (`config.colony_fraction`).
-Habitability is a per-star roll and on a small map its variance decides the
-game - the same setting produced 13 colonies on one seed and 26 on another. The
-count is topped up deterministically, most habitable classes first with ties
-broken by index, so every seed is fair while *which* worlds are habitable stays
-driven by the roll.
+Habitability is a per-tile roll, and the per-terrain chances in
+`galaxy/terrain.lua` are deliberately tuned to average *just under* the floor, so
+the floor always binds and every seed gets the same number of colonies - which is
+what the economy sweep priced against. Letting the roll win instead gave 28%, or
+62 colonies where the prices assume 44. What the roll still decides is *which*
+tiles they are.
 
 #### The economy: one currency, and one thing it cannot buy
 
@@ -540,17 +585,32 @@ What the sweep established, in order:
 - **The captain ceiling earns its place.** Capping at two rather than four cost
   9 turns and doubled idle supply — parallel officers are how an empire spends.
 
-Twenty seeds, every player count, before the sweep and after:
+Twenty seeds, every player count. "before the sweep" is the prices as first
+shipped, "after" is what the sweep set them to, and "hex" is those same prices on
+the new substrate — **nothing in `rules.lua` moved between the last two columns**:
 
 | | 2p | 3p | 4p | 6p |
 |---|---|---|---|---|
-| before | 93 | 127 | 181 | 217 |
-| **after** | **92** | **129** | **125** | **170** |
+| before the sweep | 93 | 127 | 181 | 217 |
+| after the sweep | 92 | 129 | 125 | 170 |
+| **on the hex map** | **73.5** | **100.5** | **93.5** | **147.5** |
 | idle before | 1313 | 4133 | 8316 | 6308 |
-| **idle after** | **213** | **308** | **415** | **602** |
+| idle after | 213 | 308 | 415 | 602 |
+| **idle, hex** | **203** | **191** | **174** | **351** |
 
-All twenty decide at every count. That also closes a listed gap: six-player
-games used to need 400–1000 turns and sometimes never got there.
+All twenty decide at every count, on both substrates.
+
+**Games are about 25% shorter on the hex map, and the cause is connectivity
+rather than economy.** A pruned Delaunay lane network was tuned to a mean degree
+of 2.9; a hex lattice gives every inland tile six neighbours and comes out at
+~5.0. Commanders manoeuvre far more freely, fronts are wider, and ground changes
+hands sooner. Idle supply came down with it, which is the healthy direction — the
+economy is still a decision all game rather than a number going up.
+
+Nothing was retuned to compensate, deliberately: the substrate swap was meant to
+leave the game underneath alone, and 93 turns at two a day is still six weeks of
+real time. If it ever wants slowing, the honest levers are the map's size and
+`captain_steps`, not the prices the sweep established.
 
 **Rank sets where a captain starts, not what they can carry.** `base_strength`
 is the officer's own command and where a broken one reforms; `max_units` is what
@@ -636,9 +696,9 @@ this turn is refused rather than quietly enriching whoever took it.
 #### Capitals
 
 `pick_capitals` places every player on a colony with at least
-`rules.capital_neighbours` more within `rules.capital_hops` lanes, then spreads
-them by farthest-point sampling. A player who spawns in a barren arm, or next
-door to a rival, has lost at generation rather than in play.
+`rules.capital_neighbours` more within `rules.capital_hops` tiles, then spreads
+them by farthest-point sampling. A player who spawns on a barren headland, or
+next door to a rival, has lost at generation rather than in play.
 
 A capital is currently only a spawn and a losing condition - **hold it or you
 are out** - and is the one place a player will build once upgrades exist.
@@ -654,30 +714,39 @@ an experience total.
 *and* weight, so a veteran covers more lanes a turn and can crack a capital a
 fresh officer cannot.
 
-**Movement is whole lanes, not a distance.** A captain crosses
-`rules.captain_steps` lanes a turn and always ends the turn *at* a system.
+**Movement is whole tiles.** A captain crosses `rules.captain_steps` tiles a
+turn and always ends the turn *at* a tile.
 
 It used to be a speed - 95 world units a turn along lanes varying from roughly
-60 to 200 - and the problem was not the arithmetic but that **the number the
-rule depended on was invisible.** Lane length is never drawn, never stated and
-cannot be eyeballed, so "when does Kess arrive?" had no answer a player could
-work out, in a game whose whole point is planning two logins ahead. A step is
-countable off the map: a four-lane route takes four turns.
+60 to 200 - and the problem was not the arithmetic but that **the number the rule
+depended on was invisible.** Lane length was never drawn, never stated and could
+not be eyeballed, so "when does Kess arrive?" had no answer a player could work
+out, in a game whose whole point is planning two logins ahead. A step is
+countable off the map: a four-tile route takes four turns.
 
-What this gives up is that lane *length* stops meaning anything - a 200-unit
-lane and a 60-unit one are the same move. If that is missed, the way back is to
-price some lanes at two steps and draw them as such, not to return to a
-continuous speed nobody can see.
+**On a lattice that property is free rather than imposed.** All six neighbours
+are `sqrt(3) * hex_size` away, so there is no length left to vary and nothing for
+a weighted search to weigh - which is why `path.find` is a plain breadth-first
+walk with no tiebreak. What the star map gave up to get countable movement, the
+hex map simply has.
 
 **Rank buys reach rather than pace** (`rules.steps_at_rank`): a Commodore covers
 two lanes a turn, a Grand Admiral three, and a race with a mobility bonus adds a
 whole extra one. Fractions of a step would be exactly the invisible arithmetic
 this replaced.
 
-**The pathfinder counts lanes too.** It used to minimise distance, which after
-this change could return a route one lane longer - and therefore a turn slower -
-than the alternative. Length survives only as a tiebreak between routes of equal
-length, so the tighter-looking one wins.
+**Determinism in the pathfinder comes from the frontier order**, not from a
+tiebreak. `galaxy.adjacency` is sorted ascending when it is built, so neighbours
+are always visited in the same order and the same route is found every time, on
+every runtime.
+
+**Terrain does not cost movement.** Mountains and forest are drawn, so a varied
+cost would for the first time be *legible* rather than invisible arithmetic - it
+is the one thing the lattice newly makes possible. It is deliberately not taken:
+it would reprice `captain_steps`, `steps_at_rank` and every pacing number the
+sweep established, and the substrate swap was meant to leave the game underneath
+alone. The route detours are real without it - a march around a bay runs up to
+ten tiles longer than the straight-line distance.
 
 #### Detection is a range
 
@@ -735,15 +804,15 @@ is recomputed rather than tracked.
 
 #### Pacing
 
-`tools/play.lua` plays a full game with a captain-per-player AI that walks at the
-nearest unowned system. On the default map four players carve it up and one wins
-around turn 130 - about two months at two turns a day. That is a skeleton
-pacing, not a tuned one: with nothing to build and nothing to fight with, the
-only thing a player can do is walk.
+`tools/play.lua` plays a full game with a captain-per-player AI. On the default
+map four players carve it up and one wins around turn 130–150 — about two months
+at two turns a day. `tools/sweep.lua` is the broader instrument: twenty seeds, any
+player count, reporting how many games decided, the median length, how much
+supply a survivor is still sitting on, and what got built. See the table under
+**Pricing it** above for what it says on the hex map.
 
-It is also where the losing-player problem is already visible: an AI boxed in
-early finishes with a tenth of the map and no way back.
-
+It is also where the losing-player problem is visible: an AI boxed in early
+finishes with a tenth of the map and no way back.
 
 ### The game (server-authoritative, asynchronous)
 
@@ -889,14 +958,16 @@ forward the port over USB rather than changing the host:
 adb reverse tcp:7350 tcp:7350
 ```
 
-**Server-side generation is slow — 4-6 s for an uncached seed**, then instant
-(results are memoised per seed, per runtime VM). That is the cost of running a
-numeric workload on gopher-lua, an AST-walking interpreter: the same code takes
-~50 ms on LuaJIT. Most of it is Poisson sampling. If this needs to be fast, the
-options are precomputing seeds, moving generation to a fast sidecar the RPC
-calls, or Nakama's Go runtime — not micro-optimising the Lua further.
+**Server-side generation is ~0.6 s for an uncached seed**, then instant (results
+are memoised per seed, per runtime VM). It used to be 4-6 s, and the difference is
+the substrate: Poisson-disc sampling and a Delaunay triangulation are what cost
+that, and a lattice needs neither. Nothing was micro-optimised; the work simply
+stopped existing. The same map takes ~5 ms on LuaJIT.
 
-### Five things that will bite you on the Nakama runtime
+The wire payload came down with it — **~25 KB, from ~40 KB** — because a lattice
+has no arbitrary connections to transmit. See `galaxy/wire.lua`.
+
+### Six things that will bite you on the Nakama runtime
 
 Nakama's Lua is gopher-lua, not LuaJIT, and differs in ways that fail *silently*:
 
@@ -914,7 +985,18 @@ Nakama's Lua is gopher-lua, not LuaJIT, and differs in ways that fail *silently*
 4. **Nakama images before 3.27 are amd64-only** and run under emulation on Apple
    Silicon — ~5x slower again, and it was OOM-killed mid-generation. 3.27+ is
    multi-arch.
-5. **`goto` and labels are Lua 5.2.** LuaJIT accepts them happily, so a
+5. **A large sparse integer table key can take the whole server out.** The hex
+   generator keys its working tables by a single integer folding `(q, r)`. The
+   obvious encoding - a generous offset and a matching stride - produces keys in
+   the tens of millions. On LuaJIT that is free: a sparse integer key lands in
+   the hash part like any other. On gopher-lua it is not. Nakama was **OOM-killed
+   before it could answer a single request**, and the symptom is about as hostile
+   as it gets: the container simply disappears, the client sees a closed socket
+   after 1.6 s, and *nothing is logged anywhere*, because nothing got far enough
+   to log it. `galaxy/hex.lua` now caps `MAX_COORD` at 64, which caps the key at
+   16,640, and `hex.field` asserts a radius that would exceed it. If you add
+   another coordinate-keyed table, keep the keys small - or use a string.
+6. **`goto` and labels are Lua 5.2.** LuaJIT accepts them happily, so a
    `goto continue` passes every offline test in `tools/` and is a coin flip on a
    5.1 runtime. Nothing in the test suite could catch it — the editor's language
    server, also configured for 5.1, was what reported it. `lint_shared.lua` now
@@ -948,182 +1030,201 @@ The non-obvious choices behind it:
 - **Seeds must stay below 2^24.** `go.property` numbers are 32-bit floats, so
   larger integers do not round-trip — 20260823 comes back as 20260824.
   `galaxy.script` floors and wraps the incoming property for this reason.
-- **The density field is quantised to a 16-bit ladder** after being built from
-  `exp`/`log`/`atan2`. Unlike `sqrt`, those are not required to be correctly
-  rounded, and glibc, macOS libm and Android's bionic can disagree in the last
-  bit — enough to flip one accept/reject in sampling and cascade into a
-  different galaxy. Snapping to a coarse ladder makes that unreachable.
+- **There is no transcendental arithmetic left, so nothing is quantised.** The
+  spiral density field had to be snapped to a 16-bit ladder because it was built
+  from `exp`/`log`/`atan2`, which — unlike `sqrt` — are not required to be
+  correctly rounded, and glibc, macOS libm and Android's bionic can disagree in
+  the last bit. One flipped accept/reject cascaded into a different galaxy. The
+  hex generator needs only value noise (an integer hash, a lerp and a quintic
+  polynomial) and `sqrt`, so the whole class of hazard is gone with the sampler.
+  **Do not reintroduce a transcendental without reintroducing the ladder with
+  it** — `galaxy/generate.lua` says so at the top.
+- **The digest agrees across runtimes, and that is checked rather than assumed.**
+  Seed 424242 gives `2277256399` on standalone LuaJIT and in Nakama's gopher-lua;
+  the server logs its digest per generated seed, so the two can be compared
+  directly.
 
 ### Rendering (`main/`)
 
-**The map is a hand-drawn atlas**: warm parchment, dotted ink paths, and every
-system drawn as a Google Noto color emoji whose *meaning* says what the place
-is — 🏰 a capital, 🏙 a colony, ⛏/🛰/🏛/🌀/💫-class glyphs for what makes an
-outpost worth holding, ✨ bare terrain. `main/theme.lua` is the one resolver
-from system to glyph name (the game, `tools/render_map.py` and `tools/test_wire.lua`
-all go through it, so the wire and the offline fallback cannot disagree);
-`main/emoji_sheet.lua` (generated) maps names to UV rects in
-`main/assets/emoji/sheet.png` (imported — see the tooling section). The
-*interface* draws emoji too — the system sheet's unit slots — but through a
-separate atlas and `ui.emoji`, never this sheet, because a GUI node cannot be
-handed a UV rect. A new look is tried in `tools/render_map.py` first; its constants mirror the engine's
-(`CORE_SCALE × KIND_SCALE × (0.85 + 0.3r)`), so an approved sketch transfers 1:1.
+**The map is two sprite layers and nothing else.**
 
-Seven mesh components, one per layer, each with a dynamic vertex buffer built
-once per seed by `main/meshbuild.lua` and uploaded with `resource.set_buffer`.
-Per-item colour lives in a **vertex stream**, not a material constant — a
-per-component constant would break batching, so this keeps each layer to a
-single draw call. The whole map is ~7 draw calls and does no per-frame CPU work
-except the parallax backdrop.
+| layer | source | count | what |
+|---|---|---|---|
+| ground | `main/tiles.atlas` | ~440 | one hand-drawn hex per land and sea tile |
+| glyph | `main/emoji.atlas` | ~95 | a Noto emoji on the places worth holding |
 
-**Shapes are still drawn procedurally in the fragment shaders wherever they are
-shapes.** A textured quad is only ever as sharp as its texture, so discs, dots
-and falloffs derive from the UV and antialias against `fwidth`. The emoji are
-the deliberate exception — a glyph is art, not a shape — and the sheet is sized
-so it never betrays that: 256px cells that never magnify past ~70% at
-`ZOOM_MAX`, 16px gutters with 8px UV insets so linear sampling and mips never
-bleed a neighbour, and **mipmaps via `galaxy.texture_profiles`** (the emoji
-directory is the only override; everything else keeps the no-mip default),
-because ~220 glyphs minified at the widest zoom shimmer on every pan without
-them. `.mesh`/`.material`/`.fp`/`game.project`/texture-profile/PNG changes all
-need a full build — only `.script`/`.lua` hot-reload.
+Stock Defold throughout: the builtin `sprite.material`, no custom material, no
+shader, no vertex buffer, no per-sprite constant — so the whole world is **two
+draw calls, one per atlas, by construction rather than by care**. `main/tile.go`
+and `main/place.go` are one sprite apiece; `main/galaxy.script` spawns them
+through two factories and calls `sprite.play_flipbook` with the image name
+`main/theme.lua` resolves.
 
-| shader | used by | what |
-|---|---|---|
-| `emoji.fp` | systems | glyphs from the sheet; vertex colour is white × fog alpha, never a tint |
-| `disc.fp` | lane dots + province borders | hard disc, edge antialiased with `fwidth` |
-| `shadow.fp` | drop shadows | soft dark disc under each glyph, offset down-right |
-| `dot.fp` | paper flecks | soft point |
-| `wash.fp` | territory fill / region blobs | flat across province fans, soft falloff on blobs |
-| `mesh.fp` | parchment mottle | the textured backdrop quad |
+What this replaced: seven mesh components with dynamic vertex buffers built in
+Lua, seven materials, six fragment shaders, a Voronoi territory module, a
+procedural parchment texture and its generator script. All deleted.
 
-**Territory is a political map** (`main/territory.lua`, engine-free,
-`tools/test_territory.lua`): every owned system's Voronoi cell — the dual of
-the Delaunay triangulation the lanes already come from — fused per owner into
-provinces that tile and never overlap, exactly like countries on an atlas. The
-fill is the cell polygons fan-filled flat on the wash layer in the *bright*
-player palette (a stain wants saturation; ink is for pen work), reaching
-exactly to the border; the border is a thin solid pen line along cell edges
-where the neighbour's owner differs, inset slightly into its own ground so two
-rivals meeting draw two hugging lines. Interior edges between same-owner cells
-vanish, which is what fuses cells into one province. Every Voronoi edge is
-jittered by midpoint displacement keyed on the pair of systems it separates,
-so both sides bend identically and the tiling holds — organic, deterministic,
-no RNG stream. Hull cells close with an arc capped at `TERRITORY_CAP`. A
-player who holds nothing is a **zero-vertex buffer, which is a native crash**,
-not an empty mesh — `build_wash` emits one invisible triangle instead.
-Browsing a seed (no view) falls back to soft region blobs.
+**Sprite z is the draw order** (`Z_GROUND = 0`, `Z_GLYPH = 1`). A whole unit
+apart, because *every* glyph must draw above *every* tile, not just the one it
+stands on — at equal z a glyph would be covered by whichever neighbouring hex
+sorted later.
 
-**Lanes are dots along a bow, not ribbons.** Each dot is its own quad through
-`disc.fp`; the bow is a quadratic bezier whose bulge is a pure function of the
-lane's endpoint indices (no RNG stream, same formula in the sketch), capped at
-7% of the lane because captains, route previews and playback markers travel the
-*straight* line — a marker must never sit visibly off its own path. The dot
-count varies per lane, so `build_lanes` collects positions first and sizes the
-buffer second: `Builder:apply` demands the buffer be filled exactly. The same
-layer carries the province border strokes ("solid" is discs overlapped tighter
-than their radius), which is why `repaint` rebuilds lanes alongside wash and
-owners: borders follow a playback's rewound owners. `build_wash` runs first in
-both `present()` and `repaint()` and caches the cells for `build_lanes` — that
-ordering is the cache's contract.
+**The tiling is exact, and that is a measured fact rather than a hope.** A tile
+PNG is 238x207, which is precisely the bounding box of a flat-top hexagon of size
+119 (`2s` by `sqrt(3)*s` = 238 x 206.1, the artist having rounded up a pixel). So
+drawing it `2 * hex_size` wide at the tile's own centre *is* the tessellation.
+The transparent corners overlap the neighbour and cost nothing: textures are
+premultiplied at build time, so a transparent pixel over an opaque one is an
+exact no-op. `tools/test_hex.lua` asserts the geometry, and
+`tools/import_tiles.py` refuses a pack that is not that size.
 
-Two consequences worth knowing when tuning: `build_stars` captures
-`knowledge()`'s first return into a local before building the quad —
-its two-value return expands into argument lists, and an expanded `owner` would
-land in `u0`; and the two player palettes in `galaxy/config.lua` are twins by
-index — `player_palette` (bright, for the dark chrome) and `player_palette_ink`
-(dark, for everything drawn on the paper) — same hue, same order, and the
-digest hashes structure rather than RGB, so retuning a tone is free while
-reordering is not.
+The art's pixel dimensions are declared once, in `main/theme.lua`
+(`M.TILE_PX`, `M.GLYPH_PX`), and **both importers assert against them** — the
+sprite scale is derived from them (`2 * hex_size / TILE_PX.w`), so a
+differently-sized pack fails the import rather than silently rescaling the map.
 
-**A rebuild of the same galaxy must not disturb the view.** `present()` in
-`main/galaxy.script` builds every mesh, and it runs whenever a turn resolves
-because the fog and ownership the meshes encode have changed. It posts
-`map_ready` to the camera, and the camera used to treat *every* `map_ready` as a
-new galaxy: reset zoom to the whole-map fit, clear `user_zoomed`, recentre. With
-a background poll every ten seconds, the effect was the player's zoom silently
-resetting itself every ten seconds, and the selected system deselecting with it.
+**Open country gets no glyph.** `theme.emoji_for` returns nil for a waypoint. The
+old map drew ✨ on every one only because a bare disc said nothing; the hex
+underneath now says it is forest, and drawing a sparkle on top would be saying it
+twice. That is also what keeps the glyph layer to ~95 sprites rather than one per
+tile.
 
-Two guards now, because either alone would leave the trap set for the next
-caller:
+**Biome is a colour, not a redraw.** The five biome directories in the source
+pack have pixel-identical alpha masks and differ only in ground colour
+(greenlands `136,184,97`, sandlands `238,209,123`, drylands `166,129,103`,
+deadlands `78,82,69`, icelands `185,203,208`). Only the six *ground* types are
+imported, in each of the five palettes — 30 images. The pack also draws villages,
+cities, keeps, ruins and crystals as tiles; those are places rather than ground,
+and the emoji layer already draws them. A drawn city inside the hex under an
+emoji city on top of it is two cities.
+
+**One fixed palette for the whole sea** (`theme.SEA_BIOME`), rather than each
+stretch of water taking its neighbour's. A coastline that changes colour along
+its length reads as a rendering fault rather than as geography.
+
+**Do not jitter the hex geometry.** The instinct is to displace the corners so
+the borders look hand-drawn, the way the Voronoi territory module did. The art
+already carries a wobbly ink hex outline, and jittering the ground would
+desynchronise it from the baked glyph.
+
+**The sprites are built once per seed and then left alone.** `present()` in
+`main/galaxy.script` runs whenever a turn resolves, but only a *different seed*
+respawns anything — 571 sprites take about 4 ms, and doing that every ten-second
+poll would be the most expensive thing in the project. Two guards, because either
+alone would leave the trap set:
 
 - the camera re-frames only when the content extent or centre differs from what
   it has, or when it has never framed anything (`self.framed`);
 - `present()` clears the selection only for a genuinely different seed, and
   `load_game` skips the rebuild entirely when neither the seed nor the turn has
-  changed — about 30 ms of work saved every poll, for no visible difference.
+  changed.
 
-### Zoom and the backdrop
+`main/render/galaxy.render_script` is down to one `sprite` predicate (the builtin
+material's tag is `tile`) plus GUI. **It cannot become the builtin render script**,
+and that is the whole reason it still exists: it is the only writer of
+`store.screen` — the aspect-derived view space every GUI scene lays out in,
+`main/ui.lua` hit-tests against, `main/safearea.lua` converts insets into and
+`tools/drive.py` reads — and it builds the world projection from `store.camera`
+rather than from a camera component, so visible world width is exactly
+`design_width / zoom`. That relationship is what lets the HUD place a label with
+`(world_x - cam_x) * zoom + width/2` and have it land on the tile.
 
-**Zoom is three buttons on the right of the map**, under the overview:
-in, out, and out-to-the-widest. Before them there was no way to zoom at
-all - pinch is the only other route and multi-touch cannot be injected from a
-workstation, so every device screenshot ever taken was at the fit zoom.
+**The paper is the clear colour**, set in `game.project [render]`. Not a layer,
+not a texture — one setting, and the only backdrop the map has. The parchment
+mottle mesh, its generator and the parallax that drifted it are gone.
 
-**The whole-map view is deliberately unreachable.** `ZOOM_OUT_LIMIT` in
-`main/camera.script` holds the zoom floor at twice the whole-map fit: the map
-is mostly scenery, the widest useful view is a stretch of regions, and the
-floor is also what keeps the smallest-ever emoji glyph legible. Three things
-changed with it, all in the camera or `present()`:
+**Ownership, province borders, fog of war and drop shadows are not drawn yet.**
+That is a staging decision and it has a real cost: a player sees terrain but not
+who holds it, so the map cannot be played from — the system sheet's owner dot and
+the commander strip are carrying that information alone. It is the first thing to
+restore. `knowledge()` and `repaint()` are kept in `main/galaxy.script` as no-ops
+precisely because they are where it comes back, and `store.playback_owners` still
+routes through `knowledge()` so a digest replay needs no new handshake.
 
-- the widest-view button keeps the player's centre instead of gliding to the
-  galaxy's - recentring on the middle of a map you cannot fully see carries
-  you away from your own empire - and it now *sets* `user_zoomed`, because
-  the result is still a view the player chose;
-- opening a game focuses your capital once (`present()` posts `focus` for a
-  new seed when the view knows one), since the opening frame can no longer
-  show everything;
-- a playback still ends on the widest view for an arrival digest, which is now
-  "as wide as allowed" rather than the poster.
+When it does come back it needs **no shader either**: ownership is a third sprite
+per hex from a hex-outline image pre-tinted per player (ten images in the tile
+atlas, picked by name), and fog is two more as parchment-coloured scrims. Nothing
+needs a tint, a material or a per-sprite constant, so this simplification is not
+a debt.
+
+**A name is not scenery.** The map is 220 tiles most of which a player never
+touches, and naming them all turns it into a wall of words with the geography
+buried underneath. Labels are chosen by **relevance to the player**, rebuilt
+whenever what makes a tile relevant changes — the selection, the turn, the
+captains — and never per frame, because it walks every tile and sorts them.
+
+| tier | what |
+|---|---|
+| selected | what the sheet is describing |
+| capital | anyone's |
+| captain | where one stands, and everywhere its route goes |
+| held | somewhere someone holds, including you |
+| frontier | unclaimed, but adjacent to something of yours — where a captain can be sent next |
+
+Everything else is never named. Zoom decides which tiers are admitted, pulled
+back rather than pushed out: at a distance you want to know whose ground you are
+looking at, not what every hill is called. The budget is a filter (22 at most)
+rather than the truncation of a much larger set.
+
+Labels and fleet markers are **GUI nodes**, pooled: a marker wants to stay a
+constant size at every zoom and carry a crisp glyph, which is exactly what the
+labels already do. Map labels are held inside the horizontal safe-area insets,
+and any name that will not fit on either side of its tile is simply not drawn —
+a name sliced by the screen edge is worse than no name.
+
+### Zoom, and how much realm you can see at once
+
+**Zoom is three buttons on the right of the map**, under the overview: in, out,
+and out-to-the-widest. Before them there was no way to zoom at all — pinch is the
+only other route and multi-touch cannot be injected from a workstation, so every
+device screenshot ever taken was at the fit zoom.
 
 They are on the *top* right, which costs some thumb reach, because the bottom
 right is not a stable place to put anything: the order bar spans the full width
 and grows upward as the plan does, and the system sheet comes up over it. A
-control that moves when you stage an order is the problem SEND was kept still
-to avoid.
+control that moves when you stage an order is the problem SEND was kept still to
+avoid.
+
+**`ZOOM_OUT_LIMIT` was 2.0, and the hex map is the reason it is 1.15.** On the
+star map, seeing the whole thing at once was deliberately impossible: the field
+was mostly scenery, the widest useful view was a stretch of regions rather than
+the poster, and a higher floor also kept the smallest an emoji ever rendered
+legible. **None of those three still hold.** The ground is drawn art rather than a
+dot on a dark field, so it reads far smaller than a glyph did; the coastline is
+the single most useful thing on the map and it is a *shape*, so it cannot be read
+a fifth of it at a time; and at 2.0 the widest view was about ten hexes across,
+which is not a realm, it is a neighbourhood. 1.15 still keeps the whole continent
+just out of reach — the map should be somewhere you are standing rather than a
+picture you are holding — while showing a stretch of coast and most of a
+province.
+
+`ZOOM_MAX` is 3.0, about 240 world units across: two hexes side by side, which is
+as close as there is anything to see. It was 9.0 and nothing had ever been there.
 
 Three details, each of which the first run of the buttons found:
 
-- **`ZOOM_MAX` is 3.0.** It was 9.0, and nothing had ever been there. 9.0 is 80
-  world units across and lanes run 60 to 200, so the whole screen sits *between*
-  two systems - a bare lane, no star. 3.0 is a system and the ones it is joined
-  to, which is as close as there is anything to see - and it is also the number
-  the emoji sheet's cell size was chosen against.
-- **A button zoom pivots on the selected system**, if there is one and it is
+- **A button zoom pivots on the selected tile**, if there is one and it is
   somewhere visible; otherwise on the middle of `store.hud_band`. Never the
   middle of the *window*: with a tall sheet up that point is behind a panel, and
-  pivoting on something invisible sends everything the player can see rushing
-  off the top of the band. Anchoring on the selection is what stops the star
-  sliding off the pivot and ending up behind the sheet describing it - three
-  presses was enough.
-- **The camera eases rather than jumps**, for the same reason `focus` does, and
-  a press steps from the *target* rather than the current zoom so an impatient
+  pivoting on something invisible sends everything the player can see rushing off
+  the top of the band.
+- **The camera eases rather than jumps**, for the same reason `focus` does, and a
+  press steps from the *target* rather than the current zoom so an impatient
   double-tap adds up instead of landing mid-glide.
+- The widest-view button keeps the player's centre instead of gliding to the
+  map's, and it *sets* `user_zoomed`, because the result is still a view the
+  player chose.
+
+Opening a game focuses your capital once (`present()` posts `focus` for a new
+seed when the view knows one), since the opening frame cannot show everything.
 
 The camera owns the step size and the range; the buttons only say which
 direction, so there is one description of how far a press goes.
 
-**The backdrop texture carries only the mottle; the paper is the clear
-colour.** `tools/make_textures.py` writes `main/assets/nebula.png` (the name
-survives the re-theme - same mesh, same material) as a parchment-tinted stain
-whose alpha is its strength, over a clear colour that IS the parchment base -
-set in `game.project [render]` and mirrored as the render script's fallback.
-The old close-zoom fade (`main/galaxy.script`, zoom 0.6 to 2.2, driven through
-the `tint` USER constant via `go.set`) was kept untouched, because what it now
-does is fade the mottle to clean flat paper as a fixed-resolution stain would
-otherwise smear - the right behaviour, inherited for free. The wash still eases
-back to 45% with it.
-
-`main/render/galaxy.render_script` owns the layer order and blend modes.
-Everything blends with alpha - on paper there is no light to add, so the old
-additive dust/glow entries emptied out of the `ADDITIVE` table (kept, one line
-to give a future layer back):
-
-    nebula   wash   lanes   glow(shadows)   owners   stars   gui - all alpha
-
-Textures are premultiplied by Defold at build time, so alpha layers use
-`ONE / ONE_MINUS_SRC_ALPHA` (not `SRC_ALPHA / ...`) and the shader premultiplies
-the vertex colour to match.
+**The camera clamps against the visible band, not the window.**
+`store.hud_band` is what the map can actually be seen through. Without it the map
+fits the *window* at fit zoom, the camera is pinned by `clamp_position`, and a
+tile under the sheet can never be lifted out.
 
 ### Setting up a game
 
@@ -2085,8 +2186,14 @@ which is a different space again.
   resolution and, per above, the only coordinate space in the project.
 - **`display.high_dpi = 1`** — the backbuffer is larger than the design
   resolution. Never assume window pixels equal design units.
-- **`bootstrap.render = /main/render/galaxy.render`** — a custom pipeline; the
-  builtin one cannot express the per-layer blend modes this map needs.
+- **`bootstrap.render = /main/render/galaxy.render`** — a custom pipeline. Not for
+  blend modes any more (there is one sprite predicate); it is the only writer of
+  `store.screen` and it builds the world projection from `store.camera`. See
+  Rendering above.
+- **`sprite.max_count = 1024`** (default 128) and **`collection.max_instances =
+  2048`** (default 1024) — the map is ~440 game objects with a sprite each, plus
+  ~95 glyphs. Both defaults are far below that, and the failure is a hard cap
+  rather than a slowdown.
 - **`android.immersive_mode = 1`** — hides the Android status and navigation
   bars, which otherwise sit on top of the HUD.
 - **`android.package = com.dg.galaxy`** — Defold's default is the placeholder
@@ -2167,123 +2274,116 @@ The game is a foundation being built back up, so most of what is missing is
 missing on purpose. These are the things that are *not* on that plan, or that
 will bite whoever touches them.
 
-- **Only the map wears the atlas theme.** Every GUI screen - lobby, setup,
-  sheet, buy, battle, report - is still the dark chrome, deliberately (the
-  mockup kept it dark too), but the interface kit's tokens have never been
-  looked at next to the parchment and a re-theme of the chrome is an open
-  project of its own. The system sheet's unit slots are the first Noto glyphs
-  to appear on the dark side, and they were drawn for parchment.
-- **The label zoom tiers are still anchored to the old fit zoom.**
-  `STAR_LABEL_MIN_ZOOM` (0.30) and the lowest `LABEL_TIER_ZOOM` entries sit
-  below the new zoom floor (~0.7), so they are always-on rather than wrong -
-  the visible behaviour was judged fine on screenshots - but the constants no
-  longer describe a reachable range.
-- **Ownership rings read oversized on waypoint glyphs.** The ring is 1.6x the
-  glyph's half-extent everywhere; a sparkle occupies much less of its quad than
-  a castle does, so its ring floats. A per-kind ring scale is the obvious fix.
-- **The emoji sheet ships uncompressed.** 1024x1024 RGBA plus mips is ~5.3 MB
-  of texture memory - fine today, but `galaxy.texture_profiles` is where
-  device compression would go if it ever matters.
-- **The Android digest constant is unverified since the rename.** Seed 424242's
-  `3805718957` is confirmed on macOS and standalone LuaJIT; the arm64 Android
-  runtime has not printed it yet (names are pure string work, so agreement is
-  expected, not proven).
+**From the hex pivot, in priority order:**
+
+- **The map does not show who owns what.** Ownership, province borders and fog of
+  war were all deferred out of the substrate swap, so a player sees terrain and
+  nothing else — the system sheet's owner dot and the commander strip carry it
+  alone, which means the map cannot be played *from*. This is the first thing to
+  restore, and it needs no shader: ownership is a hex-outline sprite pre-tinted
+  per player (ten images in the tile atlas, picked by name), fog is two
+  parchment-coloured scrims. `knowledge()` and `repaint()` in
+  `main/galaxy.script` are kept as no-ops because that is where it goes.
+- **Nothing is drawn for a drop shadow**, so the glyphs sit flat on the hexes
+  rather than reading as stickers on paper. Same fix shape as above.
+- **The code has not been renamed.** The fiction is a medieval realm and the
+  modules still say `galaxy`, `stars`, `lanes`, `captain`, `region`. It is ~2,200
+  identifier occurrences across 58 files, purely mechanical, and it is held back
+  as a commit of its own so the full suite plus an unchanged digest is the proof.
+  Read `stars` as tiles.
+- **`STAR_LABEL_MIN_ZOOM` and the lowest `LABEL_TIER_ZOOM` entries are stale.**
+  They were anchored to the old fit zoom and the floor has moved twice since, so
+  they sit below anything reachable — always-on rather than wrong, but they no
+  longer describe a range.
+- **Two textures, 16.8 MB.** The tile atlas is 2048x1024 with mips (11.2 MB) and
+  the emoji atlas 1024x1024 (5.6 MB). Fine today. `galaxy.texture_profiles` is
+  where device compression or a `max_texture_size` cap would go if it ever
+  matters, and shipping fewer biomes is the other lever.
+- **The continent's coast is partly the growable disc.** About 8 tiles a map sit
+  on the boundary of the disc the land is grown inside — a suspiciously circular
+  arc in an otherwise ragged coast. A looser disc fixes it and costs sprites,
+  monotonically; `galaxy/config.lua` carries the measured trade. At the shipped
+  `field_fill` it is 7.8 tiles for 438 sprites.
+- **Terrain does not cost movement.** On a lattice, drawn mountains would make a
+  varied step cost *legible* for the first time — the one thing the star map's
+  invisible lane lengths could never be. It is deliberately not taken, because it
+  would reprice `captain_steps`, `steps_at_rank` and every pacing number the
+  sweep established.
+- **Water is scenery with no rules attached.** It blocks movement only because it
+  is not in the graph. There is no naval movement, no crossing, no ferry — an
+  island would be unreachable, which is why the generator grows exactly one
+  connected continent and can never produce one.
+
+**Carried over, and unaffected by the pivot:**
+
+- **Only the map wears the theme.** Every GUI screen — lobby, setup, sheet, buy,
+  battle, report — is still the dark chrome, deliberately, but the interface
+  kit's tokens have never been looked at next to the hex art and a re-theme of
+  the chrome is an open project of its own.
 - **The battle screen's visual treatment is unresolved.** What is there is the
   *derived* reading: pips that thin out, a list of exchanges, nothing drawn that
-  the simulation does not know. It is not what the mock-up it came from
-  pictures, and the author has said so. The open question is whether the panel
-  should become **representational** instead - formations and movement invented
-  for the screen, driven by the real per-exchange numbers but not claiming to be
-  positions the sim has. That is a legitimate choice and would change the answer
-  completely; it wants deciding before anything is redrawn. The data underneath
-  is settled either way.
+  the simulation does not know. The open question is whether it should become
+  **representational** instead — formations and movement invented for the screen,
+  driven by the real per-exchange numbers but not claiming to be positions the
+  sim has. That wants deciding before anything is redrawn.
 - **The debug strip in the lobby is a back door, not a feature.** `main/dev.lua`
   gates it on `sys.get_engine_info().is_debug`, so it costs a release build
-  nothing — but it is the thing most likely to be deleted wholesale one day, and
-  it should come out in one piece when it is.
+  nothing — but it should come out in one piece when it goes.
 - **Nothing is ever lost at the border.** A captain that cannot beat both halves
-  does not attack, so there are no failed assaults - only battles that were not
+  does not attack, so there are no failed assaults — only battles that were not
   started. That keeps the sheet's arithmetic honest but means the map has no
-  gambles in it at all, which may eventually be a flatness worth revisiting.
+  gambles in it at all.
 - **The order allowance is fixed at three and nothing raises it.** It is the
   obvious thing for a fifth building to buy, and the obvious thing to scale with
-  empire size; neither exists, so a large empire and a small one get the same
-  number of decisions.
+  empire size; neither exists.
 - **The two comparisons are shown nowhere in the client.** "To take it, you need
-  16 against its defences - you bring only 6" was on the system sheet and went
+  16 against its defences — you bring only 6" was on the system sheet and went
   with the rest of its prose. That arithmetic is the whole of combat and the
   thing a player does before committing a captain to a turn that resolves twelve
-  hours later, so this is a real hole rather than a simplification. The place
-  for it is the aim flow in the order bar, where the decision is being made.
-- **A rival captain standing on a system is no longer named on its card.** The
-  contact rows went with the prose too; the marker on the map still carries
-  their fleet number.
-- **Only one captain's rack is shown when two are standing on the same world.**
-  The rack follows the strip's selection and falls back to the first, which is
-  right almost always - the cap is four across the whole empire - but there is
-  no way to trade with the second without selecting it in the strip first.
-- **Half of each race is still inert.** `modifiers.of` now folds speed, hops,
-  vision, attack and defence, so races differ meaningfully - but growth,
-  industry, research, capacity and the cost keys are read by nothing until
-  production returns.
-- **A boxed-in player still has no way back.** Combat means a border can be
-  pushed and a fallen empire's ground falls open again, which is most of the old
-  version of this - but nothing rubber-bands and income is linear in territory,
-  so falling behind still compounds. The sweep did not touch it; what it changed
-  is that money now runs out for *everyone*, so a leader cannot bank an
-  insurmountable purse.
+  hours later, so this is a real hole. The place for it is the aim flow in the
+  order bar, where the decision is being made.
+- **A rival captain standing on a tile is no longer named on its card.**
+- **Only one captain's rack is shown when two are standing on the same tile.**
+- **Half of each race is still inert.** `modifiers.of` folds speed, hops, vision,
+  attack and defence; growth, industry, research, capacity and the cost keys are
+  read by nothing until production returns.
+- **A boxed-in player still has no way back.** Nothing rubber-bands and income is
+  linear in territory, so falling behind still compounds.
 - **A battle is one comparison, so there is nothing to play back inside it.**
-  The turn digest replays on the map, but a battle resolves instantly and has no
-  internal timeline - so a battle-summary screen (fleets closing, reinforcements,
-  a retreat, a scrubber) has nothing to animate until armies have a shape.
-  `battle` already carries who defended and with what, which is the part that
-  would otherwise have to be retrofitted.
 - **The playback shows movement but not the fighting.** A battle recolours the
-  system it happened at and gets a tick on the scrub track; it does not get a
+  tile it happened at and gets a tick on the scrub track; it does not get a
   moment of its own, which is the turn a player would most want to stop on.
-- **Existing games from before the rebuild are dead.** Their stored state has no
-  capitals or captains, so `holds_capital` is false for everyone and they end on
-  the next resolution. There is no migration and there should not be one.
+- **Existing games from before the pivot are dead.** Their stored state indexes a
+  star map that no longer generates, and the wire version has moved to 2. There
+  is no migration and there should not be one.
 - **Combat is unverified on a device.** The sim, the server and the full RPC
   round trip are covered, and the desktop client has been driven through a
-  battle, but the strength badge and the battle rows in the digest have only
-  been seen on desktop. The *economy* is device-verified — buy → garrison →
-  drag aboard → SEND → the unit standing in the captain's rack next turn has
-  been driven on hardware through the real RPCs, including the drag, which is
-  the one gesture a workstation cannot fully stand in for — so what is left
-  unseen there is the fighting. (`"N to take"` went with the sheet's prose; see
-  the two-comparisons gap above.)
+  battle, but the strength badge and the battle rows in the digest have only been
+  seen on desktop.
+- **The hex map itself is unverified on a device.** It has been driven end to end
+  on desktop through the real Nakama — create, start, generate on the server,
+  render, resolve a turn, zoom — but `adb` and a real screen have not seen it.
 - **`drive.py` cannot see the system sheet's own buttons.** The bridge's element
-  query returns star labels, the top bar and a popup's own text, but not the
-  sheet or the order bar, so those still have to be tapped by position - and the
-  card is docked on top of a bar that grows as the plan does, so a coordinate
-  read from one screenshot is stale the moment an order is staged. `state` and
-  `tapstar` are unaffected.
+  query returns labels, the top bar and a popup's own text, but not the sheet or
+  the order bar, so those still have to be tapped by position.
 - **The bridge redirects, and the redirect downgrades POST to GET.** On desktop
-  the engine service port from the editor's log answers `302` to
-  `http://<lan-ip>:<other-port>/automation-bridge/v2/...`, and the Python client
-  follows it with a GET - so every `/input/*` call comes back
-  `405 method_not_allowed: use POST` while `elements` and `screenshot` work
-  fine. Pass `--port` the *redirect target* (`lsof -nP -iTCP -sTCP:LISTEN | grep
-  dmengine` lists both) rather than the port the log names.
-- **A route can only be set one waypoint at a time from the map.** The
-  simulation takes a full waypoint list and expands it lane by lane, and the
-  order shape and tests cover it, but the only gesture wired up is "tap a
-  destination".
+  the engine service port answers `302` to another port, and the Python client
+  follows it with a GET — so every `/input/*` call comes back `405
+  method_not_allowed` while `elements` and `screenshot` work fine. Pass `--port`
+  the *redirect target* (`lsof -nP -iTCP -sTCP:LISTEN | grep dmengine` lists
+  both). In practice: `elements`/`state` on one port, `click`/`tap` on the other.
+- **A route can only be set one waypoint at a time from the map.**
 - **A real two-finger pinch has still never been performed.** The zoom buttons
   cover the range, so this is no longer load-bearing, but `gestures.lua`'s pinch
-  path is verified only by `tools/test_gestures.lua` and has never run against
-  real hardware.
-- **A fleet marker's name can land on top of a star label.** The label pass
-  rejects label-on-label overlaps, but markers are a separate pool and are not
-  part of that test, so at close zoom "Kess" prints through "Talitha's Landing".
-  Only visible since there was a way to zoom in.
+  path is verified only by `tools/test_gestures.lua`.
+- **A fleet marker's name can land on top of a tile label.** The label pass
+  rejects label-on-label overlaps, but markers are a separate pool.
 - **A route longer than `ROUTE_POOL` segments draws only its first 64 legs.**
-  Pooled nodes cost whether or not they are used, so the pool is sized for a
-  busy turn rather than the theoretical maximum.
 - The safearea extension logs `ERROR:ENGINE: Could not find '@render' socket`
-  once at startup on Android. It is benign - the extension reaches for the
-  render system before it exists - but it is noise in every log.
-- The turn digest is capped at 40 turns server-side and 140 rows client-side. A
-  game left unattended for weeks otherwise produced an event list that exhausted
-  the GUI node budget outright.
+  once at startup on Android. Benign, but noise in every log.
+- The turn digest is capped at 40 turns server-side and 140 rows client-side.
+- **The tile art's licence is not established.** The `foundation_tiles` pack
+  ships no licence file, no author and no terms;
+  `main/assets/tiles/CREDITS.txt` records that. Same footing as
+  `main/assets/portraits/` — fine for a prototype, must be resolved before
+  anything ships.

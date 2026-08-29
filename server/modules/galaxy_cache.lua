@@ -17,7 +17,7 @@ local LIMIT = 8
 local cache = {}
 local order = {}
 
---- The built galaxy for a seed, plus its lane-length lookup and encoded form.
+--- The built map for a seed, and its encoded form.
 function M.get(seed)
 	local hit = cache[seed]
 	if hit then return hit end
@@ -29,7 +29,6 @@ function M.get(seed)
 
 	local entry = {
 		galaxy = galaxy,
-		lengths = path.lane_lengths(galaxy),
 		encoded = nk.json_encode(payload),
 		digest = payload.digest,
 	}
@@ -42,8 +41,8 @@ function M.get(seed)
 	end
 
 	nk.logger_info(string.format(
-		"built galaxy seed=%d stars=%d lanes=%d digest=%d in %ds",
-		seed, galaxy.stats.star_count, galaxy.stats.lane_count,
+		"built map seed=%d land=%d sea=%d digest=%d in %ds",
+		seed, galaxy.stats.star_count, galaxy.stats.water_count,
 		entry.digest, os.time() - started))
 
 	return entry

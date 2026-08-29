@@ -25,7 +25,8 @@ for name in ([[
 	loadstring next pairs pcall print rawequal rawget rawlen rawset require
 	select setmetatable tonumber tostring type unpack xpcall
 	bit coroutine debug io jit math os package string table
-	buffer camera crash defos graphics go gui hash html5 http image json label
+	buffer camera collectionfactory crash defos factory graphics go gui hash
+	html5 http image json label
 	liveupdate model msg particlefx physics profiler render resource socket
 	sound sprite sys tilemap timer vmath window zlib
 	safearea

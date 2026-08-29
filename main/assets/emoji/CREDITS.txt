@@ -6,7 +6,7 @@ v2.047. The artwork itself is unmodified; only its size and packing changed.
 
   sheet.png   the map's glyphs, downscaled to 224px and centred in 256px cells.
               Sampled by UV rect from a mesh shader.
-  ui/         the interface's glyphs, one 192px PNG apiece, packed by Defold
+  ui/         the interface's glyphs, one 224px PNG apiece, packed by Defold
               into /main/emoji.atlas. A GUI node draws a whole named image and
               cannot be handed a UV rect, which is why these are not in the
               sheet.

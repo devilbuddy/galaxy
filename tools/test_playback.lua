@@ -23,7 +23,6 @@ local playback = require("main.playback")
 
 local SEED = 1337
 local GALAXY = gen.build(SEED)
-local LENGTHS = path.lane_lengths(GALAXY)
 -- Long enough to contain a war. Dwellings gate production now, so the first
 -- fight of a four-player game lands a little past turn 30 - and a fixture with
 -- no battle in it silently stops testing the half of the rewind that reads
@@ -61,7 +60,7 @@ local function play(state)
 	local opening, events = {}, {}
 	for _ = 1, TURNS do
 		opening[state.turn + 1] = snapshot(state)
-		local produced = res.turn(GALAXY, state, bots.all_orders(GALAXY, state), LENGTHS)
+		local produced = res.turn(GALAXY, state, bots.all_orders(GALAXY, state))
 		for i = 1, #produced do events[#events + 1] = produced[i] end
 	end
 	return opening, events
@@ -160,7 +159,7 @@ do
 	local battle
 	for _ = 1, 120 do
 		local produced = res.turn(GALAXY, state,
-			bots.all_orders(GALAXY, state), LENGTHS)
+			bots.all_orders(GALAXY, state))
 		for i = 1, #produced do
 			if produced[i].kind == "battle" and #produced[i].exchanges > 1
 				and not battle then
@@ -226,7 +225,7 @@ do
 			for _, n in pairs(battle.hold) do before = before + n end
 			-- Play on. If `hold` were live this would drift.
 			for _ = 1, 6 do
-				res.turn(GALAXY, state, bots.all_orders(GALAXY, state), LENGTHS)
+				res.turn(GALAXY, state, bots.all_orders(GALAXY, state))
 			end
 			local after = 0
 			for _, n in pairs(battle.hold) do after = after + n end

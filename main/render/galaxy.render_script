@@ -1,41 +1,36 @@
---- Render pipeline for the galaxy map.
+--- Render pipeline for the map.
 --
--- The layer order and blend modes here are the whole visual treatment. The
--- map is a hand-drawn atlas - parchment, ink and emoji stickers - so every
--- layer blends with alpha; nothing adds light, because on paper there is no
--- light to add:
+-- The map is **two sprite layers and nothing else**: hand-drawn hex tiles from
+-- /main/tiles.atlas, and Noto emoji from /main/emoji.atlas drawn on top of them.
+-- Both go through Defold's builtin sprite material, so both fall under the one
+-- `tile` predicate and the whole world is a single `render.draw`.
 --
---   nebula   alpha     parchment mottle over the clear colour's flat base
---   dust     alpha     sparse dark paper flecks
---   wash     alpha     region and territory tints
---   lanes    alpha     dotted ink paths
---   glow     alpha     soft drop shadows under the glyphs
---   owners   alpha     ownership rings
---   stars    alpha     the emoji glyphs themselves
---   gui      alpha     labels and HUD, in screen space
+-- What used to be here was seven predicates - nebula, dust, wash, lanes, glow,
+-- owners, stars - one per mesh layer, each with its own material and fragment
+-- shader, plus a table naming which of them blended additively. All of it went
+-- with the meshes. Sprites sort by z, so draw order is a position rather than a
+-- list, and there is nothing left here to order.
 --
--- Depth testing is off throughout: this is a 2D map and the draw order above
--- *is* the depth order. Every texture is premultiplied (Defold does that at
--- build time), so alpha blending uses ONE / ONE_MINUS_SRC_ALPHA rather than
--- SRC_ALPHA / ONE_MINUS_SRC_ALPHA.
+-- **This script cannot become the builtin one**, though, and that is the whole
+-- reason it still exists. It does two things nothing else does:
+--
+--   * `update_window` publishes `store.screen` - the aspect-derived view space
+--     that every GUI scene lays out in, `main/ui.lua` hit-tests against,
+--     `main/safearea.lua` converts insets into and `tools/drive.py` reads. It is
+--     the project's one coordinate space, and this is its only writer.
+--   * `set_world_camera` builds the world projection from `store.camera` rather
+--     than from a camera component, so the visible world width is exactly
+--     `design_width / zoom`. That relationship is what lets the HUD place a
+--     label at `(world_x - cam_x) * zoom + width/2` and have it land on the tile.
+--
+-- The paper the map sits on is the **clear colour**, set in game.project's
+-- [render] section. Not a layer, not a texture - one setting, and the only
+-- backdrop the map has.
+--
+-- Every texture is premultiplied (Defold does that at build time), so alpha
+-- blending uses ONE / ONE_MINUS_SRC_ALPHA rather than SRC_ALPHA / ONE_MINUS_SRC_ALPHA.
 
 local store = require("main.store")
-
-local WORLD_LAYERS = {
-	"galaxy_nebula",
-	"galaxy_dust",
-	"galaxy_wash",
-	"galaxy_lane",
-	"galaxy_glow",
-	"galaxy_owner",
-	"galaxy_star",
-}
-
--- Layers that add light rather than occlude what is behind them. Empty since
--- the parchment re-theme - the dust became dark flecks and the glow became
--- shadows, and additive light on a light ground is invisible anyway - but the
--- mechanism stays, because it is one line to give a future layer back.
-local ADDITIVE = {}
 
 local MSG_CLEAR_COLOR = hash("clear_color")
 local MSG_WINDOW_RESIZED = hash("window_resized")
@@ -45,9 +40,9 @@ local MSG_WINDOW_RESIZED = hash("window_resized")
 -- The design width from game.project is held fixed and the height is derived
 -- from the framebuffer's real aspect ratio. Using the design height directly
 -- would stretch the map on any device whose aspect differs from 720x1280 - on a
--- 1080x2340 phone that is a 22% vertical stretch, which turns every star into
--- an ellipse. Deriving the height instead means taller screens simply see more
--- galaxy, which is the right behaviour for a map you pan around anyway.
+-- 1080x2340 phone that is a 22% vertical stretch, which turns every hex into a
+-- lozenge. Deriving the height instead means taller screens simply see more
+-- map, which is the right behaviour for something you pan around anyway.
 --
 -- Input needs a correction to match. Defold always normalises touches to the
 -- *configured* display size, so a tap at the top of a 2340-tall screen arrives
@@ -78,17 +73,16 @@ local function update_window(self)
 end
 
 function init(self)
-	self.predicates = {}
-	for i, tag in ipairs(WORLD_LAYERS) do
-		self.predicates[i] = { tag = tag, predicate = render.predicate({ tag }) }
-	end
+	-- "tile" is the tag on Defold's builtin sprite material, which both the
+	-- ground tiles and the glyphs are drawn with.
+	self.sprite_predicate = render.predicate({ "tile" })
 	self.gui_predicate = render.predicate({ "gui" })
 	self.text_predicate = render.predicate({ "debug_text" })
 
 	self.clear_buffers = {
 		[graphics.BUFFER_TYPE_COLOR0_BIT] = vmath.vector4(
-			-- The parchment base. The backdrop texture carries only the
-			-- mottle *over* this, so the clear colour is the paper itself.
+			-- The paper the whole map sits on. There is no backdrop layer any
+			-- more, so this is it.
 			sys.get_config_number("render.clear_color_red", 0.935),
 			sys.get_config_number("render.clear_color_green", 0.870),
 			sys.get_config_number("render.clear_color_blue", 0.745),
@@ -104,8 +98,7 @@ end
 --- Build the world projection from the shared camera state.
 --
 -- Done here rather than with a camera component so the visible world width is
--- exactly design_width / zoom. That relationship is what lets the HUD place a
--- label with `(world_x - cam_x) * zoom + width/2` and have it land on the star.
+-- exactly design_width / zoom. See the header.
 local function set_world_camera(self)
 	local cam = store.camera
 	local zoom = cam.zoom
@@ -113,7 +106,7 @@ local function set_world_camera(self)
 	local hw = (self.width * 0.5) / zoom
 	local hh = (self.height * 0.5) / zoom
 	render.set_view(vmath.matrix4())
-	-- Near/far are generous: the layers sit at z -50..0 and nothing should ever
+	-- Near/far are generous: the sprites sit at z 0..1 and nothing should ever
 	-- be clipped by the depth range in a 2D map.
 	render.set_projection(vmath.matrix4_orthographic(
 		cam.x - hw, cam.x + hw, cam.y - hh, cam.y + hh, -1000, 1000))
@@ -130,26 +123,19 @@ function update(self)
 	render.clear(self.clear_buffers)
 	render.set_viewport(0, 0, self.window_width, self.window_height)
 
-	-- 2D map: nothing should ever occlude anything by depth.
+	-- 2D map: nothing should ever occlude anything by depth. Sprite z decides
+	-- the order, which is why the glyphs sit a whole unit above the ground.
 	render.set_depth_mask(false)
 	render.disable_state(graphics.STATE_DEPTH_TEST)
 	render.disable_state(graphics.STATE_CULL_FACE)
 	render.enable_state(graphics.STATE_BLEND)
 
 	set_world_camera(self)
-	for i = 1, #self.predicates do
-		local layer = self.predicates[i]
-		if ADDITIVE[layer.tag] then
-			render.set_blend_func(graphics.BLEND_FACTOR_ONE, graphics.BLEND_FACTOR_ONE)
-		else
-			render.set_blend_func(graphics.BLEND_FACTOR_ONE,
-				graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
-		end
-		render.draw(layer.predicate)
-	end
+	render.set_blend_func(graphics.BLEND_FACTOR_ONE,
+		graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+	render.draw(self.sprite_predicate)
 
 	-- GUI in screen space: labels and HUD.
-	render.set_blend_func(graphics.BLEND_FACTOR_ONE, graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
 	render.set_view(self.gui_view)
 	render.set_projection(self.gui_projection)
 	render.enable_state(graphics.STATE_STENCIL_TEST)

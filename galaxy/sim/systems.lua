@@ -1,27 +1,28 @@
 --- What kind of place a system is.
 --
--- The generator already gives every system a star class, a feature and a
+-- The generator already gives every tile a terrain, a feature and a
 -- habitability flag, all of it public map data. This turns those into three
 -- *kinds* of place rather than one kind with different multipliers, which is
--- what gives the map objectives and terrain instead of 220 interchangeable
--- things to own:
+-- what gives the map objectives instead of 220 interchangeable things to own:
 --
 --   colony    Habitable. Holds population, hosts every building, and produces
 --             in proportion to how many people live there. These are the
 --             prizes - roughly a fifth of the map.
---   outpost   A productive feature or an energetic star: asteroid fields,
---             precursor ruins, jump relays, pulsars, nebulae. No population, a
---             flat trickle of output, and it can host the military buildings
---             because a radar mast and a gun battery do not need a city.
---   waypoint  Everything else. Produces nothing, holds nothing, and is
---             therefore *terrain*: fleets stop at the first hostile system, so
---             a barren lane junction is a blockade point worth taking.
+--   outpost   Ground with something standing on it: old ruins, a mine, a
+--             shrine, a barrow, a wild gate, a gem seam. No population, a flat
+--             trickle of output, and it can host the military buildings because
+--             a watchtower and a gun battery do not need a city.
+--   waypoint  Everything else - open country. Produces nothing, holds nothing,
+--             and is therefore *ground*: a commander stops at the first hostile
+--             tile, so a pass between two ranges is a blockade point worth
+--             taking.
 --
 -- All of it is derived, never stored, so it costs nothing on the wire and a
 -- player can read the value of somewhere they have never been.
 
 
 local rules = require("galaxy.sim.rules")
+local terrain = require("galaxy.terrain")
 
 local M = {}
 
@@ -29,42 +30,15 @@ M.COLONY = "colony"
 M.OUTPOST = "outpost"
 M.WAYPOINT = "waypoint"
 
--- Features that make a barren star worth holding.
-local PRODUCTIVE_FEATURE = {
-	asteroids = true, anomaly = true, derelict = true,
-	relay = true, ruins = true, nebula = true,
-}
-
--- Stars energetic or strange enough to be worth a station in their own right.
-local PRODUCTIVE_CLASS = {
-	pulsar = true, black_hole = true, nebula = true, blue_giant = true,
-}
-
--- Relative industrial and scientific value, per star class. A dim red dwarf is
--- an ordinary place to live; exotic objects are poor homes and good laboratories.
-local CLASS_VALUE = {
-	red_dwarf    = { industry = 1.00, science = 0.60 },
-	orange_dwarf = { industry = 1.00, science = 0.80 },
-	yellow       = { industry = 0.95, science = 1.10 },
-	amber_giant  = { industry = 1.25, science = 0.70 },
-	white        = { industry = 0.95, science = 1.20 },
-	blue_giant   = { industry = 0.90, science = 1.15 },
-	red_giant    = { industry = 1.40, science = 0.65 },
-	pulsar       = { industry = 0.70, science = 1.60 },
-	black_hole   = { industry = 0.60, science = 2.00 },
-	nebula       = { industry = 0.80, science = 1.40 },
-}
-
--- Features add on top. These are what turn an otherwise dull star into
--- somewhere worth a war.
-local FEATURE_VALUE = {
-	asteroids = { industry = 0.85, science = 0.10 },
-	anomaly   = { industry = 0.05, science = 0.75 },
-	derelict  = { industry = 0.45, science = 0.40 },
-	relay     = { industry = 0.30, science = 0.15 },
-	ruins     = { industry = 0.10, science = 1.10 },
-	nebula    = { industry = 0.20, science = 0.60 },
-}
+-- **An outpost is exactly a tile with a feature**, and nothing else. The star
+-- map also promoted energetic star classes, which meant an outpost could exist
+-- with nothing on the map to say why - a pulsar looked like any other dot. Here
+-- the feature is drawn, so the glyph *is* the reason, and a player can price a
+-- conquest on the far side of the map by looking at it.
+--
+-- The industry and science each kind is worth are not tabulated here any more:
+-- they live on `galaxy.terrain`'s own two tables, beside the thresholds that
+-- decide what ground is what. One table per fact.
 
 --- Everything static about a system, computed once and memoised on the galaxy.
 --
@@ -81,13 +55,13 @@ function M.profile(galaxy, id)
 	if hit then return hit end
 
 	local star = galaxy.stars[id]
-	local class = CLASS_VALUE[star.class] or CLASS_VALUE.yellow
-	local feature = FEATURE_VALUE[star.feature]
+	local ground = terrain.by_id(star.terrain) or terrain.TERRAIN[1]
+	local feature = terrain.feature_by_id(star.feature)
 
 	local kind = M.WAYPOINT
 	if star.habitable then
 		kind = M.COLONY
-	elseif PRODUCTIVE_FEATURE[star.feature] or PRODUCTIVE_CLASS[star.class] then
+	elseif terrain.productive_feature(star.feature) then
 		kind = M.OUTPOST
 	end
 
@@ -97,8 +71,8 @@ function M.profile(galaxy, id)
 	-- are exactly what city upgrades will be priced against.
 	local profile = {
 		kind = kind,
-		industry = class.industry + (feature and feature.industry or 0),
-		science = class.science + (feature and feature.science or 0),
+		industry = ground.industry + (feature and feature.industry or 0),
+		science = ground.science + (feature and feature.science or 0),
 		-- A waypoint produces nothing at all; that is what makes it terrain.
 		productive = kind ~= M.WAYPOINT,
 	}
@@ -161,7 +135,7 @@ function M.is_colony(galaxy, id)
 	return M.profile(galaxy, id).kind == M.COLONY
 end
 
---- Colonies within `hops` lanes of `from`, for the opening-position guarantee.
+--- Colonies within `hops` tiles of `from`, for the opening-position guarantee.
 function M.colonies_within(galaxy, from, hops)
 	local seen = { [from] = 0 }
 	local frontier = { from }

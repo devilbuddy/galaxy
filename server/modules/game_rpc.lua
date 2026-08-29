@@ -232,7 +232,7 @@ local function catch_up(game, game_version)
 		local bot_orders = bots.all_orders(entry.galaxy, state)
 		for k = 1, #bot_orders do orders[#orders + 1] = bot_orders[k] end
 
-		local events = resolve.turn(entry.galaxy, state, orders, entry.lengths)
+		local events = resolve.turn(entry.galaxy, state, orders)
 		write_one(EVENTS, game.id .. ":" .. turn, nil, { turn = turn, events = events })
 
 		game.turn = state.turn
@@ -570,7 +570,7 @@ local function rpc_route(context, payload)
 	local player = state and state.players and state.players[me]
 	local mods = modifiers.of(player)
 
-	local route, why = resolve.expand_route(entry.galaxy, entry.lengths,
+	local route, why = resolve.expand_route(entry.galaxy,
 		math.floor(from), tonumber(input.fixed), waypoints, mods.hops)
 	if not route then
 		return nk.json_encode({ route = {}, reason = why or "no route" })

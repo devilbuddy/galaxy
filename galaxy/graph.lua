@@ -1,105 +1,24 @@
---- Turning a triangulation into a playable lane network, and carving it into
---- contiguous regions.
+--- Carving the map into contiguous regions.
+--
+-- Everything here is generic over `pts` (anything with `.x`/`.y`), an edge list
+-- of index pairs, and an adjacency list. That is why it needed no changes when
+-- the substrate went from a pruned Delaunay lane network to a hex lattice.
 
 local M = {}
 
 local sqrt, floor = math.sqrt, math.floor
 
---- Euclidean length of every edge.
-function M.lengths(pts, edges)
-	local out = {}
-	for i = 1, #edges do
-		local a, b = pts[edges[i][1]], pts[edges[i][2]]
-		local dx, dy = a.x - b.x, a.y - b.y
-		out[i] = sqrt(dx * dx + dy * dy)
-	end
-	return out
-end
-
---- Kruskal's minimum spanning tree. Returns a set keyed by edge index.
+--- Adjacency lists from an edge list.
 --
--- The MST is kept in full and unconditionally: it is the cheapest guarantee
--- that every star stays reachable no matter how aggressively the rest of the
--- triangulation is thinned.
-function M.mst(n, edges, lengths)
-	local order = {}
-	for i = 1, #edges do order[i] = i end
-	table.sort(order, function(p, q)
-		if lengths[p] ~= lengths[q] then return lengths[p] < lengths[q] end
-		-- Deterministic tiebreak: float equality between two edge lengths is
-		-- rare but a seed that hits it must not reorder between runs.
-		return p < q
-	end)
-
-	local parent = {}
-	for i = 1, n do parent[i] = i end
-	local function find(x)
-		while parent[x] ~= x do
-			parent[x] = parent[parent[x]] -- path halving
-			x = parent[x]
-		end
-		return x
-	end
-
-	local keep, count = {}, 0
-	for i = 1, #order do
-		local e = order[i]
-		local ra, rb = find(edges[e][1]), find(edges[e][2])
-		if ra ~= rb then
-			parent[ra] = rb
-			keep[e] = true
-			count = count + 1
-			if count == n - 1 then break end
-		end
-	end
-	return keep
-end
-
---- Thin the triangulation down to a lane network of a target average degree.
+-- On the hex map the edges are the six neighbours, so this is a formatting step
+-- rather than a graph decision - but it stays here because the region carver
+-- below is written against `pts + edges + adj` and works on any graph, which is
+-- exactly what let it survive the move off the star map untouched.
 --
--- @param opts.degree  target mean degree (edges per star * 2)
--- @param opts.jitter  how much randomness biases the short-edge preference
-function M.prune(r, pts, edges, opts)
-	local n = #pts
-	local lengths = M.lengths(pts, edges)
-	local mst = M.mst(n, edges, lengths)
-
-	local target = floor(n * (opts.degree or 2.9) * 0.5 + 0.5)
-
-	-- Score the optional edges. Sorting purely by length gives a suspiciously
-	-- tidy lattice, so each length is perturbed before ranking: still strongly
-	-- short-biased, but with the irregularity a hand-drawn map has.
-	local jitter = opts.jitter or 0.45
-	local optional = {}
-	for i = 1, #edges do
-		if not mst[i] then
-			optional[#optional + 1] = { i, lengths[i] * r:range(1 - jitter, 1 + jitter) }
-		end
-	end
-	table.sort(optional, function(p, q)
-		if p[2] ~= q[2] then return p[2] < q[2] end
-		return p[1] < q[1]
-	end)
-
-	local keep = {}
-	local count = 0
-	for i = 1, #edges do
-		if mst[i] then keep[#keep + 1] = edges[i]; count = count + 1 end
-	end
-	for i = 1, #optional do
-		if count >= target then break end
-		keep[#keep + 1] = edges[optional[i][1]]
-		count = count + 1
-	end
-
-	table.sort(keep, function(p, q)
-		if p[1] ~= q[1] then return p[1] < q[1] end
-		return p[2] < q[2]
-	end)
-	return keep
-end
-
---- Adjacency lists, each sorted so downstream traversals are order-stable.
+-- What used to live above this line was `lengths`, `mst` and `prune`: Kruskal
+-- and a degree-targeted thinning pass that turned a Delaunay triangulation into
+-- a lane network. A lattice has no arbitrary connections to choose, so all three
+-- went with the triangulation.
 function M.adjacency(n, lanes)
 	local adj = {}
 	for i = 1, n do adj[i] = {} end

@@ -12,26 +12,34 @@ local gestures = require("main.gestures")
 --
 -- The ceiling used to be 9.0, and nothing had ever been there: pinch cannot be
 -- injected from a workstation, so until the on-screen controls existed the
--- range past the fit zoom was unreachable and unlooked-at. It is 80 world units
--- across, and lanes run 60 to 200 - so the whole screen sits *between* two
--- systems, showing a bare lane and no star at all. 3.0 is about 240 units, or a
--- system and the ones it is joined to, which is as close as there is anything
--- to see.
+-- range past the fit zoom was unreachable and unlooked-at. 3.0 is about 240
+-- world units across - two hexes side by side, since a tile is 140 - which is as
+-- close as there is anything to see.
 local ZOOM_MAX = 3.0
 local ZOOM_MIN_FLOOR = 0.05
 
--- The zoom-out floor, as a multiple of the whole-map fit. Seeing the entire
--- galaxy at once is deliberately impossible: the map is mostly scenery, and
--- the widest useful view is a stretch of regions, not the poster. Raising the
--- floor also raises the smallest an emoji glyph ever renders, which is what
--- keeps the map legible at its widest.
-local ZOOM_OUT_LIMIT = 2.0
+-- The zoom-out floor, as a multiple of the whole-map fit.
+--
+-- **This was 2.0, and the hex map is the reason it is not.** On the star map,
+-- seeing everything at once was deliberately impossible: the field was mostly
+-- scenery, the widest useful view was a stretch of regions rather than the
+-- poster, and a higher floor also kept the smallest an emoji ever rendered
+-- legible. None of those three still hold. The ground is now drawn art rather
+-- than a dot on a dark field, so it reads far smaller than a glyph did; the
+-- coastline is the single most useful thing on the map and it is a *shape*, so
+-- it cannot be read a fifth of it at a time; and at 2.0 the widest view was
+-- about ten hexes across, which is not a realm, it is a neighbourhood.
+--
+-- 1.15 still keeps the whole continent just out of reach - the map should
+-- always be somewhere you are standing rather than a picture you are holding -
+-- while showing a stretch of coast and most of a province.
+local ZOOM_OUT_LIMIT = 1.15
 local WHEEL_STEP = 1.18
 
--- One press of an on-screen zoom button. The range from fit to ZOOM_MAX is
--- about 9x, so this crosses the whole of it in six presses: much less and
+-- One press of an on-screen zoom button. The range from the floor to ZOOM_MAX is
+-- about 15x now, so this crosses the whole of it in seven presses: much less and
 -- getting anywhere is a drum solo, much more and each press is a lurch.
-local BUTTON_STEP = 1.5
+local BUTTON_STEP = 1.55
 -- How fast a button zoom converges, and how close counts as arrived (as a
 -- ratio, because zoom is perceived multiplicatively).
 local ZOOM_RATE = 11

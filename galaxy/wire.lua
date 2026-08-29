@@ -1,43 +1,51 @@
---- Wire format for sending a generated galaxy from the server to the client.
+--- Wire format for sending a generated map from the server to the client.
 --
 -- Engine-free, and shared verbatim by Nakama and Defold, so there is exactly
 -- one definition of the contract rather than an encoder and a decoder that can
 -- drift apart.
 --
--- Only what cannot be derived is transmitted. Star colours, radii, labels,
--- region palette entries, lane border flags, the adjacency lists and the
--- content bounds are all recomputed on arrival from the same tables the
--- generator used, which keeps the payload to the irreducible facts: where the
--- stars are, what they are called, and what connects to what.
+-- Only what cannot be derived is transmitted. On a hex lattice that is a much
+-- shorter list than it was for the star map:
+--
+--   * **positions** are the lattice coordinates `(q, r)`, two small integers,
+--     rather than two floats. World units are `hex.to_world`, so they are
+--     recomputed rather than sent.
+--   * **there are no connections to send at all.** Adjacency is the six
+--     neighbours; the old format shipped an array of ~320 lanes because a
+--     pruned Delaunay graph is genuinely arbitrary. A lattice is not.
+--   * **the sea is not sent.** It is exactly the field minus the land, and the
+--     field is `field_radius`, so the client subtracts one from the other.
+--
+-- Labels, region palette entries, centroids, adjacency, bounds and the content
+-- extent are all recomputed on arrival from the same tables the generator used.
 
-local starclass = require("galaxy.starclass")
+local hex = require("galaxy.hex")
+local land = require("galaxy.land")
+local terrain = require("galaxy.terrain")
 local config = require("galaxy.config")
 
 local M = {}
 
 -- Bump when the shape below changes incompatibly; the client refuses a payload
--- it does not understand rather than rendering a half-decoded map.
-M.VERSION = 1
+-- it does not understand rather than rendering a half-decoded map. Version 2 is
+-- the hex lattice - a version 1 payload describes a star map that no longer has
+-- anything to draw it.
+M.VERSION = 2
 
---- Pack a generated galaxy into plain tables ready for JSON encoding.
+--- Pack a generated map into plain tables ready for JSON encoding.
 function M.encode(g)
 	local stars = {}
 	for i = 1, #g.stars do
 		local s = g.stars[i]
 		stars[i] = {
-			x = s.x, y = s.y,
+			q = s.q, r = s.r,
 			name = s.name,
-			class = s.class,
+			terrain = s.terrain,
+			biome = s.biome,
 			feature = s.feature,
 			region = s.region,
-			jitter = s.size_jitter,
 			hab = s.habitable and 1 or 0,
 		}
-	end
-
-	local lanes = {}
-	for i = 1, #g.lanes do
-		lanes[i] = { a = g.lanes[i].a, b = g.lanes[i].b }
 	end
 
 	local regions = {}
@@ -49,9 +57,9 @@ function M.encode(g)
 	return {
 		v = M.VERSION,
 		seed = g.seed,
-		world = g.world_size,
+		size = g.hex_size,
+		radius = g.field_radius,
 		stars = stars,
-		lanes = lanes,
 		regions = regions,
 	}
 end
@@ -59,16 +67,17 @@ end
 --- Rebuild the full structure the renderer and HUD expect.
 --
 -- Mirrors the tail of galaxy/generate.lua: everything derived there from the
--- class and palette tables is derived here too, so a galaxy that arrived over
--- the network is indistinguishable from one generated locally.
+-- terrain and palette tables is derived here too, so a map that arrived over the
+-- network is indistinguishable from one generated locally.
 function M.decode(t)
-	assert(type(t) == "table", "galaxy payload is not a table")
+	assert(type(t) == "table", "map payload is not a table")
 	assert(t.v == M.VERSION,
-		string.format("unsupported galaxy wire version %s (expected %d)",
+		string.format("unsupported map wire version %s (expected %d)",
 			tostring(t.v), M.VERSION))
 
 	local palette = config.region_palette
-	local world = t.world
+	local size = t.size
+	local radius = t.radius
 	local n = #t.stars
 
 	local regions = {}
@@ -87,42 +96,47 @@ function M.decode(t)
 		}
 	end
 
+	local ex, ey = hex.extent(radius, size)
+	local world = 2 * math.max(ex, ey)
+	local half = world * 0.5
+
 	local minx, miny = math.huge, math.huge
 	local maxx, maxy = -math.huge, -math.huge
 
 	local stars = {}
+	local index = {}
 	for i = 1, n do
 		local s = t.stars[i]
-		local class = starclass.by_id(s.class) or starclass.CLASSES[1]
-		local feature = starclass.feature_by_id(s.feature) or starclass.FEATURES[1]
+		local ground = terrain.by_id(s.terrain) or terrain.TERRAIN[1]
+		local feature = terrain.feature_by_id(s.feature) or terrain.FEATURES[1]
+		local x, y = hex.to_world(s.q, s.r, size)
 		stars[i] = {
 			id = i,
-			nx = s.x / (world * 0.5), ny = s.y / (world * 0.5),
-			x = s.x, y = s.y,
+			q = s.q, r = s.r,
+			x = x, y = y,
+			nx = x / half, ny = y / half,
 			name = s.name,
-			class = class.id,
-			class_label = class.label,
-			colour = class.colour,
-			radius = class.radius,
-			glow = class.glow,
+			terrain = ground.id,
+			terrain_label = ground.label,
+			biome = s.biome,
 			feature = feature.id,
 			feature_label = feature.label,
 			region = s.region,
-			size_jitter = s.jitter,
 			-- JSON has no integer/boolean distinction worth relying on across
 			-- two runtimes, so this is sent as 0/1 and normalised here.
 			habitable = (s.hab == 1 or s.hab == true),
 		}
-		if s.x < minx then minx = s.x end
-		if s.y < miny then miny = s.y end
-		if s.x > maxx then maxx = s.x end
-		if s.y > maxy then maxy = s.y end
+		index[hex.key(s.q, s.r)] = i
+		if x < minx then minx = x end
+		if y < miny then miny = y end
+		if x > maxx then maxx = x end
+		if y > maxy then maxy = y end
 
 		local rg = regions[s.region]
 		if rg then
 			rg.star_count = rg.star_count + 1
-			rg.cx = rg.cx + s.x
-			rg.cy = rg.cy + s.y
+			rg.cx = rg.cx + x
+			rg.cy = rg.cy + y
 		end
 	end
 
@@ -134,28 +148,32 @@ function M.decode(t)
 		end
 	end
 
+	-- Adjacency and region borders, straight off the lattice. Same scan order as
+	-- the generator's, so the neighbour lists come out identical rather than
+	-- merely equivalent.
 	local adjacency = {}
 	for i = 1, n do adjacency[i] = {} end
 
 	local neighbour_set = {}
 	for i = 1, #regions do neighbour_set[i] = {} end
 
-	local lanes = {}
-	for i = 1, #t.lanes do
-		local a, b = t.lanes[i].a, t.lanes[i].b
-		local sa, sb = stars[a], stars[b]
-		local dx, dy = sa.x - sb.x, sa.y - sb.y
-		local border = sa.region ~= sb.region
-		lanes[i] = {
-			a = a, b = b,
-			length = math.sqrt(dx * dx + dy * dy),
-			border = border,
-		}
-		adjacency[a][#adjacency[a] + 1] = b
-		adjacency[b][#adjacency[b] + 1] = a
-		if border then
-			neighbour_set[sa.region][sb.region] = true
-			neighbour_set[sb.region][sa.region] = true
+	local edge_count = 0
+	for i = 1, n do
+		local s = stars[i]
+		for d = 1, #hex.DIRECTIONS do
+			local dir = hex.DIRECTIONS[d]
+			local j = index[hex.key(s.q + dir[1], s.r + dir[2])]
+			if j then
+				adjacency[i][#adjacency[i] + 1] = j
+				if i < j then
+					edge_count = edge_count + 1
+					local ra, rb = s.region, stars[j].region
+					if ra ~= rb and neighbour_set[ra] and neighbour_set[rb] then
+						neighbour_set[ra][rb] = true
+						neighbour_set[rb][ra] = true
+					end
+				end
+			end
 		end
 	end
 	for i = 1, n do table.sort(adjacency[i]) end
@@ -166,18 +184,35 @@ function M.decode(t)
 		regions[i].neighbours = list
 	end
 
+	-- The sea: the band of field cells within reach of the coast. Not
+	-- transmitted, because it is exactly this subtraction and the client already
+	-- has both sides of it - and it goes through `land.shore`, the same function
+	-- the generator used, so the two arrays match element for element rather
+	-- than merely describing the same water.
+	local is_land = {}
+	for i = 1, n do is_land[hex.key(stars[i].q, stars[i].r)] = true end
+	local shore = land.shore(is_land, hex.field(radius), land.SEA_MARGIN)
+	local water = {}
+	for i = 1, #shore do
+		local q, r = shore[i][1], shore[i][2]
+		local x, y = hex.to_world(q, r, size)
+		water[i] = { q = q, r = r, x = x, y = y }
+	end
+
 	if n == 0 then
-		minx, miny, maxx, maxy = -world * 0.5, -world * 0.5, world * 0.5, world * 0.5
+		minx, miny, maxx, maxy = -half, -half, half, half
 	end
 
 	return {
 		seed = t.seed,
+		hex_size = size,
+		field_radius = radius,
 		stars = stars,
-		lanes = lanes,
+		water = water,
 		regions = regions,
 		adjacency = adjacency,
 		world_size = world,
-		bounds = { -world * 0.5, -world * 0.5, world * 0.5, world * 0.5 },
+		bounds = { -half, -half, half, half },
 		content = {
 			min_x = minx, min_y = miny, max_x = maxx, max_y = maxy,
 			centre_x = (minx + maxx) * 0.5,
@@ -187,10 +222,11 @@ function M.decode(t)
 		},
 		stats = {
 			star_count = n,
-			lane_count = #lanes,
+			water_count = #water,
+			edge_count = edge_count,
 			region_count = #regions,
-			mean_degree = n > 0 and (2 * #lanes / n) or 0,
-			connected = true, -- the server only ever emits a connected graph
+			mean_degree = n > 0 and (2 * edge_count / n) or 0,
+			connected = true, -- the server only ever emits a connected continent
 			reached = n,
 		},
 	}

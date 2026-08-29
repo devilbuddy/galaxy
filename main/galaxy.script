@@ -1,119 +1,65 @@
---- Generates a galaxy and uploads it to the mesh layers.
+--- Builds the map out of sprites and hands it to the rest of the game.
 --
--- Everything visual is built once per seed and then left alone: the camera
--- moves, the geometry does not. That is why the whole map costs six draw calls
--- and no per-frame CPU work beyond the parallax backdrop.
+-- Two layers, both stock Defold sprites, both from an atlas by *name*:
+--
+--   ground   one hex per land and sea tile, from /main/tiles.atlas
+--   glyph    one emoji per place worth naming, from /main/emoji.atlas
+--
+-- No material, no shader, no vertex buffer, no per-sprite constant - so the
+-- whole map is two draw calls (one per atlas) by construction rather than by
+-- care. What this replaced was seven mesh layers built from dynamic vertex
+-- buffers in Lua, six fragment shaders and a Voronoi territory module.
+--
+-- **Open country gets no glyph.** The hex underneath already says it is forest,
+-- so only a seat, a city or a holding is drawn on top - which is also what keeps
+-- the glyph layer to about a hundred sprites rather than one per tile.
+--
+-- The sprites are built once per **seed** and then left alone. Nothing here runs
+-- per frame, and a turn resolving does not touch them: fog and ownership are not
+-- drawn yet (see `knowledge`), and when they come back they come back as more
+-- sprites, not as a rebuild.
 
 local generate = require("galaxy.generate")
-local meshbuild = require("main.meshbuild")
 local store = require("main.store")
 local seen = require("main.seen")
 local backend = require("main.backend")
 local monarch = require("monarch.monarch")
-local sim_systems = require("galaxy.sim.systems")
-local config = require("galaxy.config")
-local rng = require("galaxy.rng")
 local theme = require("main.theme")
-local emoji_sheet = require("main.emoji_sheet")
-local territory = require("main.territory")
 
 -- A go.property number is stored as a 32-bit float, so any integer above 2^24
 -- cannot round-trip: 20260823 silently comes back as 20260824. For a game whose
--- whole premise is "this seed reproduces this galaxy", that is a correctness
--- bug, so seeds are kept inside the exactly-representable range and the
--- property is floored on the way in. Leave it at 0 to use the configured seed.
+-- whole premise is "this seed reproduces this map", that is a correctness bug,
+-- so seeds are kept inside the exactly-representable range and the property is
+-- floored on the way in. Leave it at 0 to use the configured seed.
 go.property("seed", 0)
 
 local MAX_SEED = 16777215
 
--- Layer sizes as fractions of world_size, so retuning the map's scale does not
--- silently change how the map looks. CORE_SCALE is the emoji glyph's base
--- half-extent; tools/render_map.py mirrors these numbers, so a size approved
--- in the sketch is the size the engine draws.
-local CORE_SCALE = 0.0034
-local WASH_SCALE = 0.0520
-local NEBULA_OVERSCAN = 2.2
-local DUST_COUNT = 350
+-- Sprite z. Only the ordering matters - depth testing is off and sprites sort by
+-- z - but a whole unit between them documents that *every* glyph draws above
+-- *every* tile, not just the one it stands on. A glyph at the same z as the
+-- ground would be covered by whichever neighbouring hex happened to sort later.
+local Z_GROUND, Z_GLYPH = 0, 1
 
--- Dotted ink lanes: dot pitch and dot radius, as fractions of world_size.
-local LANE_DOT_SPACING = 0.006
-local LANE_DOT_RADIUS = 0.0015
-
--- Territory as a political map (main/territory.lua): every owned system's
--- Voronoi cell, fused into provinces that tile and never overlap. The fill is
--- a flat saturated wash across the cells; the border is a thin solid pen line
--- along the province's edge, inset slightly into its own ground so two rivals
--- meeting draw two hugging lines rather than one disputed one. "Solid" is a
--- stroke of discs overlapped tighter than their own radius: the scallop that
--- leaves is under a percent of the width, and the lane layer's one material
--- (disc.fp) draws it without needing a second shader for a band.
-local TERRITORY_CAP = 0.05
-local TERRITORY_FILL_ALPHA = 0.30
-local BORDER_STROKE_RADIUS = 0.0011
-local BORDER_STROKE_SPACING = 0.0010
-local BORDER_INSET = 0.0022
-local BORDER_ALPHA = 0.92
--- Two inks only - interior sepia and border slate. Ten region-coloured dotted
--- lines on parchment is spaghetti; border-vs-interior is the strategic
--- distinction, so it is the one that keeps a colour of its own.
-local LANE_INK = { 0.45, 0.36, 0.24, 0.55 }
-local LANE_BORDER_INK = { 0.35, 0.36, 0.42, 0.50 }
-
--- The drop shadow under every glyph - dark sepia, offset down-right - is what
--- makes an emoji read as a sticker on the paper rather than floating clip art.
-local SHADOW_COLOUR = { 0.25, 0.19, 0.11 }
-local SHADOW_ALPHA = 0.30
-
--- Layer depths. Only the ordering matters (depth testing is off), but keeping
--- them distinct documents the intended stacking.
-local Z_NEBULA, Z_DUST, Z_WASH, Z_LANE, Z_GLOW, Z_OWNER, Z_STAR = -50, -40, -30, -20, -10, -5, 0
-
--- How visible a system is, by what the player knows about it. Unknown systems
--- are dimmed rather than hidden: the geometry is public, so the map stays
--- readable and the fog reads as "not scouted" rather than "not there".
-local ALPHA_LIVE, ALPHA_REMEMBERED, ALPHA_UNKNOWN = 1.0, 0.62, 0.34
-
---- Per-system knowledge for the current game, or nil when just browsing a seed.
--- Returns visibility alpha and the owning player (0 for none/unknown).
+--- Per-tile knowledge for the current game, or nil when just browsing a seed.
+--
+-- **Returns nothing useful yet.** Fog and ownership are not drawn in this pass -
+-- the ground is the biome's own colour and nothing is tinted - so this exists as
+-- the single place that decision will be made when they come back, exactly as it
+-- was before. `store.playback_owners` still routes through here, which is what
+-- lets a digest replay recolour the map without the playback knowing how the map
+-- is drawn.
 local function knowledge(self, id)
 	local view = self.view
-	if not view then return ALPHA_LIVE, 0 end
+	if not view then return 0 end
 	local entry = view.systems[tostring(id)]
-	if not entry then return ALPHA_UNKNOWN, 0 end
-	-- While a digest is being played back the map shows the turn being
-	-- replayed, not today. This is the only place ownership colour is decided,
-	-- so the override here moves the wash, the borders and the star tints
-	-- together - which is the whole point of watching it rather than reading it.
-	--
-	-- Fog is *not* rewound with it. What a player could see forty turns ago is
-	-- not in the digest, and dimming half the map to guess at it would hide the
-	-- very movement the playback exists to show.
+	if not entry then return 0 end
 	local past = store.playback_owners
-	local owner = past and (past[id] or 0) or (entry.owner or 0)
-	return entry.live and ALPHA_LIVE or ALPHA_REMEMBERED, owner
+	return past and (past[id] or 0) or (entry.owner or 0)
 end
 
--- The map draws player colours from the *ink* palette - the same hues as the
--- chrome's bright set, hand-darkened to hold on parchment. The chrome stays on
--- `player_palette`; a white marker on cream paper is invisible.
-local function player_ink(index)
-	local palette = config.player_palette_ink
-	return palette[((index - 1) % #palette) + 1]
-end
-
--- The one map-side exception: the territory wash uses the *bright* palette.
--- A stain wants saturation - watercolour over cream - where a marker or a
--- label wants ink; the dark ink at wash alphas reads as a grey smudge.
-local function player_wash(index)
-	local palette = config.player_palette
-	return palette[((index - 1) % #palette) + 1]
-end
-
---- Whether the game view knows this system as somebody's capital. Game state,
--- not map data - browsing a bare seed never draws a castle - and read off the
--- same view entry `knowledge` uses, so a remembered enemy capital keeps its
--- castle under fog. Deliberately not a third return of `knowledge`: its
--- multi-return already expands into argument lists, which is fragile enough.
+--- Whether the game view knows this tile as somebody's seat. Game state, not map
+--- data - browsing a bare seed never draws a castle.
 local function is_capital(self, id)
 	local view = self.view
 	if not view then return false end
@@ -121,369 +67,133 @@ local function is_capital(self, id)
 	return entry ~= nil and (entry.capital_of or 0) ~= 0
 end
 
---- Region territory washes: one soft blob per star, tinted by its region.
--- Overlapping blobs merge into an organic territory outline, which reads far
--- better than one circle drawn at each region's centroid.
---- Territory wash.
+--- Throw away the sprites of the map currently on screen.
 --
--- In a game this shows *ownership*, which is what a player needs to read at a
--- glance; the region tint it replaces is scenery. Outside a game (browsing a
--- seed) it falls back to regions so the map is not blank.
--- How big each kind of place is drawn. The emoji itself now says what a place
--- is *for*, so size is legibility rather than the only cue - but a colony
--- still reads bigger than terrain, and a capital biggest of all. Star-class
--- variance is damped (0.85 + 0.3r) because a glyph squeezed small stops being
--- readable long before a disc does.
-local KIND_SCALE = { colony = 1.45, outpost = 1.15, waypoint = 0.70 }
-local CAPITAL_SCALE = 1.9
-
---- A glyph's half-extent in world units. tools/render_map.py mirrors this
---- formula exactly; retune it there first, on a sketch.
-local function star_half(g, i, base, capital)
-	local s = g.stars[i]
-	local k = capital and CAPITAL_SCALE
-		or KIND_SCALE[sim_systems.kind(g, i)] or 1
-	return base * k * (0.85 + 0.3 * s.radius * s.size_jitter)
+-- Deleting the game objects rather than hiding them: a map is rebuilt only when
+-- the seed changes, which is at most once per screen, and several hundred
+-- objects left parked would count against `collection.max_instances` for the
+-- rest of the session.
+local function clear_sprites(self)
+	local live = self.sprites
+	if not live then return end
+	for i = 1, #live do go.delete(live[i]) end
+	self.sprites = nil
 end
 
-local function build_wash(self, g, world)
-	if not self.view then
-		-- Browsing a seed: the old soft blobs, region tints darkened to hold
-		-- on parchment. There is no ownership to draw a political map of.
-		self.territory_cells = nil
-		local b = meshbuild.new(#g.stars)
-		local radius = world * WASH_SCALE
-		for i = 1, #g.stars do
+--- Spawn the ground and the glyphs.
+--
+-- A tile PNG is exactly the bounding box of a flat-top hexagon (main/theme.lua's
+-- M.TILE_PX, proved by tools/test_hex.lua), so drawing it `2 * hex_size` wide at
+-- the tile's own centre *is* the tiling. The transparent corners overlap the
+-- neighbour, which costs nothing: textures are premultiplied, so a transparent
+-- pixel over an opaque one is an exact no-op.
+local function build_sprites(self, g)
+	clear_sprites(self)
+
+	local live = {}
+	local tile_scale = (2 * g.hex_size) / theme.TILE_PX.w
+	local scale = vmath.vector3(tile_scale, tile_scale, 1)
+
+	-- The sea first. It is scenery in the most literal sense - not in the graph,
+	-- never owned, never selected - so it is drawn and then never referred to.
+	local sea = hash(theme.sea_tile())
+	for i = 1, #g.water do
+		local w = g.water[i]
+		local id = factory.create("#tilefactory",
+			vmath.vector3(w.x, w.y, Z_GROUND), nil, nil, scale)
+		sprite.play_flipbook(msg.url(nil, id, "sprite"), sea)
+		live[#live + 1] = id
+	end
+
+	for i = 1, #g.stars do
+		local s = g.stars[i]
+		local id = factory.create("#tilefactory",
+			vmath.vector3(s.x, s.y, Z_GROUND), nil, nil, scale)
+		sprite.play_flipbook(msg.url(nil, id, "sprite"), hash(theme.tile_for(g, i)))
+		live[#live + 1] = id
+	end
+
+	-- Glyphs, for the places worth naming. `emoji_for` returns nil for open
+	-- country, which is the whole reason this loop is shorter than the one above.
+	local images = require("main.emoji_ui")
+	for i = 1, #g.stars do
+		local capital = is_capital(self, i)
+		local name = theme.emoji_for(g, i, capital)
+		if name then
 			local s = g.stars[i]
-			local rc = g.regions[s.region].colour
-			b:sprite(s.x, s.y, radius, Z_WASH,
-				rc[1] * 0.6 + 0.25, rc[2] * 0.6 + 0.25, rc[3] * 0.6 + 0.25, 0.14)
-		end
-		b:apply("/galaxy#wash")
-		return
-	end
-
-	-- In a game: provinces. Built here and consumed by build_lanes for the
-	-- border strokes - present() and repaint() both call build_wash first,
-	-- and that ordering is this cache's contract.
-	local cells = territory.build(g, function(id)
-		local alpha, owner = knowledge(self, id)
-		return owner, alpha
-	end, world * TERRITORY_CAP)
-	self.territory_cells = cells
-
-	-- Fan-fill every cell from its own system: cells are star-convex around
-	-- their site even after the border jitter, so the fan cannot fold.
-	local verts = 0
-	for i = 1, #cells do
-		verts = verts + (#cells[i].poly / 2) * 3
-	end
-	-- A player can hold nothing - dead, or a fresh spectator - and a
-	-- zero-vertex buffer is a native crash, not an empty mesh. One invisible
-	-- triangle keeps the buffer real.
-	local empty = verts == 0
-	if empty then verts = 3 end
-	local b = meshbuild.new_verts(verts)
-	if empty then b:tri(0, 0, 0, 0, 0, 0, Z_WASH, 0, 0, 0, 0) end
-	for i = 1, #cells do
-		local cell = cells[i]
-		local s = g.stars[cell.site]
-		local c = player_wash(cell.owner)
-		local a = TERRITORY_FILL_ALPHA * cell.alpha
-		local poly = cell.poly
-		local n = #poly
-		for p = 1, n, 2 do
-			local qx, qy = poly[(p + 1) % n + 1], poly[(p + 1) % n + 2]
-			b:tri(s.x, s.y, poly[p], poly[p + 1], qx, qy, Z_WASH,
-				c[1], c[2], c[3], a)
-		end
-	end
-	b:apply("/galaxy#wash")
-end
-
---- Dotted ink paths, along a gentle bow rather than a ruler line.
---
--- The bow is a quadratic bezier whose bulge is a pure function of the lane's
--- endpoint indices - deterministic per seed with no RNG stream, and the same
--- formula tools/render_map.py sketches with. Amplitude is capped small (7% of
--- the lane) because captains, route previews and playback markers travel the
--- *straight* line between the endpoints; a marker must never sit visibly off
--- its own path.
---
--- Each dot is its own quad through disc.fp, which is what makes the count a
--- two-pass build: dots are collected first, because the buffer must be
--- allocated at exactly the size it will fill.
-local function lane_dots(g, l, spacing, out)
-	local sa, sb = g.stars[l.a], g.stars[l.b]
-	local dx, dy = sb.x - sa.x, sb.y - sa.y
-	local len = math.sqrt(dx * dx + dy * dy)
-	if len < 1e-6 then return end
-	local h = (l.a * 7919 + l.b * 104729) % 997
-	local amp = (h / 997 - 0.5) * 0.14 * len
-	local cx = (sa.x + sb.x) * 0.5 - dy / len * amp
-	local cy = (sa.y + sb.y) * 0.5 + dx / len * amp
-
-	-- Walk the curve at fine steps, dropping a dot each `spacing` of arc,
-	-- inset half a step from the ends so no dot peeks out from under a glyph.
-	local steps = math.max(8, math.floor(len / 8))
-	local acc, nxt = 0, spacing * 0.5
-	local lx, ly = sa.x, sa.y
-	for i = 1, steps do
-		local t = i / steps
-		local u = 1 - t
-		local x = u * u * sa.x + 2 * u * t * cx + t * t * sb.x
-		local y = u * u * sa.y + 2 * u * t * cy + t * t * sb.y
-		local ddx, ddy = x - lx, y - ly
-		acc = acc + math.sqrt(ddx * ddx + ddy * ddy)
-		while acc >= nxt do
-			out[#out + 1] = x
-			out[#out + 1] = y
-			nxt = nxt + spacing
-		end
-		lx, ly = x, y
-	end
-end
-
---- The pen line along a province's edge.
---
--- Walks the stroke polylines main/territory.lua handed to build_wash (built
--- there because both layers describe the same cells; the calling order is the
--- cache's contract). Each stroke is inset a little toward its own system, so
--- where two rivals meet their two lines hug rather than fight over one
--- disputed edge - and pure geometry from ownership, so a playback's rewound
--- owners redraw it exactly like the wash. That is why `repaint` rebuilds this
--- layer too.
-local function territory_borders(self, g, world, emit)
-	local cells = self.territory_cells
-	if not cells then return end
-	local spacing = world * BORDER_STROKE_SPACING
-	local inset = world * BORDER_INSET
-
-	for i = 1, #cells do
-		local cell = cells[i]
-		local s = g.stars[cell.site]
-		local ink = player_wash(cell.owner)
-		local a = BORDER_ALPHA * cell.alpha
-		for k = 1, #cell.strokes do
-			local pts = cell.strokes[k]
-			-- Inset every point toward the site, then dot along the polyline.
-			local acc, nxt = 0, 0
-			local lx, ly
-			for p = 1, #pts, 2 do
-				local dx, dy = s.x - pts[p], s.y - pts[p + 1]
-				local d = math.sqrt(dx * dx + dy * dy)
-				local x = pts[p] + (d > 1e-6 and dx / d * inset or 0)
-				local y = pts[p + 1] + (d > 1e-6 and dy / d * inset or 0)
-				if lx then
-					local sx, sy = x - lx, y - ly
-					local seg = math.sqrt(sx * sx + sy * sy)
-					if seg > 1e-9 then
-						while acc + seg >= nxt do
-							local t = (nxt - acc) / seg
-							emit(lx + sx * t, ly + sy * t, ink, a)
-							nxt = nxt + spacing
-						end
-						acc = acc + seg
-					end
-				end
-				lx, ly = x, y
+			local frac = capital and theme.CAPITAL_GLYPH_SCALE
+				or theme.GLYPH_SCALE[require("galaxy.sim.systems").kind(g, i)]
+			if frac and frac > 0 then
+				local gs = (2 * g.hex_size * frac) / theme.GLYPH_PX
+				local id = factory.create("#placefactory",
+					vmath.vector3(s.x, s.y, Z_GLYPH), nil, nil,
+					vmath.vector3(gs, gs, 1))
+				sprite.play_flipbook(msg.url(nil, id, "sprite"), hash(images[name]))
+				live[#live + 1] = id
 			end
 		end
 	end
+
+	self.sprites = live
+	return #live
 end
 
-local function build_lanes(self, g, world)
-	local spacing = world * LANE_DOT_SPACING
-	local radius = world * LANE_DOT_RADIUS
-	local border_radius = world * BORDER_STROKE_RADIUS
-	-- Pass one: where every dot goes and what ink it takes, flat arrays.
-	local dots, inks = {}, {}
-	for i = 1, #g.lanes do
-		local l = g.lanes[i]
-		local ink = l.border and LANE_BORDER_INK or LANE_INK
-		-- A lane is only as visible as the dimmer of the systems it joins.
-		local va = select(1, knowledge(self, l.a))
-		local vb = select(1, knowledge(self, l.b))
-		local before = #dots
-		lane_dots(g, l, spacing, dots)
-		local a = ink[4] * math.min(va, vb)
-		for _ = before + 2, #dots, 2 do
-			inks[#inks + 1] = ink
-			inks[#inks + 1] = a
-		end
-	end
-	local lane_count = #dots / 2
-	-- Territory borders ride the same layer: they are pen dots too, and they
-	-- must repaint with ownership.
-	territory_borders(self, g, world, function(x, y, ink, a)
-		dots[#dots + 1] = x
-		dots[#dots + 1] = y
-		inks[#inks + 1] = ink
-		inks[#inks + 1] = a
-	end)
-	-- Pass two: one quad per dot.
-	local b = meshbuild.new(#dots / 2)
-	for i = 1, #dots / 2 do
-		local ink, a = inks[i * 2 - 1], inks[i * 2]
-		b:sprite(dots[i * 2 - 1], dots[i * 2],
-			i <= lane_count and radius or border_radius, Z_LANE,
-			ink[1], ink[2], ink[3], a)
-	end
-	b:apply("/galaxy#lanes")
-end
-
---- Drop shadows, one soft dark disc under each glyph, offset down-right.
--- Lives on the old glow layer - same quad count, same draw call - because a
--- shadow is what a halo becomes when the ground turns to paper.
-local function build_shadows(self, g, world)
-	local b = meshbuild.new(#g.stars)
-	local base = world * CORE_SCALE
-	local c = SHADOW_COLOUR
-	for i = 1, #g.stars do
-		local s = g.stars[i]
-		local alpha = knowledge(self, i)
-		local h = star_half(g, i, base, is_capital(self, i))
-		b:sprite(s.x + h * 0.16, s.y - h * 0.20, h * 1.15, Z_GLOW,
-			c[1], c[2], c[3], SHADOW_ALPHA * alpha)
-	end
-	b:apply("/galaxy#glow")
-end
-
---- Ownership rings. One quad per system; unowned systems contribute a
---- transparent quad so the buffer size stays constant and predictable.
-local function build_owners(self, g, world)
-	local b = meshbuild.new(#g.stars)
-	local base = world * CORE_SCALE
-	for i = 1, #g.stars do
-		local s = g.stars[i]
-		local alpha, owner = knowledge(self, i)
-		if owner and owner > 0 then
-			local c = player_ink(owner)
-			-- The ring quad sized off the glyph, so ring.fp's annulus lands
-			-- just outside the emoji's own edge.
-			local size = star_half(g, i, base, is_capital(self, i)) * 1.6
-			-- Remembered ownership is drawn fainter: it may already be stale.
-			b:sprite(s.x, s.y, size, Z_OWNER, c[1], c[2], c[3], 0.95 * alpha)
-		else
-			b:sprite(s.x, s.y, 0, Z_OWNER, 0, 0, 0, 0)
-		end
-	end
-	b:apply("/galaxy#owners")
-end
-
---- The systems themselves: one emoji glyph per star, sampled from the sheet.
--- main/theme.lua decides which glyph a place is drawn as; main/emoji_sheet.lua
--- (generated by tools/import_emoji.py) says where it sits in the texture. The
--- vertex colour is white with fog in the alpha - emoji.fp multiplies the
--- texel by it, so tinting would discolour the art.
-local function build_stars(self, g, world)
-	local b = meshbuild.new(#g.stars)
-	local base = world * CORE_SCALE
-	for i = 1, #g.stars do
-		local s = g.stars[i]
-		-- Captured, never passed straight through: knowledge() returns two
-		-- values and an expanded multi-return would land `owner` in u0.
-		local alpha = knowledge(self, i)
-		local capital = is_capital(self, i)
-		local uv = emoji_sheet[theme.emoji_for(g, i, capital)]
-		local h = star_half(g, i, base, capital)
-		b:sprite_uv(s.x, s.y, h, Z_STAR, 1, 1, 1, alpha,
-			uv.u0, uv.v0, uv.u1, uv.v1)
-	end
-	b:apply("/galaxy#stars")
-end
-
---- A single oversized quad for the parchment mottle. The texture carries only
--- the deviation from the flat paper - the base is the clear colour - so the
--- vertex alpha here is the mottle's overall strength.
-local function build_nebula(world)
-	local b = meshbuild.new(1)
-	local half = world * NEBULA_OVERSCAN * 0.5
-	b:rect(0, 0, half, half, Z_NEBULA, 1, 1, 1, 0.9)
-	b:apply("/backdrop#nebula")
-end
-
---- Paper flecks. Derived from the seed like everything else, so the same seed
---- reproduces the backdrop as well as the map. What was a starfield is now a
---- sparse scatter of dark specks in the paper's grain - the layer keeps its
---- tint uniform, so the close-zoom fade keeps working untouched.
-local function build_dust(seed, world)
-	local b = meshbuild.new(DUST_COUNT)
-	local r = rng.stream(seed, "dust")
-	local half = world * NEBULA_OVERSCAN * 0.5
-	for _ = 1, DUST_COUNT do
-		local x = r:range(-half, half)
-		local y = r:range(-half, half)
-		local size = world * r:range(0.0004, 0.0012)
-		local a = r:range(0.04, 0.10)
-		b:sprite(x, y, size, Z_DUST, 0.35, 0.28, 0.18, a)
-	end
-	b:apply("/backdrop#dust")
-end
-
---- Upload a galaxy to the mesh layers and hand it to the rest of the game.
--- `source` is "server" or "local", purely so the HUD can say which.
---- Recolour just the layers that encode who owns what.
+--- Recolour just what encodes who owns what.
 --
--- A playback step changes ownership and nothing else, so the nebula, the dust,
--- the lanes and the glow are all still correct - and rebuilding six layers
--- forty times to change two would make the transport controls feel like a
--- slideshow. Neither of these touches `store.revision` either: a repaint is not
--- a new galaxy and must not clear a selection or re-frame the camera.
-local function repaint(self, g)
-	build_wash(self, g, g.world_size)
-	build_owners(self, g, g.world_size)
-	-- The lane layer carries the territory borders now, and a border follows
-	-- ownership - so a playback step has to redraw it with the other two.
-	build_lanes(self, g, g.world_size)
+-- A playback step changes ownership and nothing else. Nothing draws ownership
+-- yet, so this is a no-op - but it is kept, and `store.playback_revision` still
+-- drives it, because this is where the ownership sprites will be updated and the
+-- playback must not have to learn a new handshake when they arrive.
+local function repaint(self, g) -- luacheck: ignore
 end
 
---- Build every mesh for a galaxy and hand the camera its extent.
+--- Build the map for a galaxy and hand the camera its extent.
 --
--- Called for a new galaxy *and* whenever a turn resolves, because the fog and
--- ownership the meshes encode have changed. Only the first case is allowed to
--- disturb what the player is looking at.
+-- Called for a new map *and* whenever a turn resolves, because it is also where
+-- the selection and the camera framing are settled. Only a genuinely new seed is
+-- allowed to disturb what the player is looking at - a poll that finds a
+-- resolved turn must not reset the zoom or close the card the player is reading.
 local function present(self, g, source, note)
 	local new_galaxy = self.presented_seed ~= g.seed
 	local t0 = os.clock()
-	local world = g.world_size
-	build_nebula(world)
-	build_dust(g.seed, world)
-	build_wash(self, g, world)
-	build_lanes(self, g, world)
-	build_shadows(self, g, world)
-	build_owners(self, g, world)
-	build_stars(self, g, world)
-	local meshed = (os.clock() - t0) * 1000
+	-- Only a different seed needs new sprites. Ownership and fog do not exist on
+	-- the map yet, so a resolved turn changes nothing drawn - and respawning
+	-- several hundred game objects every ten-second poll would be the most
+	-- expensive thing in the project.
+	local count = self.sprites and #self.sprites or 0
+	if new_galaxy or not self.sprites then
+		count = build_sprites(self, g)
+	end
+	local built = (os.clock() - t0) * 1000
 
 	store.galaxy = g
 	store.source = source
 	store.status = nil
-	-- Only a different galaxy invalidates the selection. Clearing it on every
-	-- rebuild deselected the player's system, and closed the card describing
-	-- it, each time a turn resolved.
+	-- Only a different map invalidates the selection. Clearing it on every
+	-- rebuild deselected the player's tile, and closed the card describing it,
+	-- each time a turn resolved.
 	if new_galaxy then store.selected = nil end
 	store.revision = store.revision + 1
 	self.presented_seed = g.seed
 
 	print(string.format(
-		"galaxy seed=%d  %d stars  %d lanes  %d regions  degree %.2f  source=%s%s",
-		g.seed, g.stats.star_count, g.stats.lane_count, g.stats.region_count,
+		"map seed=%d  %d land  %d sea  %d regions  degree %.2f  source=%s%s",
+		g.seed, g.stats.star_count, g.stats.water_count, g.stats.region_count,
 		g.stats.mean_degree, source, note and ("  " .. note) or ""))
-	print(string.format("  meshed in %.0f ms", meshed))
+	print(string.format("  %d sprites in %.0f ms", count, built))
 
 	msg.post("/camera#camera_script", "map_ready", {
-		world = world,
+		world = g.world_size,
 		centre_x = g.content.centre_x,
 		centre_y = g.content.centre_y,
 		content_width = g.content.width,
 		content_height = g.content.height,
 	})
 
-	-- Opening a game lands on your capital, not the middle of the galaxy. The
-	-- widest zoom no longer shows the whole map, so the old opening view - the
-	-- geometric centre - could be a screenful of scenery with your empire off
-	-- the edge. Once per game: after that the camera is the player's.
+	-- Opening a game lands on your seat, not the middle of the map. The widest
+	-- zoom does not show the whole map, so the geometric centre could be a
+	-- screenful of ocean with your realm off the edge. Once per game: after that
+	-- the camera is the player's.
 	if new_galaxy and self.view and self.view.capital then
 		local cap = g.stars[self.view.capital]
 		if cap then
@@ -645,8 +355,6 @@ end
 local POLL_SECONDS = 10
 
 function init(self)
-	self.backdrop = msg.url(nil, "/backdrop", nil)
-	self.backdrop_fade = nil
 	self.since_poll = 0
 	self.view = nil
 
@@ -662,18 +370,6 @@ function init(self)
 	load_galaxy(self, self.seed)
 end
 
--- The backdrop is a fixed-resolution texture spread over the whole world, so
--- magnifying it far enough turns it into a smear. Fading it out as the player
--- zooms in keeps the close-up view clean and matches how a map should behave:
--- ambience at a distance, detail up close.
-local BACKDROP_FULL_ZOOM = 0.6   -- at or below this, the backdrop is at full strength
-local BACKDROP_GONE_ZOOM = 2.2   -- at or above this, it has faded out entirely
-
--- The region washes are smooth rather than blurry, but at close range they
--- dominate the frame. They are eased back rather than removed: territory still
--- has to be readable when you are looking at two systems side by side.
-local WASH_MIN_STRENGTH = 0.45
-
 function update(self, dt)
 	-- A playback step has changed what the map should be showing.
 	if self.repainted ~= store.playback_revision then
@@ -684,9 +380,9 @@ function update(self, dt)
 	-- While a game is open, keep asking: a turn may resolve at any moment, and
 	-- the request is also what drives the server's lazy turn resolution.
 	--
-	-- Not during a playback: a turn landing mid-replay would rebuild the meshes
-	-- underneath it and jump the map back to today, and the digest the player is
-	-- watching would be superseded by one they have not seen.
+	-- Not during a playback: a turn landing mid-replay would jump the map back
+	-- to today, and the digest the player is watching would be superseded by one
+	-- they have not seen.
 	if self.game and store.game_id and not store.playback_active then
 		-- Advance the sampled server clock so the countdown ticks smoothly
 		-- between polls rather than jumping every ten seconds.
@@ -698,22 +394,13 @@ function update(self, dt)
 		end
 	end
 
-	-- Parallax: the backdrop follows the camera part of the way, so it drifts
-	-- more slowly than the map and reads as further away.
-	local cam = store.camera
-	go.set_position(vmath.vector3(cam.x * 0.55, cam.y * 0.55, 0), self.backdrop)
+end
 
-	local t = (cam.zoom - BACKDROP_FULL_ZOOM) / (BACKDROP_GONE_ZOOM - BACKDROP_FULL_ZOOM)
-	t = t < 0 and 0 or (t > 1 and 1 or t)
-	local fade = 1.0 - t * t * (3 - 2 * t) -- smoothstep, so the change is not abrupt
-	if fade ~= self.backdrop_fade then
-		self.backdrop_fade = fade
-		local tint = vmath.vector4(1, 1, 1, fade)
-		go.set("/backdrop#nebula", "tint", tint)
-		go.set("/backdrop#dust", "tint", tint)
-		local wash = WASH_MIN_STRENGTH + (1.0 - WASH_MIN_STRENGTH) * fade
-		go.set("/galaxy#wash", "tint", vmath.vector4(1, 1, 1, wash))
-	end
+--- Monarch is tearing the screen down. The sprites are game objects in this
+--- collection so they go with it either way, but deleting them explicitly keeps
+--- the instance count honest if the screen is ever reused rather than unloaded.
+function final(self)
+	clear_sprites(self)
 end
 
 function on_message(self, message_id, message)

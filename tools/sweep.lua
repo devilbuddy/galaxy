@@ -96,7 +96,6 @@ local race_ids = races.ids()
 for s = 1, math.min(seed_count, #SEEDS) do
 	local seed = SEEDS[s]
 	local galaxy = gen.build(seed)
-	local lengths = path.lane_lengths(galaxy)
 	local players = {}
 	for i = 1, player_count do
 		players[i] = { id = "ai" .. i, name = bots.name(i),
@@ -106,7 +105,7 @@ for s = 1, math.min(seed_count, #SEEDS) do
 
 	local won, fight = nil, nil
 	for turn = 1, max_turns do
-		local events = res.turn(galaxy, state, bots.all_orders(galaxy, state), lengths)
+		local events = res.turn(galaxy, state, bots.all_orders(galaxy, state))
 		for e = 1, #events do
 			if not fight and events[e].kind == "battle" then fight = turn end
 		end

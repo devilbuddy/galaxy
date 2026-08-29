@@ -1,5 +1,5 @@
--- Dump a full generated galaxy as JSON for the offline renderer.
--- Usage: luajit tools/preview_map.lua <seed> [star_count] [capitals]
+-- Dump a full generated map as JSON for the offline renderer.
+-- Usage: luajit tools/preview_map.lua <seed> [capitals]
 --
 -- `capitals` places that many players' capitals with the real opening-state
 -- picker (galaxy/sim/state.lua), so the sketch can judge the capital glyph
@@ -11,11 +11,9 @@ local systems = require("galaxy.sim.systems")
 local theme = require("main.theme")
 
 local seed = tonumber(arg[1]) or 1
-local star_count = tonumber(arg[2])
-local cfg = (star_count and star_count > 0) and { star_count = star_count } or nil
-local g = gen.build(seed, cfg)
+local g = gen.build(seed)
 
-local capital_count = tonumber(arg[3]) or 0
+local capital_count = tonumber(arg[2]) or 0
 local capital_of = {}
 if capital_count > 0 then
 	local state = require("galaxy.sim.state")
@@ -31,21 +29,32 @@ if capital_count > 0 then
 	end
 end
 
-local stars = {}
+-- `tile` and `emoji` are the two art names the engine will also resolve, both
+-- through main/theme.lua - so a sketch that looks right is a sketch of the same
+-- decisions the renderer makes, not a parallel guess at them. `emoji` is null
+-- for open country on purpose: the hex underneath already says what it is.
+local tiles = {}
 for i, s in ipairs(g.stars) do
-	stars[i] = { x = s.x, y = s.y, name = s.name, class = s.class, region = s.region,
-		r = s.radius * s.size_jitter, glow = s.glow, c = s.colour, feature = s.feature,
+	tiles[i] = { x = s.x, y = s.y, q = s.q, r = s.r, name = s.name,
+		terrain = s.terrain, biome = s.biome, feature = s.feature, region = s.region,
 		kind = systems.kind(g, i),
+		tile = theme.tile_for(g, i),
 		emoji = theme.emoji_for(g, i, capital_of[i] ~= nil),
 		capital = capital_of[i] }
 end
-local lanes = {}
-for i, l in ipairs(g.lanes) do lanes[i] = { a = l.a, b = l.b, border = l.border } end
+
+local water = {}
+for i, w in ipairs(g.water) do
+	water[i] = { x = w.x, y = w.y, q = w.q, r = w.r }
+end
+
 local regions = {}
 for i, r in ipairs(g.regions) do
 	regions[i] = { name = r.name, colour = r.colour, cx = r.cx, cy = r.cy, n = r.star_count }
 end
-io.stderr:write(string.format("seed %d: %d stars %d lanes %d regions %d capitals\n",
-	seed, #stars, #lanes, #regions, capital_count))
-print(json.tojson({ seed = seed, world = g.world_size, stars = stars, lanes = lanes,
-	regions = regions, emoji = theme.EMOJI }))
+
+io.stderr:write(string.format("seed %d: %d land %d sea %d regions %d capitals\n",
+	seed, #tiles, #water, #regions, capital_count))
+print(json.tojson({ seed = seed, world = g.world_size, hex_size = g.hex_size,
+	tiles = tiles, water = water, regions = regions,
+	sea_tile = theme.sea_tile(), emoji = theme.EMOJI }))

@@ -1,5 +1,0 @@
-material: "/main/materials/galaxy_wash.material"
-vertices: "/main/meshes/wash.buffer"
-primitive_type: PRIMITIVE_TRIANGLES
-position_stream: "position"
-normal_stream: ""

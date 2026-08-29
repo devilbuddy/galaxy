@@ -1,0 +1,174 @@
+{
+ "biomes": [
+  "greenlands",
+  "sandlands",
+  "drylands",
+  "deadlands",
+  "icelands"
+ ],
+ "extrude_borders": 4,
+ "margin": 4,
+ "source": "/Users/magnusornebring/Downloads/foundation_tiles",
+ "terrain": {
+  "forest": "forest",
+  "hills": "hills",
+  "mountains": "mountains",
+  "plains": "tundra",
+  "water": "water",
+  "woods": "trees"
+ },
+ "tile_height": 207,
+ "tile_width": 238,
+ "tiles": {
+  "tile_deadlands_forest": {
+   "biome": "deadlands",
+   "source": "deadlands/2-deadlands_forest.png",
+   "terrain": "forest"
+  },
+  "tile_deadlands_hills": {
+   "biome": "deadlands",
+   "source": "deadlands/6-deadlands_hills.png",
+   "terrain": "hills"
+  },
+  "tile_deadlands_mountains": {
+   "biome": "deadlands",
+   "source": "deadlands/9-deadlands_mountains.png",
+   "terrain": "mountains"
+  },
+  "tile_deadlands_plains": {
+   "biome": "deadlands",
+   "source": "deadlands/3-deadlands_tundra.png",
+   "terrain": "plains"
+  },
+  "tile_deadlands_water": {
+   "biome": "deadlands",
+   "source": "deadlands/5-deadlands_water.png",
+   "terrain": "water"
+  },
+  "tile_deadlands_woods": {
+   "biome": "deadlands",
+   "source": "deadlands/4-deadlands_trees.png",
+   "terrain": "woods"
+  },
+  "tile_drylands_forest": {
+   "biome": "drylands",
+   "source": "drylands/2-drylands_forest.png",
+   "terrain": "forest"
+  },
+  "tile_drylands_hills": {
+   "biome": "drylands",
+   "source": "drylands/6-drylands_hills.png",
+   "terrain": "hills"
+  },
+  "tile_drylands_mountains": {
+   "biome": "drylands",
+   "source": "drylands/9-drylands_mountains.png",
+   "terrain": "mountains"
+  },
+  "tile_drylands_plains": {
+   "biome": "drylands",
+   "source": "drylands/3-drylands_tundra.png",
+   "terrain": "plains"
+  },
+  "tile_drylands_water": {
+   "biome": "drylands",
+   "source": "drylands/5-drylands_water.png",
+   "terrain": "water"
+  },
+  "tile_drylands_woods": {
+   "biome": "drylands",
+   "source": "drylands/4-drylands_trees.png",
+   "terrain": "woods"
+  },
+  "tile_greenlands_forest": {
+   "biome": "greenlands",
+   "source": "greenlands/2-greenlands_forest.png",
+   "terrain": "forest"
+  },
+  "tile_greenlands_hills": {
+   "biome": "greenlands",
+   "source": "greenlands/6-greenlands_hills.png",
+   "terrain": "hills"
+  },
+  "tile_greenlands_mountains": {
+   "biome": "greenlands",
+   "source": "greenlands/9-greenlands_mountains.png",
+   "terrain": "mountains"
+  },
+  "tile_greenlands_plains": {
+   "biome": "greenlands",
+   "source": "greenlands/3-greenlands_tundra.png",
+   "terrain": "plains"
+  },
+  "tile_greenlands_water": {
+   "biome": "greenlands",
+   "source": "greenlands/5-greenlands_water.png",
+   "terrain": "water"
+  },
+  "tile_greenlands_woods": {
+   "biome": "greenlands",
+   "source": "greenlands/4-greenlands_trees.png",
+   "terrain": "woods"
+  },
+  "tile_icelands_forest": {
+   "biome": "icelands",
+   "source": "icelands/2-icelands_forest.png",
+   "terrain": "forest"
+  },
+  "tile_icelands_hills": {
+   "biome": "icelands",
+   "source": "icelands/6-icelands_hills.png",
+   "terrain": "hills"
+  },
+  "tile_icelands_mountains": {
+   "biome": "icelands",
+   "source": "icelands/9-icelands_mountains.png",
+   "terrain": "mountains"
+  },
+  "tile_icelands_plains": {
+   "biome": "icelands",
+   "source": "icelands/3-icelands_tundra.png",
+   "terrain": "plains"
+  },
+  "tile_icelands_water": {
+   "biome": "icelands",
+   "source": "icelands/5-icelands_water.png",
+   "terrain": "water"
+  },
+  "tile_icelands_woods": {
+   "biome": "icelands",
+   "source": "icelands/4-icelands_trees.png",
+   "terrain": "woods"
+  },
+  "tile_sandlands_forest": {
+   "biome": "sandlands",
+   "source": "sandlands/2-sandlands_forest.png",
+   "terrain": "forest"
+  },
+  "tile_sandlands_hills": {
+   "biome": "sandlands",
+   "source": "sandlands/6-sandlands_hills.png",
+   "terrain": "hills"
+  },
+  "tile_sandlands_mountains": {
+   "biome": "sandlands",
+   "source": "sandlands/9-sandlands_mountains.png",
+   "terrain": "mountains"
+  },
+  "tile_sandlands_plains": {
+   "biome": "sandlands",
+   "source": "sandlands/3-sandlands_tundra.png",
+   "terrain": "plains"
+  },
+  "tile_sandlands_water": {
+   "biome": "sandlands",
+   "source": "sandlands/5-sandlands_water.png",
+   "terrain": "water"
+  },
+  "tile_sandlands_woods": {
+   "biome": "sandlands",
+   "source": "sandlands/4-sandlands_trees.png",
+   "terrain": "woods"
+  }
+ }
+}

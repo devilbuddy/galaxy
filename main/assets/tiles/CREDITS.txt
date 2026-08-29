@@ -1,0 +1,21 @@
+Hex ground tiles
+================
+
+Hand-drawn hexagonal terrain tiles from the "foundation_tiles" pack, imported
+from /Users/magnusornebring/Downloads/foundation_tiles. The artwork is unmodified: the files are copied
+byte for byte at their native 238x207, because that is exactly the bounding box of
+a flat-top hexagon of size 119 and the map's tiling depends on it.
+
+Only the *ground* types are imported - water, plains, forest, woods, hills and
+mountains, in each of 5 biome palettes. The pack also draws villages, cities,
+keeps, ruins and crystals as tiles; those are places rather than ground, and the
+map draws them as Noto emoji on top of the hex instead (main/theme.lua M.EMOJI).
+
+Which source file became which tile is recorded in MANIFEST.json beside this
+file, and both are regenerated together by tools/import_tiles.py, so the mapping
+and the art cannot drift apart.
+
+LICENCE: NOT ESTABLISHED. The pack as received carries no licence file, no
+author attribution and no terms of use. It is used here on the same footing as
+main/assets/portraits/ - fine for a prototype, and a thing that must be resolved
+before anything ships. Whoever resolves it should record the outcome here.

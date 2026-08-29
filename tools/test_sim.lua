@@ -27,7 +27,6 @@ local rules = require("galaxy.sim.rules")
 
 local SEED = 1337
 local GALAXY = gen.build(SEED)
-local LENGTHS = path.lane_lengths(GALAXY)
 
 local failures = 0
 
@@ -112,7 +111,7 @@ do
 	local target = system_at_hops(s, from, 3)
 	local ev = res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1, route = { target } },
-	}, LENGTHS)
+	})
 
 	local ordered = nil
 	for i = 1, #ev do if ev[i].kind == "captain_ordered" then ordered = ev[i] end end
@@ -124,7 +123,7 @@ do
 	local arrived = false
 	for _ = 1, 12 do
 		if s.captains[1].at == target then arrived = true break end
-		res.turn(GALAXY, s, {}, LENGTHS)
+		res.turn(GALAXY, s, {})
 	end
 	check("the captain gets there", arrived, s.captains[1].at)
 	check("and stops when it does", st.is_parked(s.captains[1]))
@@ -135,7 +134,7 @@ do
 	local s = new_game(2)
 	local ev = res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1, route = { 999999 } },
-	}, LENGTHS)
+	})
 	local refused = nil
 	for i = 1, #ev do if ev[i].kind == "order_rejected" then refused = ev[i] end end
 	check("it is rejected", refused ~= nil)
@@ -146,7 +145,7 @@ do
 
 	local ev2 = res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 77, route = { 1 } },
-	}, LENGTHS)
+	})
 	local no_captain = false
 	for i = 1, #ev2 do
 		if ev2[i].kind == "order_rejected" and ev2[i].reason == "no such captain" then
@@ -171,10 +170,10 @@ do
 	end
 	tally(res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1, route = { target } },
-	}, LENGTHS))
+	}))
 	for _ = 1, 14 do
 		if s.captains[1].at == target then break end
-		tally(res.turn(GALAXY, s, {}, LENGTHS))
+		tally(res.turn(GALAXY, s, {}))
 	end
 	check("systems along the way are taken", claimed >= 3, claimed)
 	check("including the destination", s.systems[target].owner == 1)
@@ -189,7 +188,7 @@ do
 	local target = system_at_hops(s, from, 3)
 	res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1, route = { target } },
-	}, LENGTHS)
+	})
 
 	-- One lane a turn at rank one, and never anywhere but at a system.
 	check("it advances exactly one lane", #s.captains[1].route == 2,
@@ -197,9 +196,9 @@ do
 	check("and stands at a system, never between two",
 		GALAXY.stars[s.captains[1].at] ~= nil)
 
-	res.turn(GALAXY, s, {}, LENGTHS)
+	res.turn(GALAXY, s, {})
 	check("another turn, another lane", #s.captains[1].route == 1)
-	res.turn(GALAXY, s, {}, LENGTHS)
+	res.turn(GALAXY, s, {})
 	check("three lanes, three turns", s.captains[1].at == target,
 		s.captains[1].at)
 
@@ -210,7 +209,7 @@ do
 	local ttarget = system_at_hops(t, tfrom, 3)
 	res.turn(GALAXY, t, {
 		{ player = 1, kind = "move", captain = 1, route = { ttarget } },
-	}, LENGTHS)
+	})
 	check("a Grand Admiral covers three in one turn",
 		t.captains[1].at == ttarget, t.captains[1].at)
 end
@@ -239,10 +238,10 @@ do
 	end
 	watch(res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1, route = { blocker, beyond } },
-	}, LENGTHS))
+	}))
 	for _ = 1, 8 do
 		if blocked then break end
-		watch(res.turn(GALAXY, s, {}, LENGTHS))
+		watch(res.turn(GALAXY, s, {}))
 	end
 	check("it is stopped at the border", blocked ~= nil)
 	check("the border holds", s.systems[blocker].owner == 2)
@@ -326,7 +325,7 @@ do
 
 	local ev = res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1, route = { target } },
-	}, LENGTHS)
+	})
 	local blocked
 	for i = 1, #ev do if ev[i].kind == "captain_blocked" then blocked = ev[i] end end
 	check("a siege train is turned back by a fleet", blocked ~= nil)
@@ -351,7 +350,7 @@ do
 		captain.units = units.normalise(hold)
 		local ev = res.turn(GALAXY, s, {
 			{ player = 1, kind = "move", captain = 1, route = { target } },
-		}, LENGTHS)
+		})
 		for i = 1, #ev do
 			if ev[i].kind == "battle" then return ev[i], captain end
 			if ev[i].kind == "captain_blocked" then return nil, captain end
@@ -408,7 +407,7 @@ do
 
 	local ev = res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = captain.id, route = { target } },
-	}, LENGTHS)
+	})
 	local battle
 	for i = 1, #ev do if ev[i].kind == "battle" then battle = ev[i] end end
 
@@ -437,7 +436,7 @@ do
 
 	local ev = res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1, route = { target } },
-	}, LENGTHS)
+	})
 	local blocked
 	for i = 1, #ev do if ev[i].kind == "captain_blocked" then blocked = ev[i] end end
 
@@ -469,7 +468,7 @@ do
 
 	local ev = res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1, route = { target } },
-	}, LENGTHS)
+	})
 	local broken
 	for i = 1, #ev do if ev[i].kind == "captain_broken" then broken = ev[i] end end
 
@@ -486,7 +485,7 @@ print("an empire pays, and colonies make ready")
 do
 	local s = new_game(2)
 	local capital = s.players[1].capital
-	res.turn(GALAXY, s, {}, LENGTHS)
+	res.turn(GALAXY, s, {})
 	local after_one = s.players[1].supply
 	check("holding ground pays every turn", after_one > 0, after_one)
 	check("and it is what the systems are worth",
@@ -501,14 +500,14 @@ do
 	-- until somebody builds for them.
 	local berths = buildings.by_id("berths")
 	local sys = s.systems[capital]
-	for _ = 1, berths.every * 2 do res.turn(GALAXY, s, {}, LENGTHS) end
+	for _ = 1, berths.every * 2 do res.turn(GALAXY, s, {}) end
 	check("a dwelling makes its type ready without being visited",
 		sys.available.escort > 0, sys.available.escort)
 	check("and nothing makes what it has no dwelling for",
 		sys.available.interceptor == 0 and sys.available.bombard == 0)
 
 	for _ = 1, berths.ready * berths.every * 2 do
-		res.turn(GALAXY, s, {}, LENGTHS)
+		res.turn(GALAXY, s, {})
 	end
 	check("but never more than that dwelling's cap",
 		sys.available.escort == berths.ready, sys.available.escort)
@@ -519,7 +518,7 @@ do
 		if systems.is_colony(GALAXY, id) and id ~= capital then bare = id break end
 	end
 	s.systems[bare].owner = 1
-	for _ = 1, berths.every * 3 do res.turn(GALAXY, s, {}, LENGTHS) end
+	for _ = 1, berths.every * 3 do res.turn(GALAXY, s, {}) end
 	check("a colony with nothing built makes nothing at all",
 		units.count(s.systems[bare].available) == 0,
 		units.count(s.systems[bare].available))
@@ -552,7 +551,7 @@ do
 
 	-- Nothing comes back on its own any more.
 	captain.units = units.empty()
-	res.turn(GALAXY, s, {}, LENGTHS)
+	res.turn(GALAXY, s, {})
 	check("an empty captain does not refill by standing still",
 		commanders.carried(captain) == 0)
 
@@ -566,7 +565,7 @@ do
 		  units = { escort = 2, bombard = 1 } },
 		{ player = 1, kind = "transfer", captain = captain.id,
 		  units = { escort = 2, bombard = 1 } },
-	}, LENGTHS)
+	})
 	local bought, moved
 	for i = 1, #ev do
 		if ev[i].kind == "bought" then bought = ev[i] end
@@ -600,7 +599,7 @@ do
 	s3.captains[1].at = GALAXY.adjacency[cap3][1]
 	res.turn(GALAXY, s3, {
 		{ player = 1, kind = "buy", at = cap3, units = { escort = 2 } },
-	}, LENGTHS)
+	})
 	check("buying needs no captain standing there",
 		s3.systems[cap3].garrison.escort == 2, s3.systems[cap3].garrison.escort)
 
@@ -622,7 +621,7 @@ do
 		s.players[1].supply = 999
 		captain.units = units.empty()
 		if prepare then prepare(s, captain) end
-		local ev = res.turn(GALAXY, s, orders(s, captain), LENGTHS)
+		local ev = res.turn(GALAXY, s, orders(s, captain))
 		for i = 1, #ev do
 			if ev[i].kind == "bought" then return "bought", ev[i] end
 			if ev[i].kind == "transferred" then return "transferred", ev[i] end
@@ -678,7 +677,7 @@ do
 	local function build(id, at)
 		local ev = res.turn(GALAXY, s, {
 			{ player = 1, kind = "build", at = at or capital, building = id },
-		}, LENGTHS)
+		})
 		for i = 1, #ev do
 			if ev[i].kind == "built" then return "built", ev[i] end
 			if ev[i].kind == "order_rejected" then return ev[i].reason end
@@ -739,7 +738,7 @@ do
 	local function recruit()
 		local ev = res.turn(GALAXY, s, {
 			{ player = 1, kind = "recruit", at = capital },
-		}, LENGTHS)
+		})
 		for i = 1, #ev do
 			if ev[i].kind == "recruited" then return "raised", ev[i] end
 			if ev[i].kind == "order_rejected" then return ev[i].reason end
@@ -807,7 +806,7 @@ do
 	-- hold sees `base_vision` lanes around it, so watching two *consecutive*
 	-- legs takes a listening post beside each - and neither may sit on the
 	-- route itself, or the march becomes a battle instead of a sighting.
-	local route = res.expand_route(GALAXY, LENGTHS, captain.at, nil, { target }, 12)
+	local route = res.expand_route(GALAXY, captain.at, nil, { target }, 12)
 	local on_route = { [captain.at] = true }
 	for k = 1, #route do on_route[route[k]] = true end
 	for _, p in ipairs(s.players) do on_route[p.capital] = true end
@@ -830,7 +829,7 @@ do
 
 	local ev = res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1, route = { target } },
-	}, LENGTHS)
+	})
 
 	local mine, sighting
 	for i = 1, #ev do
@@ -870,7 +869,7 @@ do
 	local ev2 = res.turn(GALAXY, t, {
 		{ player = 1, kind = "move", captain = 1,
 		  route = { system_at_hops(t, t.captains[1].at, 3) } },
-	}, LENGTHS)
+	})
 	local any = false
 	for i = 1, #ev2 do if ev2[i].kind == "contact_moved" then any = true end end
 	check("a march nobody could see is not reported at all", not any)
@@ -991,7 +990,7 @@ do
 	check("a player holding their capital is alive", st.is_alive(s, 1))
 	s.systems[s.players[1].capital].owner = 2
 	check("and is not once it is gone", not st.is_alive(s, 1))
-	local ev = res.turn(GALAXY, s, {}, LENGTHS)
+	local ev = res.turn(GALAXY, s, {})
 	local out = false
 	for i = 1, #ev do if ev[i].kind == "eliminated" and ev[i].player == 1 then out = true end end
 	check("the turn reports it", out)
@@ -1004,7 +1003,7 @@ do
 	res.turn(GALAXY, s, {
 		{ player = 1, kind = "move", captain = 1,
 		  route = { system_at_hops(s, s.captains[1].at, 2) } },
-	}, LENGTHS)
+	})
 
 	-- The damage JSON storage actually does: sparse integer keys come back as
 	-- strings, and numbers as strings.
@@ -1032,7 +1031,7 @@ do
 	check("fog memory is keyed by number again",
 		next(repaired.knowledge[1]) ~= nil
 			and type(next(repaired.knowledge[1])) == "number")
-	local ok = pcall(res.turn, GALAXY, repaired, {}, LENGTHS)
+	local ok = pcall(res.turn, GALAXY, repaired, {})
 	check("and a repaired state resolves another turn", ok)
 	-- What was seen, not just *when*. The repair was written when memory was
 	-- id -> turn and coerced each entry with `tonumber`, which flattened every
@@ -1106,7 +1105,7 @@ do
 		fresh[1] and fresh[1].route[1])
 
 	-- A captain already under way keeps its standing order.
-	res.turn(GALAXY, s, orders, LENGTHS)
+	res.turn(GALAXY, s, orders)
 	local moving = s.captains[2]
 	if #moving.route > 0 then
 		local next_orders = bots.all_orders(GALAXY, s)
@@ -1179,8 +1178,8 @@ do
 		local target = system_at_hops(s, s.captains[1].at, 3)
 		res.turn(GALAXY, s, {
 			{ player = 1, kind = "move", captain = 1, route = { target } },
-		}, LENGTHS)
-		for _ = 1, 10 do res.turn(GALAXY, s, {}, LENGTHS) end
+		})
+		for _ = 1, 10 do res.turn(GALAXY, s, {}) end
 		local parts = {}
 		for id = 1, #GALAXY.stars do
 			parts[#parts + 1] = tostring(s.systems[id].owner)

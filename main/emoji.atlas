@@ -1,5 +1,17 @@
 images {
+  image: "/main/assets/emoji/ui/emoji_barrow.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
   image: "/main/assets/emoji/ui/emoji_bombard.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_capital.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_colony.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
@@ -7,7 +19,27 @@ images {
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
+  image: "/main/assets/emoji/ui/emoji_gems.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
   image: "/main/assets/emoji/ui/emoji_interceptor.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_mine.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_portal.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_ruins.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_shrine.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 margin: 2

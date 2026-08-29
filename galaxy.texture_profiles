@@ -1,6 +1,14 @@
 path_settings {
-  path: "/main/assets/emoji/**"
-  profile: "emoji"
+  path: "/main/emoji.atlas"
+  profile: "mipmapped"
+}
+path_settings {
+  path: "/main/tiles.atlas"
+  profile: "mipmapped"
+}
+path_settings {
+  path: "/main/assets/emoji/sheet.png"
+  profile: "mipmapped"
 }
 path_settings {
   path: "**"
@@ -21,7 +29,7 @@ profiles {
   }
 }
 profiles {
-  name: "emoji"
+  name: "mipmapped"
   platforms {
     os: OS_ID_GENERIC
     formats {
