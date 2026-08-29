@@ -3,15 +3,15 @@
 -- Also verifies the two bit-op implementations agree. Defold uses LuaJIT's
 -- BitOp; Nakama's server runtime is gopher-lua and has no bit library, so it
 -- takes the arithmetic path. If those two ever diverge, the server and the
--- client would render different galaxies from the same seed.
+-- client would render different realms from the same seed.
 package.path = "./?.lua;" .. package.path
 
-local force_pure = os.getenv("GALAXY_PURE_BITOPS") == "1"
-if force_pure then rawset(_G, "GALAXY_FORCE_PURE_BITOPS", true) end
+local force_pure = os.getenv("REALM_PURE_BITOPS") == "1"
+if force_pure then rawset(_G, "REALM_FORCE_PURE_BITOPS", true) end
 
-local gen = require("galaxy.generate")
-local digest = require("galaxy.digest")
-local rng = require("galaxy.rng")
+local gen = require("realm.generate")
+local digest = require("realm.digest")
+local rng = require("realm.rng")
 print("bit-op implementation: " .. rng.implementation)
 
 local repeats = tonumber(arg[1]) or 3
@@ -25,8 +25,8 @@ for _, seed in ipairs(seeds) do
 		local d = digest.of(g)
 		if r == 1 then
 			first = d
-			stats = string.format("%3d land %3d sea %d regions",
-				g.stats.star_count, g.stats.water_count, g.stats.region_count)
+			stats = string.format("%3d land %3d sea %d provinces",
+				g.stats.tile_count, g.stats.water_count, g.stats.province_count)
 		elseif d ~= first then
 			ok = false
 			print(string.format("MISMATCH seed=%d run=%d %d ~= %d", seed, r, d, first))

@@ -27,7 +27,7 @@ sprite quads tessellate with no gaps. Resizing to a round number, or letting
 Defold trim the transparent corners, would break the tiling. Hence
 SPRITE_TRIM_MODE_OFF in the atlas below - it is load-bearing, not a default.
 
-Note the texture profile: galaxy.texture_profiles must mipmap /main/tiles.atlas
+Note the texture profile: realm.texture_profiles must mipmap /main/tiles.atlas
 by name. A profile matches the *generated* texture, not the source directory, so
 listing main/assets/tiles/** would silently do nothing - the same trap
 import_emoji.py documents for /main/emoji.atlas.

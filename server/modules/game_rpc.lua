@@ -8,26 +8,26 @@
 --
 -- Storage layout (Nakama storage engine; the Lua runtime has no SQL access):
 --
---   games         / <id>              system-owned  lobby + schedule + roster
---   game_state    / <id>              system-owned  the mutable simulation
---   game_events   / <id>:<turn>       system-owned  one turn's events
+--   games         / <id>              tile-owned  lobby + schedule + roster
+--   game_state    / <id>              tile-owned  the mutable simulation
+--   game_events   / <id>:<turn>       tile-owned  one turn's events
 --   game_orders   / <id>:<turn>       per-user      that player's orders
 --
--- Everything is system-owned except orders, so a player cannot read another
+-- Everything is tile-owned except orders, so a player cannot read another
 -- player's pending moves by asking storage directly.
 
 local nk = require("nakama")
 
-local galaxy_cache = require("galaxy_cache")
-local sim_state = require("galaxy.sim.state")
-local resolve = require("galaxy.sim.resolve")
-local modifiers = require("galaxy.sim.modifiers")
-local view = require("galaxy.sim.view")
-local races = require("galaxy.sim.races")
-local bots = require("galaxy.sim.bots")
-local rng = require("galaxy.rng")
-local rules = require("galaxy.sim.rules")
-local sim_units = require("galaxy.sim.units")
+local realm_cache = require("realm_cache")
+local sim_state = require("realm.sim.state")
+local resolve = require("realm.sim.resolve")
+local modifiers = require("realm.sim.modifiers")
+local view = require("realm.sim.view")
+local races = require("realm.sim.races")
+local bots = require("realm.sim.bots")
+local rng = require("realm.rng")
+local rules = require("realm.sim.rules")
+local sim_units = require("realm.sim.units")
 
 local M = {}
 
@@ -80,8 +80,8 @@ end
 
 --- Repair a state that has been round-tripped through JSON storage.
 --
--- Sim state is stored as JSON. Dense arrays (systems, captains, players)
--- survive intact, but `knowledge[player]` is keyed by star id and is *sparse*,
+-- Sim state is stored as JSON. Dense arrays (tiles, commanders, players)
+-- survive intact, but `knowledge[player]` is keyed by tile id and is *sparse*,
 -- so it encodes as an object and comes back with string keys. Indexing it with
 -- a number would then silently miss, and every player's fog-of-war memory would
 -- appear empty after the first turn - the map would forget everything it had
@@ -125,7 +125,7 @@ local function public_game(game)
 		max_players = game.max_players,
 		turn_interval = game.turn_interval,
 		next_turn_at = game.next_turn_at,
-		star_count = game.star_count,
+		tile_count = game.tile_count,
 		players = (function()
 			local out = {}
 			for i = 1, #game.players do
@@ -176,7 +176,7 @@ local function catch_up(game, game_version)
 	local early = everyone_submitted(game, game.turn + 1)
 	if now < game.next_turn_at and not early then return 0, game_version end
 
-	local entry = galaxy_cache.get(game.seed)
+	local entry = realm_cache.get(game.seed)
 	local state, state_version = read_one(STATE, game.id, nil)
 	state = normalise_state(state)
 	if not state then return 0, game_version end
@@ -208,11 +208,11 @@ local function catch_up(game, game_version)
 					-- round trip, and it silently drops anything it does not
 					-- mention - which is how a purchase arrived at the resolver
 					-- asking for nil units and quietly bought nothing. The same
-					-- shape ate the old `fleet` field once already.
+					-- shape ate the old `army` field once already.
 					orders[#orders + 1] = {
 						player = i,
 						kind = o.kind,
-						captain = tonumber(o.captain),
+						commander = tonumber(o.commander),
 						route = route,
 						-- A mix is a table, so it is repaired rather than
 						-- coerced. `tonumber` on one gives nil, which is how a
@@ -229,10 +229,10 @@ local function catch_up(game, game_version)
 		-- Bots decide here rather than submitting, from the state as it stands
 		-- at the moment of resolution - the same information a human had when
 		-- they submitted, since nothing has moved since the last turn ended.
-		local bot_orders = bots.all_orders(entry.galaxy, state)
+		local bot_orders = bots.all_orders(entry.realm, state)
 		for k = 1, #bot_orders do orders[#orders + 1] = bot_orders[k] end
 
-		local events = resolve.turn(entry.galaxy, state, orders)
+		local events = resolve.turn(entry.realm, state, orders)
 		write_one(EVENTS, game.id .. ":" .. turn, nil, { turn = turn, events = events })
 
 		game.turn = state.turn
@@ -247,7 +247,7 @@ local function catch_up(game, game_version)
 		end
 		resolved = resolved + 1
 
-		-- Holding enough regions wins outright (galaxy/sim/regions.lua). The
+		-- Holding enough provinces wins outright (realm/sim/provinces.lua). The
 		-- resolver decides it; this only has to notice and stop the clock.
 		if state.winner then
 			game.status = "finished"
@@ -287,7 +287,7 @@ end
 
 -- RPCs --------------------------------------------------------------------------
 
---- game.create { name, seed?, star_count?, max_players?, turn_interval? }
+--- game.create { name, seed?, tile_count?, max_players?, turn_interval? }
 local function rpc_create(context, payload)
 	local input = decode_payload(payload)
 	local user_id = context.user_id or fail("must be authenticated")
@@ -311,7 +311,7 @@ local function rpc_create(context, payload)
 		name = tostring(input.name or "Untitled"),
 		status = "lobby",
 		seed = seed,
-		star_count = tonumber(input.star_count) or nil,
+		tile_count = tonumber(input.tile_count) or nil,
 		turn = 0,
 		turn_interval = interval,
 		next_turn_at = 0,
@@ -430,8 +430,8 @@ local function rpc_start(context, payload)
 	-- and it is the only way to play one without finding three other people.
 	if #game.players < MIN_PLAYERS then fail("need at least " .. MIN_PLAYERS .. " players") end
 
-	local entry = galaxy_cache.get(game.seed)
-	local state = sim_state.new(entry.galaxy, game.players)
+	local entry = realm_cache.get(game.seed)
+	local state = sim_state.new(entry.realm, game.players)
 
 	game.status = "active"
 	game.turn = 0
@@ -467,8 +467,8 @@ local function rpc_state(context, payload)
 	if game.status ~= "lobby" then
 		local state = normalise_state(read_one(STATE, game.id, nil))
 		if state then
-			local entry = galaxy_cache.get(game.seed)
-			response.view = view.project(entry.galaxy, state, me)
+			local entry = realm_cache.get(game.seed)
+			response.view = view.project(entry.realm, state, me)
 
 			-- Everything that happened since the client last looked, filtered to
 			-- what this player is allowed to know.
@@ -534,7 +534,7 @@ local function rpc_state(context, payload)
 	return nk.json_encode(response)
 end
 
---- game.route { game_id, from, waypoints } - what path would this order take?
+--- game.route { game_id, from, wilds } - what path would this order take?
 --
 -- The client draws a route the moment an order is issued, and it must be the
 -- route the turn will actually fly. Rather than reimplement the pathfinder
@@ -554,24 +554,24 @@ local function rpc_route(context, payload)
 	if not me then fail("you are not in that game") end
 
 	local from = tonumber(input.from)
-	if not from then fail("no starting system") end
+	if not from then fail("no starting tile") end
 
-	local waypoints = {}
-	if type(input.waypoints) == "table" then
-		for i = 1, #input.waypoints do
-			local id = tonumber(input.waypoints[i])
-			if id then waypoints[#waypoints + 1] = math.floor(id) end
+	local wilds = {}
+	if type(input.wilds) == "table" then
+		for i = 1, #input.wilds do
+			local id = tonumber(input.wilds[i])
+			if id then wilds[#wilds + 1] = math.floor(id) end
 		end
 	end
-	if #waypoints == 0 then fail("nowhere to go") end
+	if #wilds == 0 then fail("nowhere to go") end
 
-	local entry = galaxy_cache.get(game.seed)
+	local entry = realm_cache.get(game.seed)
 	local state = read_one(STATE, game.id, nil)
 	local player = state and state.players and state.players[me]
 	local mods = modifiers.of(player)
 
-	local route, why = resolve.expand_route(entry.galaxy,
-		math.floor(from), tonumber(input.fixed), waypoints, mods.hops)
+	local route, why = resolve.expand_route(entry.realm,
+		math.floor(from), tonumber(input.fixed), wilds, mods.hops)
 	if not route then
 		return nk.json_encode({ route = {}, reason = why or "no route" })
 	end
@@ -581,11 +581,11 @@ end
 --- game.orders { game_id, orders: [ order ] }
 --
 -- There is one order:
---   { kind = "move", captain, route }   send a captain along a list of waypoints
---   { kind = "buy", at, units }           buy into one of your colonies' garrisons
---   { kind = "transfer", captain, units } the hold a captain should end with
---   { kind = "build", at, building }      raise a building on one of your colonies
---   { kind = "recruit", at }              raise a captain at an Admiralty
+--   { kind = "move", commander, route }   send a commander along a list of wilds
+--   { kind = "buy", at, units }           buy into one of your cities' garrisons
+--   { kind = "transfer", commander, units } the hold a commander should end with
+--   { kind = "build", at, building }      raise a building on one of your cities
+--   { kind = "recruit", at }              raise a commander at an Admiralty
 --
 -- An empty batch is meaningful: it is how a player says "I am done this turn",
 -- which is what lets the turn resolve early once everyone has said it.
@@ -611,7 +611,7 @@ local function rpc_orders(context, payload)
 	local incoming = input.orders
 	if type(incoming) ~= "table" then fail("orders must be an array") end
 
-	--- A route as a list of system ids, or nil when the shape is wrong - which
+	--- A route as a list of tile ids, or nil when the shape is wrong - which
 	--- the caller reads as "no route given" rather than as an error.
 	local function clean_route(value)
 		if type(value) ~= "table" then return nil end
@@ -625,12 +625,12 @@ local function rpc_orders(context, payload)
 
 	local clean = {}
 
-	--- Drop earlier orders this one supersedes. A captain takes one order of
+	--- Drop earlier orders this one supersedes. A commander takes one order of
 	--- each kind a turn, so the array's position never carries meaning a client
 	--- would have to know about.
 	---
-	--- Matched on kind as well as captain: a captain may march onto one of its
-	--- own colonies *and* swap there in the same turn, and a transfer that
+	--- Matched on kind as well as commander: a commander may march onto one of its
+	--- own cities *and* swap there in the same turn, and a transfer that
 	--- superseded the march would leave it loading where it already stood.
 	local function replace(match)
 		for k = #clean, 1, -1 do
@@ -641,14 +641,14 @@ local function rpc_orders(context, payload)
 	for i = 1, #incoming do
 		local o = incoming[i]
 		if o.kind == "move" then
-			local captain = tonumber(o.captain)
-			if captain then
+			local commander = tonumber(o.commander)
+			if commander then
 				local entry = {
-					kind = "move", captain = math.floor(captain),
+					kind = "move", commander = math.floor(commander),
 					route = clean_route(o.route) or {},
 				}
 				replace(function(c)
-					return c.kind == "move" and c.captain == entry.captain
+					return c.kind == "move" and c.commander == entry.commander
 				end)
 				clean[#clean + 1] = entry
 			end
@@ -659,7 +659,7 @@ local function rpc_orders(context, payload)
 				local entry = {
 					kind = "build", at = math.floor(at), building = o.building,
 				}
-				-- One build per colony per turn: two orders for the same place
+				-- One build per city per turn: two orders for the same place
 				-- would race for the same slot.
 				replace(function(c) return c.kind == "build" and c.at == entry.at end)
 				clean[#clean + 1] = entry
@@ -688,24 +688,24 @@ local function rpc_orders(context, payload)
 					kind = "buy", at = math.floor(at),
 					units = sim_units.normalise(o.units),
 				}
-				-- One purchase per colony per turn, for the same reason as a
+				-- One purchase per city per turn, for the same reason as a
 				-- build: two orders for the same place would race.
 				replace(function(c) return c.kind == "buy" and c.at == entry.at end)
 				clean[#clean + 1] = entry
 			end
 
 		elseif o.kind == "transfer" then
-			local captain = tonumber(o.captain)
-			if captain then
-				-- The **hold the captain should end the turn with**, not a
+			local commander = tonumber(o.commander)
+			if commander then
+				-- The **hold the commander should end the turn with**, not a
 				-- delta - see `resolve.transfers`. Clamped there against what
-				-- the garrison can supply and what the captain can carry.
+				-- the garrison can gold and what the commander can carry.
 				local entry = {
-					kind = "transfer", captain = math.floor(captain),
+					kind = "transfer", commander = math.floor(commander),
 					units = sim_units.normalise(o.units),
 				}
 				replace(function(c)
-					return c.kind == "transfer" and c.captain == entry.captain
+					return c.kind == "transfer" and c.commander == entry.commander
 				end)
 				clean[#clean + 1] = entry
 			end

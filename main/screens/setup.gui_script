@@ -15,7 +15,7 @@ local monarch = require("monarch.monarch")
 local store = require("main.store")
 local ui = require("main.ui")
 local backend = require("main.backend")
-local races = require("galaxy.sim.races")
+local races = require("realm.sim.races")
 
 local PAD = 24
 -- Opponent counts a player can pick from. Four is the shape the game is
@@ -178,7 +178,7 @@ function init(self)
 				-- Short turns while the game is a prototype; a real one uses
 				-- the twelve-hour default.
 				turn_interval = 60,
-				star_count = 160,
+				tile_count = 160,
 			}, function(_, err)
 				if err then
 					gui.set_text(self.status, "Could not create: " .. tostring(err))

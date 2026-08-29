@@ -7,11 +7,7 @@ images {
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/emoji/ui/emoji_capital.png"
-  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
-}
-images {
-  image: "/main/assets/emoji/ui/emoji_colony.png"
+  image: "/main/assets/emoji/ui/emoji_city.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
@@ -36,6 +32,10 @@ images {
 }
 images {
   image: "/main/assets/emoji/ui/emoji_ruins.png"
+  sprite_trim_mode: SPRITE_TRIM_MODE_OFF
+}
+images {
+  image: "/main/assets/emoji/ui/emoji_seat.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {

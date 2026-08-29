@@ -1,8 +1,8 @@
 -- Round-trip test for the client/server wire format.
 -- Run: luajit tools/test_wire.lua
 package.path = "./?.lua;" .. package.path
-local gen = require("galaxy.generate")
-local wire = require("galaxy.wire")
+local gen = require("realm.generate")
+local wire = require("realm.wire")
 
 local failures = 0
 local function check(name, cond, detail)
@@ -15,25 +15,25 @@ for _, seed in ipairs({ 1, 424242, 1337 }) do
 	local rebuilt = wire.decode(wire.encode(original))
 	print("seed " .. seed)
 
-	check("star count", #rebuilt.stars == #original.stars)
+	check("tile count", #rebuilt.tiles == #original.tiles)
 	check("sea rebuilt by subtraction", #rebuilt.water == #original.water,
 		#rebuilt.water .. " vs " .. #original.water)
-	check("region count", #rebuilt.regions == #original.regions)
+	check("province count", #rebuilt.provinces == #original.provinces)
 	check("world size", rebuilt.world_size == original.world_size)
 
 	local worst_pos, bad_field = 0, nil
-	for i = 1, #original.stars do
-		local a, b = original.stars[i], rebuilt.stars[i]
+	for i = 1, #original.tiles do
+		local a, b = original.tiles[i], rebuilt.tiles[i]
 		worst_pos = math.max(worst_pos, math.abs(a.x - b.x), math.abs(a.y - b.y))
 		if a.name ~= b.name or a.terrain ~= b.terrain or a.feature ~= b.feature
-			or a.biome ~= b.biome or a.region ~= b.region
+			or a.biome ~= b.biome or a.province ~= b.province
 			or a.habitable ~= b.habitable or a.q ~= b.q or a.r ~= b.r
 			or a.terrain_label ~= b.terrain_label
 			or a.feature_label ~= b.feature_label then
-			bad_field = bad_field or ("star " .. i .. " (" .. a.name .. ")")
+			bad_field = bad_field or ("tile " .. i .. " (" .. a.name .. ")")
 		end
 	end
-	check("star fields survive the round trip", bad_field == nil, tostring(bad_field))
+	check("tile fields survive the round trip", bad_field == nil, tostring(bad_field))
 	check("positions exact", worst_pos == 0, "worst delta " .. worst_pos)
 
 	-- Nothing about connectivity is transmitted: adjacency is the six
@@ -54,17 +54,17 @@ for _, seed in ipairs({ 1, 424242, 1337 }) do
 	check("adjacency rederived from the lattice, in order",
 		bad_adj_order == nil, tostring(bad_adj_order))
 
-	local bad_region = nil
-	for i = 1, #original.regions do
-		local a, b = original.regions[i], rebuilt.regions[i]
+	local bad_province = nil
+	for i = 1, #original.provinces do
+		local a, b = original.provinces[i], rebuilt.provinces[i]
 		if a.name ~= b.name or a.colour_index ~= b.colour_index
-			or a.star_count ~= b.star_count
+			or a.tile_count ~= b.tile_count
 			or math.abs(a.cx - b.cx) > 1e-9 or math.abs(a.cy - b.cy) > 1e-9
 			or #a.neighbours ~= #b.neighbours then
-			bad_region = bad_region or (a.name .. " vs " .. b.name)
+			bad_province = bad_province or (a.name .. " vs " .. b.name)
 		end
 	end
-	check("regions rederived", bad_region == nil, tostring(bad_region))
+	check("provinces rederived", bad_province == nil, tostring(bad_province))
 
 	local bad_adj = nil
 	for i = 1, #original.adjacency do
@@ -84,29 +84,29 @@ do
 	-- wire, so the shape is asserted here instead: a missing field shows up as
 	-- a blank HUD on a device, three steps removed from the change that caused
 	-- it.
-	local st = require("galaxy.sim.state")
-	local resolve = require("galaxy.sim.resolve")
-	local view = require("galaxy.sim.view")
-	local sim_path = require("galaxy.sim.path")
-	local races = require("galaxy.sim.races")
-	local commanders = require("galaxy.sim.commanders")
+	local st = require("realm.sim.state")
+	local resolve = require("realm.sim.resolve")
+	local view = require("realm.sim.view")
+	local sim_path = require("realm.sim.path")
+	local races = require("realm.sim.races")
+	local commanders = require("realm.sim.commanders")
 
-	local galaxy = gen.build(424242, { star_count = 160 })
-	local state = st.new(galaxy, {
+	local realm = gen.build(424242, { tile_count = 160 })
+	local state = st.new(realm, {
 		{ id = "a", name = "A", race = "kepler" },
 		{ id = "b", name = "B", race = "vorn" },
 	})
-	local capital = state.players[1].capital
-	resolve.turn(galaxy, state, {
-		{ player = 1, kind = "move", captain = 1,
-			route = { galaxy.adjacency[capital][1] } },
+	local seat = state.players[1].seat
+	resolve.turn(realm, state, {
+		{ player = 1, kind = "move", commander = 1,
+			route = { realm.adjacency[seat][1] } },
 	})
-	for _ = 1, 3 do resolve.turn(galaxy, state, {}) end
+	for _ = 1, 3 do resolve.turn(realm, state, {}) end
 
-	local v = view.project(galaxy, state, 1)
+	local v = view.project(realm, state, 1)
 	local required = {
-		"turn", "you", "players", "systems", "captains", "contacts",
-		"race", "capital", "regions", "regions_needed", "regions_held", "rates",
+		"turn", "you", "players", "tiles", "commanders", "contacts",
+		"race", "seat", "provinces", "provinces_needed", "provinces_held", "rates",
 	}
 	local missing = {}
 	for i = 1, #required do
@@ -115,37 +115,37 @@ do
 	check("the projection has every field the client reads", #missing == 0,
 		table.concat(missing, ", "))
 
-	for _, key in ipairs({ "systems", "steps", "hops", "vision",
+	for _, key in ipairs({ "tiles", "steps", "hops", "vision",
 			"garrison_cap" }) do
 		check("rates." .. key .. " is a number", type(v.rates[key]) == "number")
 	end
 
 	check("the roster reports each player's race",
 		v.players[1].race == "kepler" and v.players[2].race == "vorn")
-	check("and where each player's capital is",
-		type(v.players[1].capital) == "number")
+	check("and where each player's seat is",
+		type(v.players[1].seat) == "number")
 
-	local mine = v.systems[tostring(capital)]
-	check("your own capital is in the projection", mine ~= nil)
-	check("...and says whose capital it is", mine and mine.capital_of == 1)
+	local mine = v.tiles[tostring(seat)]
+	check("your own seat is in the projection", mine ~= nil)
+	check("...and says whose seat it is", mine and mine.seat_of == 1)
 	check("...and that it is live rather than remembered", mine and mine.live == true)
 
-	check("your captain travels in full",
-		#v.captains == 1 and v.captains[1].route ~= nil
-			and v.captains[1].rank ~= nil and v.captains[1].portrait ~= nil)
+	check("your commander travels in full",
+		#v.commanders == 1 and v.commanders[1].route ~= nil
+			and v.commanders[1].rank ~= nil and v.commanders[1].portrait ~= nil)
 	check("and reports when it arrives, in turns",
-		type(v.captains[1].eta) == "number" and type(v.captains[1].steps) == "number")
+		type(v.commanders[1].eta) == "number" and type(v.commanders[1].steps) == "number")
 	-- Combat is two visible comparisons, so all four numbers have to reach the
-	-- client: what a captain brings to each half, and what each half costs.
+	-- client: what a commander brings to each half, and what each half costs.
 	check("and what it brings to each half of a fight",
-		type(v.captains[1].siege_power) == "number"
-			and type(v.captains[1].fleet_power) == "number")
+		type(v.commanders[1].siege_power) == "number"
+			and type(v.commanders[1].army_power) == "number")
 	check("with the hold those came from",
-		type(v.captains[1].hold) == "table"
-			and type(v.captains[1].carried) == "number")
+		type(v.commanders[1].hold) == "table"
+			and type(v.commanders[1].carried) == "number")
 	-- The economy has to reach the client whole, or the sheet cannot price an
 	-- embarkation without re-implementing the rules.
-	check("the purse is on the wire", type(v.supply) == "number", v.supply)
+	check("the purse is on the wire", type(v.gold) == "number", v.gold)
 	check("and what it earns each turn",
 		type(v.rates.income) == "number" and v.rates.income > 0, v.rates.income)
 	check("the unit catalogue is on the wire",
@@ -155,29 +155,29 @@ do
 			local spec = v.units[i]
 			if type(spec.cost) ~= "number" then return false end
 			if type(spec.fortification) ~= "number" then return false end
-			if type(spec.fleet) ~= "number" then return false end
+			if type(spec.army) ~= "number" then return false end
 		end
 		return true
 	end)())
-	check("a system says what it pays its owner",
+	check("a tile says what it pays its owner",
 		type(mine.yield) == "number" and mine.yield > 0, mine.yield)
-	check("and a colony says what its dwellings have ready, by type",
+	check("and a city says what its dwellings have ready, by type",
 		type(mine.available) == "table"
 			and type(mine.available.escort) == "number", mine.available)
-	-- A capital opens with Berths, so this one makes escorts and nothing else.
+	-- A seat opens with Berths, so this one makes escorts and nothing else.
 	check("what it cannot make is a zero, not a gap",
 		mine.available.bombard == 0, mine.available.bombard)
-	check("a garrison reaches the client whole, and counts as fleet", (function()
-		local sim_units = require("galaxy.sim.units")
-		state.systems[capital].garrison = sim_units.normalise({ escort = 2 })
-		local w = view.project(galaxy, state, 1)
-		local seen = w.systems[tostring(capital)]
+	check("a garrison reaches the client whole, and counts as army", (function()
+		local sim_units = require("realm.sim.units")
+		state.tiles[seat].garrison = sim_units.normalise({ escort = 2 })
+		local w = view.project(realm, state, 1)
+		local seen = w.tiles[tostring(seat)]
 		return seen.garrison and seen.garrison.escort == 2
-			and seen.fleet >= sim_units.power(seen.garrison, sim_units.FLEET)
+			and seen.army >= sim_units.power(seen.garrison, sim_units.ARMY)
 	end)())
-	check("a captain says what it can carry as well as what it has",
-		type(v.captains[1].base_strength) == "number"
-			and v.captains[1].max_units > v.captains[1].carried)
+	check("a commander says what it can carry as well as what it has",
+		type(v.commanders[1].base_strength) == "number"
+			and v.commanders[1].max_units > v.commanders[1].carried)
 
 	check("the building catalogue is on the wire",
 		type(v.buildings) == "table" and #v.buildings >= 4, v.buildings and #v.buildings)
@@ -189,38 +189,38 @@ do
 		end
 		return true
 	end)())
-	check("a colony says what is standing on it", type(mine.buildings) == "table")
-	check("and how many captains are allowed",
-		type(v.rates.captain_cap) == "number" and v.rates.captain_cap >= 1)
+	check("a city says what is standing on it", type(mine.buildings) == "table")
+	check("and how many commanders are allowed",
+		type(v.rates.commander_cap) == "number" and v.rates.commander_cap >= 1)
 
-	check("a system somebody holds says what its walls are worth",
+	check("a tile somebody holds says what its walls are worth",
 		type(mine.fortification) == "number", mine.fortification)
-	check("and what fleet is standing on it", type(mine.fleet) == "number")
+	check("and what army is standing on it", type(mine.army) == "number")
 	check("unclaimed ground says neither, because there is nothing to take",
 		(function()
-			for _, sys in pairs(v.systems) do
+			for _, sys in pairs(v.tiles) do
 				if (sys.owner or 0) == 0
-					and (sys.fortification ~= nil or sys.fleet ~= nil) then
+					and (sys.fortification ~= nil or sys.army ~= nil) then
 					return false
 				end
 			end
 			return true
 		end)())
-	check("systems are keyed by string, never sparse integers",
-		next(v.systems) ~= nil and type(next(v.systems)) == "string")
+	check("tiles are keyed by string, never sparse integers",
+		next(v.tiles) ~= nil and type(next(v.tiles)) == "string")
 
 	-- Everything a player can see must be describable; nothing may arrive with
 	-- an owner the roster cannot name.
 	local bad = nil
-	for id, sys in pairs(v.systems) do
+	for id, sys in pairs(v.tiles) do
 		if sys.owner and sys.owner > 0 and not v.players[sys.owner] then bad = id end
 	end
-	check("no system names a player the roster does not have", bad == nil, bad)
+	check("no tile names a player the roster does not have", bad == nil, bad)
 
-	-- Every system kind the client renders must be derivable from public data.
-	local systems_mod = require("galaxy.sim.systems")
+	-- Every tile kind the client renders must be derivable from public data.
+	local tiles_mod = require("realm.sim.tiles")
 	local kinds = {}
-	for id = 1, #galaxy.stars do kinds[systems_mod.kind(galaxy, id)] = true end
+	for id = 1, #realm.tiles do kinds[tiles_mod.kind(realm, id)] = true end
 	-- The sim names a portrait; the client resolves it against
 	-- main/portraits.atlas. Nothing connects the two but the string, and a
 	-- mismatch is invisible offline - `ui.portrait` swallows a missing id on
@@ -244,8 +244,8 @@ do
 		return true
 	end)())
 
-	check("system kinds are derivable client-side from the wire galaxy",
-		kinds.colony and kinds.outpost and kinds.waypoint)
+	check("tile kinds are derivable client-side from the wire realm",
+		kinds.city and kinds.holding and kinds.wilds)
 
 	-- Reads an atlas file and returns the set of image names in it. Both map
 	-- layers resolve art by *name* now - a sprite can no more be handed a UV
@@ -271,8 +271,8 @@ do
 		local theme = require("main.theme")
 		local have = atlas_images("main/tiles.atlas")
 		if not have then return false, "no main/tiles.atlas - run tools/import_tiles.py" end
-		for id = 1, #galaxy.stars do
-			local name = theme.tile_for(galaxy, id)
+		for id = 1, #realm.tiles do
+			local name = theme.tile_for(realm, id)
 			if not have[name] then return false, name end
 		end
 		if not have[theme.sea_tile()] then return false, theme.sea_tile() end
@@ -304,9 +304,9 @@ do
 		local have = atlas_images("main/emoji.atlas")
 		if not have then return false, "no main/emoji.atlas - run tools/import_emoji.py" end
 		local named = 0
-		for id = 1, #galaxy.stars do
-			for _, capital in ipairs({ false, true }) do
-				local name = theme.emoji_for(galaxy, id, capital)
+		for id = 1, #realm.tiles do
+			for _, seat in ipairs({ false, true }) do
+				local name = theme.emoji_for(realm, id, seat)
 				if name then
 					named = named + 1
 					if not have["emoji_" .. name] then return false, name end
@@ -320,19 +320,19 @@ do
 	end)())
 
 	-- Every feature the generator can roll must be drawable, whether or not this
-	-- seed rolled it. An outpost with no glyph is ground the player cannot tell
+	-- seed rolled it. A holding with no glyph is ground the player cannot tell
 	-- from open country while it quietly counts towards somebody's victory.
 	check("every productive feature has a glyph", (function()
 		local theme = require("main.theme")
-		local terrain = require("galaxy.terrain")
+		local terrain = require("realm.terrain")
 		local have = atlas_images("main/emoji.atlas")
 		if not have then return false, "no main/emoji.atlas" end
-		local fake = { stars = { { terrain = "plains", feature = "none", habitable = false } } }
+		local fake = { tiles = { { terrain = "plains", feature = "none", habitable = false } } }
 		for i = 1, #terrain.FEATURES do
 			local id = terrain.FEATURES[i].id
 			if terrain.productive_feature(id) then
-				fake.stars[1].feature = id
-				fake.system_profiles = nil
+				fake.tiles[1].feature = id
+				fake.tile_profiles = nil
 				local name = theme.emoji_for(fake, 1, false)
 				if not name or not have["emoji_" .. name] then return false, id end
 			end
@@ -340,7 +340,7 @@ do
 		return true
 	end)())
 
-	-- The same join, for the *interface*. The system sheet draws a unit as the
+	-- The same join, for the *interface*. The tile sheet draws a unit as the
 	-- emoji main/theme.lua's UNIT_EMOJI names, and main/emoji_ui.lua turns that
 	-- into an atlas image id. Nothing connects the three but strings, and
 	-- ui.emoji swallows a miss on purpose - so a mismatch would quietly draw an
@@ -348,7 +348,7 @@ do
 	-- card there is no other way to read.
 	check("every unit type has an interface glyph", (function()
 		local theme = require("main.theme")
-		local units = require("galaxy.sim.units")
+		local units = require("realm.sim.units")
 		local ok, atlas = pcall(require, "main.emoji_ui")
 		if not ok then return false, "no main/emoji_ui.lua - run tools/import_emoji.py" end
 		for i = 1, #units.CATALOGUE do

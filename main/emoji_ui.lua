@@ -4,13 +4,13 @@
 return {
 	barrow = "emoji_barrow",
 	bombard = "emoji_bombard",
-	capital = "emoji_capital",
-	colony = "emoji_colony",
+	city = "emoji_city",
 	escort = "emoji_escort",
 	gems = "emoji_gems",
 	interceptor = "emoji_interceptor",
 	mine = "emoji_mine",
 	portal = "emoji_portal",
 	ruins = "emoji_ruins",
+	seat = "emoji_seat",
 	shrine = "emoji_shrine",
 }

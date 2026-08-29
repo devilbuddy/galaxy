@@ -8,10 +8,10 @@
 -- Usage:
 --   luajit tools/sweep.lua "<overrides>" [seeds] [players] [max_turns]
 --
--- Overrides are `;`-separated assignments, applied before the first galaxy is
+-- Overrides are `;`-separated assignments, applied before the first realm is
 -- built:
 --
---   rules.garrison_cap=8          a field of galaxy/sim/rules.lua
+--   rules.garrison_cap=8          a field of realm/sim/rules.lua
 --   berths.cost=40                a field of that building in the catalogue
 --   foundry.every=2               ...including its cadence and its cap
 --
@@ -21,13 +21,13 @@
 -- four-player sweep is a few seconds, so there is nothing to optimise here.
 --
 -- What it reports is deliberately more than "how long": a variant that decides
--- quickly while every player sits on thousands of unspendable supply has not
+-- quickly while every player sits on thousands of unspendable gold has not
 -- been priced correctly, it has been starved somewhere else.
 
 package.path = "./?.lua;" .. package.path
 
-local rules = require("galaxy.sim.rules")
-local buildings = require("galaxy.sim.buildings")
+local rules = require("realm.sim.rules")
+local buildings = require("realm.sim.buildings")
 
 local overrides = arg[1] or ""
 local seed_count = tonumber(arg[2]) or 10
@@ -46,7 +46,7 @@ for clause in overrides:gmatch("[^;]+") do
 	value = tonumber(value)
 	if target == "rules" then
 		-- One level of nesting, for the tables that are themselves prices:
-		-- `rules.supply_yield.colony=3`, `rules.order_cost.build=0`.
+		-- `rules.gold_yield.city=3`, `rules.order_cost.build=0`.
 		if sub ~= "" then
 			rules[field][sub] = value
 		else
@@ -62,15 +62,15 @@ for clause in overrides:gmatch("[^;]+") do
 	end
 end
 
-local gen = require("galaxy.generate")
-local st = require("galaxy.sim.state")
-local res = require("galaxy.sim.resolve")
-local path = require("galaxy.sim.path")
-local races = require("galaxy.sim.races")
-local bots = require("galaxy.sim.bots")
-local units = require("galaxy.sim.units")
+local gen = require("realm.generate")
+local st = require("realm.sim.state")
+local res = require("realm.sim.resolve")
+local path = require("realm.sim.path")
+local races = require("realm.sim.races")
+local bots = require("realm.sim.bots")
+local units = require("realm.sim.units")
 
--- A fixed spread, so two variants are always compared on the same galaxies.
+-- A fixed spread, so two variants are always compared on the same realms.
 local SEEDS = { 1, 7, 42, 1337, 2024, 8888, 424242, 90210, 31337, 555,
 	13, 271828, 60606, 4711, 999983, 20260823, 5, 88, 314159, 77777 }
 
@@ -84,28 +84,28 @@ local function median(t)
 	return (c[mid] + c[mid + 1]) / 2
 end
 
-local decided, first_blood, idle_supply, built_total, undecided = {}, {}, {}, {}, 0
+local decided, first_blood, idle_gold, built_total, undecided = {}, {}, {}, {}, 0
 -- Which buildings actually get raised, and how many officers anyone ends with.
 -- A price nobody ever pays is not a price, and the two most likely to be wrong
 -- are the dearest thing on the board and the one with no obvious use.
 local raised = {}
 for i = 1, #buildings.CATALOGUE do raised[buildings.CATALOGUE[i].id] = 0 end
-local captains_each = {}
+local commanders_each = {}
 local race_ids = races.ids()
 
 for s = 1, math.min(seed_count, #SEEDS) do
 	local seed = SEEDS[s]
-	local galaxy = gen.build(seed)
+	local realm = gen.build(seed)
 	local players = {}
 	for i = 1, player_count do
 		players[i] = { id = "ai" .. i, name = bots.name(i),
 			race = race_ids[((i - 1) % #race_ids) + 1], bot = true }
 	end
-	local state = st.new(galaxy, players)
+	local state = st.new(realm, players)
 
 	local won, fight = nil, nil
 	for turn = 1, max_turns do
-		local events = res.turn(galaxy, state, bots.all_orders(galaxy, state))
+		local events = res.turn(realm, state, bots.all_orders(realm, state))
 		for e = 1, #events do
 			if not fight and events[e].kind == "battle" then fight = turn end
 		end
@@ -120,11 +120,11 @@ for s = 1, math.min(seed_count, #SEEDS) do
 	local purse, built, alive = 0, 0, 0
 	for i = 1, #state.players do
 		if state.players[i].alive then
-			purse = purse + (state.players[i].supply or 0)
+			purse = purse + (state.players[i].gold or 0)
 			alive = alive + 1
 		end
 	end
-	for _, sys in pairs(state.systems) do
+	for _, sys in pairs(state.tiles) do
 		if sys.owner ~= 0 then
 			built = built + #sys.buildings
 			for b = 1, #sys.buildings do
@@ -136,13 +136,13 @@ for s = 1, math.min(seed_count, #SEEDS) do
 	for i = 1, #state.players do
 		if state.players[i].alive then
 			local mine = 0
-			for c = 1, #state.captains do
-				if state.captains[c].owner == i then mine = mine + 1 end
+			for c = 1, #state.commanders do
+				if state.commanders[c].owner == i then mine = mine + 1 end
 			end
-			captains_each[#captains_each + 1] = mine
+			commanders_each[#commanders_each + 1] = mine
 		end
 	end
-	idle_supply[#idle_supply + 1] = math.floor(purse / math.max(1, alive))
+	idle_gold[#idle_gold + 1] = math.floor(purse / math.max(1, alive))
 	built_total[#built_total + 1] = built
 end
 
@@ -159,7 +159,7 @@ print(string.format(
 	tostring(median(decided) or "-"),
 	tostring(lo or "-"), tostring(hi or "-"),
 	tostring(median(first_blood) or "-"),
-	tostring(median(idle_supply) or "-"),
+	tostring(median(idle_gold) or "-"),
 	tostring(median(built_total) or "-")))
 
 local parts = {}
@@ -168,4 +168,4 @@ for i = 1, #buildings.CATALOGUE do
 	parts[#parts + 1] = string.format("%s %d", id, raised[id])
 end
 print("    raised: " .. table.concat(parts, "  ")
-	.. "   captains/player median " .. tostring(median(captains_each) or "-"))
+	.. "   commanders/player median " .. tostring(median(commanders_each) or "-"))

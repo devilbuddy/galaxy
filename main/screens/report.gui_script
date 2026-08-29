@@ -3,7 +3,7 @@
 -- Shown as a Monarch popup over the map, so dismissing it reveals the map
 -- already in its new state rather than triggering another load.
 --
--- The event log is deliberately raw on the wire (see galaxy/sim/resolve.lua);
+-- The event log is deliberately raw on the wire (see realm/sim/resolve.lua);
 -- turning it into sentences is a presentation concern and lives here, which
 -- means the same log could later drive an animated playback without the server
 -- changing at all.
@@ -21,10 +21,10 @@ local PAD = 26
 -- unbounded version exhausted it and the screen failed to build at all.
 local MAX_ROWS = 140
 
-local function system_name(id)
-	local g = store.galaxy
-	if g and id and g.stars[id] then return g.stars[id].name end
-	return "system " .. tostring(id)
+local function tile_name(id)
+	local g = store.realm
+	if g and id and g.tiles[id] then return g.tiles[id].name end
+	return "tile " .. tostring(id)
 end
 
 local function player_name(index)
@@ -45,8 +45,8 @@ local function describe(event, me)
 
 	if kind == "turn_summary" then
 		local bits = {
-			ui.plural(event.systems or 0, "system"),
-			ui.plural(event.regions or 0, "region"),
+			ui.plural(event.tiles or 0, "tile"),
+			ui.plural(event.provinces or 0, "province"),
 		}
 		if (event.claimed or 0) > 0 then
 			bits[#bits + 1] = "+" .. ui.plural(event.claimed, "claimed")
@@ -55,8 +55,8 @@ local function describe(event, me)
 			bits[#bits + 1] = "+" .. ui.plural(event.taken, "taken")
 		end
 		if (event.earned or 0) > 0 then
-			bits[#bits + 1] = string.format("%d supply (+%d)",
-				event.supply or 0, event.earned)
+			bits[#bits + 1] = string.format("%d gold (+%d)",
+				event.gold or 0, event.earned)
 		end
 		return {
 			heading = true,
@@ -67,8 +67,8 @@ local function describe(event, me)
 	elseif kind == "claimed" then
 		return {
 			icon = "icon_flag", tone = event.player == me and ui.GOOD or ui.DIM,
-			title = (event.player == me and "Claimed " or "Lost ") .. system_name(event.at),
-			subtitle = (event.name or "A captain") .. " passed through",
+			title = (event.player == me and "Claimed " or "Lost ") .. tile_name(event.at),
+			subtitle = (event.name or "A commander") .. " passed through",
 		}
 
 	elseif kind == "bought" then
@@ -82,24 +82,24 @@ local function describe(event, me)
 			icon = "icon_industry", tone = ui.GOOD,
 			title = "Bought " .. (#mix > 0 and table.concat(mix, ", ")
 				or ui.plural(event.units or 0, "unit")),
-			subtitle = string.format("into the garrison at %s, for %d supply",
-				system_name(event.at), event.cost or 0),
+			subtitle = string.format("into the garrison at %s, for %d gold",
+				tile_name(event.at), event.cost or 0),
 		}
 
 	elseif kind == "transferred" then
 		return {
 			icon = "icon_warship", tone = ui.GOOD,
-			title = (event.name or "A captain") .. " took aboard "
+			title = (event.name or "A commander") .. " took aboard "
 				.. ui.plural(event.units or 0, "unit"),
 			subtitle = string.format("at %s - now %d vs walls, %d vs ships",
-				system_name(event.at), event.siege or 0,
-				event.fleet_power or 0),
+				tile_name(event.at), event.siege or 0,
+				event.army_power or 0),
 		}
 
 	elseif kind == "garrison_lost" then
 		return {
 			icon = "icon_defence", tone = ui.BAD,
-			title = "The garrison at " .. system_name(event.at)
+			title = "The garrison at " .. tile_name(event.at)
 				.. " was destroyed",
 			subtitle = ui.plural(event.units or 0, "unit") .. " lost holding it",
 		}
@@ -107,34 +107,34 @@ local function describe(event, me)
 	elseif kind == "built" then
 		return {
 			icon = "icon_industry", tone = ui.GOOD,
-			title = (event.name or "A building") .. " at " .. system_name(event.at),
-			subtitle = string.format("%d supply", event.cost or 0),
+			title = (event.name or "A building") .. " at " .. tile_name(event.at),
+			subtitle = string.format("%d gold", event.cost or 0),
 		}
 
 	elseif kind == "recruited" then
 		return {
 			icon = "icon_warship", tone = ui.GOOD,
 			title = (event.name or "An officer") .. " took up a commission",
-			subtitle = string.format("Raised at %s for %d supply",
-				system_name(event.at), event.cost or 0),
+			subtitle = string.format("Raised at %s for %d gold",
+				tile_name(event.at), event.cost or 0),
 		}
 
-	elseif kind == "captain_moved" or kind == "contact_moved" then
+	elseif kind == "commander_moved" or kind == "contact_moved" then
 		-- On the wire, deliberately not in this list. Movement is one row per
-		-- captain per turn and the digest spans up to forty turns, so listing it
+		-- commander per turn and the digest spans up to forty turns, so listing it
 		-- would bury everything that actually happened. It is carried for the
-		-- playback to animate; see the note in galaxy/sim/resolve.lua.
+		-- playback to animate; see the note in realm/sim/resolve.lua.
 		return nil
 
-	elseif kind == "captain_ordered" then
+	elseif kind == "commander_ordered" then
 		return {
 			icon = "icon_speed", tone = ui.ACCENT,
-			title = (event.name or "A captain") .. " set out",
+			title = (event.name or "A commander") .. " set out",
 			subtitle = string.format("Bound for %s, %s away",
-				system_name(event.to), ui.plural(event.hops or 0, "lane")),
+				tile_name(event.to), ui.plural(event.hops or 0, "tile")),
 		}
 
-	elseif kind == "captain_blocked" then
+	elseif kind == "commander_blocked" then
 		local who = player_name(event.held_by)
 		-- The numbers, not just the fact. Being turned back is the moment a
 		-- player needs to know exactly what it would have taken; without it the
@@ -142,25 +142,25 @@ local function describe(event, me)
 		-- again.
 		-- **Which half turned them back**, because that is the whole of what a
 		-- player does next: bring guns, or bring ships.
-		local detail = system_name(event.blocked_by) .. " is held by " .. who
+		local detail = tile_name(event.blocked_by) .. " is held by " .. who
 		if (event.siege or 0) < (event.fortification or 0) then
 			detail = detail .. string.format("  -  walls %d, brought %d",
 				event.fortification, event.siege)
-		elseif (event.fleet or 0) > 0 then
+		elseif (event.army or 0) > 0 then
 			detail = detail .. string.format("  -  ships %d, brought %d",
-				event.fleet, event.fleet_power or 0)
+				event.army, event.army_power or 0)
 		end
 		return {
 			icon = "icon_close", tone = ui.WARN,
-			title = (event.name or "A captain") .. " was turned back",
+			title = (event.name or "A commander") .. " was turned back",
 			subtitle = detail,
 		}
 
 	elseif kind == "battle" then
 		local mine = event.player == me
 		local title = mine
-			and ((event.name or "A captain") .. " took " .. system_name(event.at))
-			or (player_name(event.player) .. " took " .. system_name(event.at))
+			and ((event.name or "A commander") .. " took " .. tile_name(event.at))
+			or (player_name(event.player) .. " took " .. tile_name(event.at))
 		-- Named, not just numbered. "33 resistance broken" is a receipt; "the
 		-- world's 9 and Commodore Vantor" is what happened, and it is the same
 		-- data the resolver already sends for a replay to be built from.
@@ -195,20 +195,20 @@ local function describe(event, me)
 			battle = (mine and event.exchanges) and event or nil,
 		}
 
-	elseif kind == "captain_broken" then
+	elseif kind == "commander_broken" then
 		return {
 			icon = "icon_defence", tone = ui.BAD,
-			title = (event.name or "A captain") .. " was broken at "
-				.. system_name(event.lost),
-			subtitle = "Reformed at the capital as "
+			title = (event.name or "A commander") .. " was broken at "
+				.. tile_name(event.lost),
+			subtitle = "Reformed at the seat as "
 				.. (event.rank or "a lesser officer"),
 		}
 
-	elseif kind == "region_control" then
-		local where = event.name or ("region " .. tostring(event.region))
+	elseif kind == "province_control" then
+		local where = event.name or ("province " .. tostring(event.province))
 		if event.player == me then
 			return { icon = "icon_flag", tone = ui.GOOD,
-				title = "Took " .. where, subtitle = "The region is yours" }
+				title = "Took " .. where, subtitle = "The province is yours" }
 		elseif event.from == me then
 			return { icon = "icon_flag", tone = ui.BAD,
 				title = "Lost " .. where,
@@ -228,9 +228,9 @@ local function describe(event, me)
 			title = event.player == me and "You have won"
 				or (player_name(event.player) .. " has won"),
 			subtitle = event.by == "survival"
-				and "Everyone else has lost their capital"
-				or string.format("%d of %d regions held",
-					event.regions or 0, event.needed or 0),
+				and "Everyone else has lost their seat"
+				or string.format("%d of %d provinces held",
+					event.provinces or 0, event.needed or 0),
 		}
 
 	elseif kind == "order_rejected" then
@@ -243,11 +243,11 @@ local function describe(event, me)
 	elseif kind == "eliminated" then
 		return {
 			icon = "icon_close", tone = ui.BAD,
-			title = player_name(event.player) .. " has lost their capital",
+			title = player_name(event.player) .. " has lost their seat",
 		}
 	end
 
-	return { icon = "icon_star", title = kind, subtitle = tostring(event.at or "") }
+	return { icon = "icon_tile", title = kind, subtitle = tostring(event.at or "") }
 end
 
 local function build(self, data)
@@ -274,11 +274,11 @@ local function build(self, data)
 	-- scroll past to find out what happened last night.
 	--
 	-- **Events inside a turn keep the order they happened in.** They are a
-	-- sequence - a captain sets out, is turned back - and reversing them within
+	-- sequence - a commander sets out, is turned back - and reversing them within
 	-- the turn would make each one read as the cause of the one above it.
 	--
 	-- The resolver appends each turn's summary *after* that turn's events (it is
-	-- written in the aftermath phase), so read top-down the log said "fleet out
+	-- written in the aftermath phase), so read top-down the log said "army out
 	-- of fuel" and only then "TURN 544" - the heading closed a turn instead of
 	-- opening it. Regroup so a turn's heading still opens its own group.
 	local order, groups = {}, {}

@@ -23,7 +23,7 @@
 --     size stays crisp.
 
 local store = require("main.store")
-local races = require("galaxy.sim.races")
+local races = require("realm.sim.races")
 
 local M = {}
 
@@ -44,7 +44,7 @@ end
 M.rgb = rgb
 
 M.BG          = rgb(0x060A12)  -- the page
-M.BG_SOFT     = rgb(0x0A1020)  -- a slightly lifted region of it
+M.BG_SOFT     = rgb(0x0A1020)  -- a slightly lifted province of it
 M.CARD        = rgb(0x0E1626)  -- a surface holding content
 M.CARD_ALT    = rgb(0x141F35)  -- a row inside a card, or a pressed card
 M.CARD_HI     = rgb(0x1B2842)  -- hover / selected
@@ -214,7 +214,7 @@ function M.portrait(x, y, size, id, opts)
 	gui.set_texture(node, M.PORTRAIT_ATLAS)
 	-- Portraits are grouped by race (tools/import_portraits.py), so there is no
 	-- generic first portrait to fall back to - the default race's is the
-	-- stand-in, the same one galaxy/sim/commanders.lua falls back to.
+	-- stand-in, the same one realm/sim/commanders.lua falls back to.
 	local ok = pcall(gui.play_flipbook, node, id or "portrait_terran_01")
 	if not ok then pcall(gui.play_flipbook, node, "portrait_terran_01") end
 	-- The ring goes on top, so it covers the mask's soft edge rather than
@@ -540,7 +540,7 @@ local BUTTON_STYLE = {
 
 --- A button, as a real Druid component.
 --
--- Druid supplies the press animation and the input plumbing; the only thing
+-- Druid gold the press animation and the input plumbing; the only thing
 -- this adds is the skin, and a handle to restyle it later. Callers get back a
 -- table rather than loose nodes because a button is nearly always something a
 -- screen enables, disables or relabels after the fact.
@@ -651,7 +651,7 @@ function M.tabs(druid, x, y, w, items, active, on_pick)
 		end
 	end
 
-	-- Handed back so a caller that rebuilds a region can take them out again.
+	-- Handed back so a caller that rebuilds a province can take them out again.
 	-- Without this they outlived their nodes and Druid went on polling deleted
 	-- ones - `hover.lua: Deleted node` on the next touch anywhere.
 	local handle = { components = components }
@@ -666,7 +666,7 @@ function M.tabs(druid, x, y, w, items, active, on_pick)
 	return handle
 end
 
---- A clipped scrolling region. Returns the view node, the content node to
+--- A clipped scrolling province. Returns the view node, the content node to
 --- parent rows into, and the Druid scroll so content height can be updated.
 function M.scroll(druid, x, y, w, h)
 	local view = M.sprite(x, y, w, h, "solid", M.CLEAR)
@@ -695,7 +695,7 @@ end
 -- anyway rather than framing what is behind them.
 --
 -- Deliberately *not* a Druid blocker. A blocker covering the whole screen also
--- sits in front of the popup's own scroll regions and eats their drags, so the
+-- sits in front of the popup's own scroll provinces and eats their drags, so the
 -- research tree could not be scrolled at all. Keeping input away from the map
 -- behind is the modal's job: see M.modal_input.
 function M.shade(alpha)
@@ -711,7 +711,7 @@ end
 -- the popup.
 --
 -- Takes one Druid instance or a list of them, because a screen that rebuilds
--- part of itself wants a separate instance for that part - see M.region.
+-- part of itself wants a separate instance for that part - see M.province.
 function M.modal_input(druid, action_id, action)
 	local converted = M.gui_action(action)
 	if druid[1] ~= nil or druid.on_input == nil then
@@ -724,11 +724,11 @@ function M.modal_input(druid, action_id, action)
 	return true
 end
 
---- Tear down a rebuildable region: its Druid instance, then its nodes.
+--- Tear down a rebuildable province: its Druid instance, then its nodes.
 --
 -- The order is the point. A component whose node has already been deleted throws
 -- from its own teardown, and one that outlives its node throws on the next touch
--- anywhere on screen. Giving a region its own instance makes both impossible
+-- anywhere on screen. Giving a province its own instance makes both impossible
 -- without anybody having to remember to track every component they created -
 -- which is exactly what went wrong: `ui.tabs` and `ui.scroll` each quietly
 -- registered one and the caller only tracked its buttons.
@@ -745,7 +745,7 @@ function M.region(instance, nodes)
 		--       get_parent -> get_closest_stencil_node -> button.on_late_init
 		--
 		-- Which makes it a *race*, not a mistake in the teardown order: it only
-		-- throws when a region is rebuilt within a frame of a button being made
+		-- throws when a province is rebuilt within a frame of a button being made
 		-- in it - a fast second tap, a relayout landing on the frame a card was
 		-- built, a playback stepping at 4x. That is why it was intermittent and
 		-- why it appeared to come from screens with no connection to whatever
@@ -823,15 +823,15 @@ function M.text_width(value, size)
 	return #(value or "") * (size or M.BODY) * 0.56
 end
 
--- Measured widths, keyed by font and string. Map labels are a fixed set of star
--- and region names, so after the first frame every lookup is a cache hit.
+-- Measured widths, keyed by font and string. Map labels are a fixed set of tile
+-- and province names, so after the first frame every lookup is a cache hit.
 local measured = {}
 
 --- Exact rendered width of a string, in the units a node scaled to `scale`
 --- would occupy.
 --
 -- The estimate above is not good enough here: an average advance under-measures
--- upper-case badly, and region names are upper case. Labels overlapped each
+-- upper-case badly, and province names are upper case. Labels overlapped each
 -- other and ran off the screen edge because the rejection test thought they
 -- were narrower than they are.
 function M.measure(font, value, scale)
@@ -850,7 +850,7 @@ function M.measure(font, value, scale)
 	return w * (scale or 1)
 end
 
---- A race's identity colour, as declared in galaxy/sim/races.lua.
+--- A race's identity colour, as declared in realm/sim/races.lua.
 function M.race_colour(id, alpha)
 	local c = races.by_id(id).colour
 	return vmath.vector4(c[1], c[2], c[3], alpha or 1.0)

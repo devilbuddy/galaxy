@@ -1,12 +1,12 @@
 --- One battle, exchange by exchange.
 --
--- The turn digest says a system changed hands. This says what it *cost*, which
--- in an asynchronous game is the part that decides the next turn: a captain who
+-- The turn digest says a tile changed hands. This says what it *cost*, which
+-- in an asynchronous game is the part that decides the next turn: a commander who
 -- took a fortress and came out with two units left is not going anywhere for a
 -- while, and that is the thing a player needs to see rather than infer.
 --
 -- **Whether it was won was never in doubt** - the sheet's two comparisons said
--- so before the order was given, and a captain that cannot beat both halves
+-- so before the order was given, and a commander that cannot beat both halves
 -- does not attack. So this screen is not a reveal. It is the receipt.
 --
 -- ### What it does not draw
@@ -26,7 +26,7 @@ local monarch = require("monarch.monarch")
 local store = require("main.store")
 local ui = require("main.ui")
 local playback = require("main.playback")
-local sim_units = require("galaxy.sim.units")
+local sim_units = require("realm.sim.units")
 
 local PAD = 26
 -- A unit is drawn as a pip rather than a ship: at this size a glyph is a smudge,
@@ -42,10 +42,10 @@ local TYPE_COLOUR = {
 	bombard = ui.WARN,
 }
 
-local function star_name(id)
-	local g = store.galaxy
-	local star = id and g and g.stars[id]
-	return (star and star.name) or ("system " .. tostring(id))
+local function tile_name(id)
+	local g = store.realm
+	local tile = id and g and g.tiles[id]
+	return (tile and tile.name) or ("tile " .. tostring(id))
 end
 
 local function player_name(index)
@@ -141,7 +141,7 @@ local function build(self, data)
 	-- before the order was given - so it states rather than announces.
 	ui.h1(inner, top - 34, mine and "You took it" or "It was taken", nil)
 	ui.small(inner, top - 74, string.format("%s   %s",
-		star_name(event.at), ui.plural(#frames, "exchange")), ui.DIM)
+		tile_name(event.at), ui.plural(#frames, "exchange")), ui.DIM)
 
 	local y = top - 118
 	ui.divider(inner, y, width - PAD * 2)
@@ -150,7 +150,7 @@ local function build(self, data)
 	y = y - 34
 	ui.caps(inner, y, player_name(event.player))
 	ui.small(inner + width - PAD * 2, y, string.format("%d vs walls   %d vs ships",
-		event.siege or 0, event.fleet_power or 0), ui.FAINT,
+		event.siege or 0, event.army_power or 0), ui.FAINT,
 		{ pivot = gui.PIVOT_E })
 	ui.pill(inner - 8, y + 12, 4, 24, player_colour(event.player))
 

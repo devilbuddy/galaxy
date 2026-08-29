@@ -63,7 +63,7 @@ local function publish(safe)
 	end
 	store.safe = safe
 	store.safe_revision = (store.safe_revision or 0) + 1
-	-- Logged like the galaxy digest is: it is the only way to tell a real inset
+	-- Logged like the realm digest is: it is the only way to tell a real inset
 	-- from the zeroes returned when the extension is missing or not ready.
 	print(string.format("safearea: top %.0f  bottom %.0f  left %.0f  right %.0f (view units)",
 		safe.top, safe.bottom, safe.left, safe.right))

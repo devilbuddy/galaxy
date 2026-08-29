@@ -7,29 +7,29 @@
    "cell": 0,
    "codepoint": "1faa6"
   },
-  "capital": {
+  "city": {
    "cell": 1,
-   "codepoint": "1f3f0"
-  },
-  "colony": {
-   "cell": 2,
    "codepoint": "1f3d8"
   },
   "gems": {
-   "cell": 3,
+   "cell": 2,
    "codepoint": "1f48e"
   },
   "mine": {
-   "cell": 4,
+   "cell": 3,
    "codepoint": "26cf"
   },
   "portal": {
-   "cell": 5,
+   "cell": 4,
    "codepoint": "1f300"
   },
   "ruins": {
-   "cell": 6,
+   "cell": 5,
    "codepoint": "1f3db"
+  },
+  "seat": {
+   "cell": 6,
+   "codepoint": "1f3f0"
   },
   "shrine": {
    "cell": 7,

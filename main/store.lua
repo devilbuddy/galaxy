@@ -7,8 +7,8 @@
 
 local M = {}
 
--- The generated galaxy (see galaxy/generate.lua for its shape).
-M.galaxy = nil
+-- The generated realm (see realm/generate.lua for its shape).
+M.realm = nil
 
 -- The view, published by the render script: the design width from
 -- game.project, with the height derived from the framebuffer's real aspect
@@ -27,16 +27,16 @@ M.screen = {
 -- Live camera state, written by main/camera.script and read by the render
 -- script to build the projection.
 --
--- `zoom_min` is the fit-the-whole-galaxy floor and `zoom_max` the ceiling; both
+-- `zoom_min` is the fit-the-whole-realm floor and `zoom_max` the ceiling; both
 -- are published because the HUD's zoom buttons have to know when they have run
 -- out of range - a control that still animates a press but does nothing is
 -- indistinguishable from a broken one.
 M.camera = { x = 0, y = 0, zoom = 1, zoom_min = 1, zoom_max = 1 }
 
--- Currently selected star index, or nil.
+-- Currently selected tile index, or nil.
 M.selected = nil
 
--- "server" or "local": where the current galaxy came from.
+-- "server" or "local": where the current realm came from.
 M.source = nil
 
 -- The active game's id, and the player's projected view of it.
@@ -81,8 +81,8 @@ M.turn_ended = nil
 -- main/screens/menu.gui_script).
 M.leave_requested = nil
 
--- A colony's upgrade slot the player has just tapped, and what the popup that
--- opens over it should offer: `{ at = <system>, slot = <n>, building = <id or
+-- A city's upgrade slot the player has just tapped, and what the popup that
+-- opens over it should offer: `{ at = <tile>, slot = <n>, building = <id or
 -- nil> }`. An empty slot picks something to build; a full one is the way to
 -- whatever that building lets you do.
 --
@@ -93,14 +93,14 @@ M.leave_requested = nil
 M.slot_popup = nil
 M.slot_request = nil
 
--- An empty garrison slot the player has just tapped: `{ at = <system> }`. The
+-- An empty garrison slot the player has just tapped: `{ at = <tile> }`. The
 -- popup that opens lists what this world has a dwelling for and what it costs,
--- and answers with `buy_request = { at = <system>, type = <unit id> }` - one
+-- and answers with `buy_request = { at = <tile>, type = <unit id> }` - one
 -- unit, because one slot is one unit.
 --
 -- Shown by the HUD for the same two reasons as the slot popup: staging spends
 -- the turn's allowance and only the HUD knows what is left of it, and a screen
--- cannot open a popup from inside the region Monarch is part way through
+-- cannot open a popup from inside the province Monarch is part way through
 -- tearing down.
 M.buy_popup = nil
 M.buy_request = nil
@@ -113,10 +113,10 @@ M.pending_report = nil
 -- Playback: the digest being watched rather than read (main/playback.lua).
 --
 -- `playback_owners` is who held what at the turn currently being replayed,
--- keyed by system id. When it is set the map draws *that* instead of today -
--- `knowledge()` in main/galaxy.script is the single place ownership colour is
+-- keyed by tile id. When it is set the map draws *that* instead of today -
+-- `knowledge()` in main/realm.script is the single place ownership colour is
 -- decided, so overriding it there recolours the wash, the borders and the
--- stars together. `playback_revision` is bumped whenever the step changes, and
+-- tiles together. `playback_revision` is bumped whenever the step changes, and
 -- is what tells the map to repaint; nil owners means the playback is over and
 -- the live view is correct again.
 -- Set alongside `pending_report` when the digest should be opened immediately
@@ -130,23 +130,23 @@ M.playback_owners = nil
 M.playback_revision = 0
 M.playback_active = false
 
--- Currently selected captain id, or nil. A captain and a system can be selected
--- at once: the system is what the card describes, the captain is what an order
+-- Currently selected commander id, or nil. A commander and a tile can be selected
+-- at once: the tile is what the card describes, the commander is what an order
 -- will move.
-M.selected_captain = nil
+M.selected_commander = nil
 
 -- What the next tap on the map will do, or nil for "just look":
---   { kind = "move", captain = <id> }
--- Set by the system sheet, consumed by the next system tap.
+--   { kind = "move", commander = <id> }
+-- Set by the tile sheet, consumed by the next tile tap.
 M.aiming = nil
 
--- Transient status line for the HUD ("connecting...", "requesting galaxy...").
+-- Transient status line for the HUD ("connecting...", "requesting realm...").
 M.status = nil
 
 -- The band of the screen the map is actually visible in: everything between the
 -- bottom chrome and the top chrome, in view units. The camera clamps against
 -- this rather than the window, because the window includes several hundred
--- units of panel the player cannot see the galaxy through.
+-- units of panel the player cannot see the realm through.
 M.hud_band = { floor = 0, ceiling = 0 }
 
 -- Height of the bottom HUD bar, in view units. Used only to frame the map in
@@ -167,7 +167,7 @@ M.safe_revision = 0
 -- guaranteed. The HUD republishes these whenever it lays out.
 M.hud_zones = {}
 
--- Bumped whenever a new galaxy is generated, so the HUD can notice.
+-- Bumped whenever a new realm is generated, so the HUD can notice.
 M.revision = 0
 
 --- How many orders the plan holds. A build or a recruit counts as one: they are
@@ -244,7 +244,7 @@ function M.plan_signature()
 			mix = tostring(o.units)
 		end
 		parts[#parts + 1] = table.concat({
-			tostring(o.kind), tostring(o.captain), route,
+			tostring(o.kind), tostring(o.commander), route,
 			mix, tostring(o.at or ""), tostring(o.building or ""),
 		}, ":")
 	end
@@ -261,7 +261,7 @@ end
 --- Throw the plan away, because the turn it was aimed at has resolved.
 --
 -- Re-sending it would point last turn's move at this turn's map, and the
--- fleet it named may no longer exist.
+-- army it named may no longer exist.
 function M.plan_consumed(turn)
 	if not M.orders_turn or turn < M.orders_turn then return false end
 	M.orders = {}

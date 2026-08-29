@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a dumped galaxy JSON to a PNG, for eyeballing generation offline."""
+"""Render a dumped realm JSON to a PNG, for eyeballing generation offline."""
 import json, sys, math
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -14,8 +14,8 @@ def render(path, out, size=900):
     def to_px(p):
         return ((p["x"] * 0.5 + 0.5) * size, (1.0 - (p["y"] * 0.5 + 0.5)) * size)
 
-    # lanes underneath, if present
-    for e in d.get("lanes", []):
+    # tiles underneath, if present
+    for e in d.get("tiles", []):
         a, b = to_px(pts[e[0] - 1]), to_px(pts[e[1] - 1])
         dr.line([a, b], fill=(58, 74, 120), width=1)
 

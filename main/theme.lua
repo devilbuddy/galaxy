@@ -10,17 +10,17 @@
 -- The glyph vocabulary is **semantic**: it says what a place is for, not what it
 -- would look like from the air. And it is deliberately sparse - open country
 -- gets no glyph at all, because the hex underneath already says it is forest.
--- The old map drew a sparkle on every waypoint only because a bare disc said
+-- The old map drew a sparkle on every wilds only because a bare disc said
 -- nothing.
 --
--- One resolver, shared by the game (`main/galaxy.script`), the offline sketch
+-- One resolver, shared by the game (`main/realm.script`), the offline sketch
 -- (`tools/render_map.py`) and the tests (`tools/test_wire.lua` checks every name
--- this can produce exists in the atlas). It sits on `galaxy.sim.systems.profile`
+-- this can produce exists in the atlas). It sits on `realm.sim.tiles.profile`
 -- and the tile's own terrain, which both a locally generated map and a
 -- server-decoded one satisfy - so the wire and the offline fallback cannot
 -- disagree about what a tile is drawn as.
 
-local systems = require("galaxy.sim.systems")
+local tiles = require("realm.sim.tiles")
 
 local M = {}
 
@@ -28,7 +28,7 @@ local M = {}
 --
 -- `M.TILES` maps a terrain name to the `foundation_tiles` pack's own file
 -- suffix. The names on the left are this module's contract with
--- `galaxy.terrain`; the suffixes on the right are its contract with the art,
+-- `realm.terrain`; the suffixes on the right are its contract with the art,
 -- and are why `plains` can be drawn with a tile the artist called "tundra"
 -- without either side having to lie. tools/import_tiles.py parses this.
 --
@@ -37,7 +37,7 @@ local M = {}
 -- places, `M.EMOJI` below already draws them, and a drawn city inside the hex
 -- under an emoji city on top of it is two cities.
 M.TILES = {
-	water     = "water",     -- sea. Not in the graph at all - see galaxy/land.lua
+	water     = "water",     -- sea. Not in the graph at all - see realm/land.lua
 	plains    = "tundra",    -- default open ground
 	forest    = "forest",
 	woods     = "trees",     -- sparser forest
@@ -47,7 +47,7 @@ M.TILES = {
 
 -- The five ground palettes the pack ships. Same art, same alpha mask, different
 -- ground colour - so a biome is a colour rather than a redraw, and every terrain
--- above exists in every one of these. Order matches galaxy.terrain's M.BIOMES.
+-- above exists in every one of these. Order matches realm.terrain's M.BIOMES.
 M.BIOMES = { "greenlands", "sandlands", "drylands", "deadlands", "icelands" }
 
 -- The art's own pixel dimensions. The sprite scale is derived from these -
@@ -66,8 +66,8 @@ M.GLYPH_PX = 224
 -- the hex rather than covering it - the hex's own art is what says the ground is
 -- forest, and a glyph big enough to hide it would be saying it twice.
 -- tools/render_map.py mirrors these, so a size approved in the sketch transfers.
-M.GLYPH_SCALE = { colony = 0.46, outpost = 0.40 }
-M.CAPITAL_GLYPH_SCALE = 0.56
+M.GLYPH_SCALE = { city = 0.46, holding = 0.40 }
+M.SEAT_GLYPH_SCALE = 0.56
 
 -- One palette for the whole sea, rather than each stretch of water taking its
 -- neighbour's. A coastline that changes colour along its length reads as a
@@ -79,8 +79,8 @@ M.SEA_BIOME = "icelands"
 -- tools/import_emoji.py); the codepoints are its contract with the Noto assets.
 M.EMOJI = {
 	-- Places people hold.
-	capital = "1f3f0",    -- castle: a player's seat
-	colony  = "1f3d8",    -- houses: somewhere people live
+	seat = "1f3f0",    -- castle: a player's seat
+	city  = "1f3d8",    -- houses: somewhere people live
 
 	-- Features. Each of these is exactly why a tile nobody could live on is
 	-- still worth marching to, which is why every one of them is drawn.
@@ -97,7 +97,7 @@ M.EMOJI = {
 -- Still a separate table, but no longer for a separate *mechanism*: both
 -- vocabularies now land in /main/emoji.atlas as named images, because a sprite
 -- can no more be handed a UV rect than a GUI node can. It is kept apart because
--- it is keyed by `galaxy.sim.units` id rather than by map meaning, so the
+-- it is keyed by `realm.sim.units` id rather than by map meaning, so the
 -- mapping is exhaustive by construction and `tools/test_wire.lua` can prove it.
 M.UNIT_EMOJI = {
 	escort      = "1f6e1", -- shield: takes the hits so the rest do not
@@ -106,8 +106,8 @@ M.UNIT_EMOJI = {
 }
 
 -- A feature is drawn as itself. One entry per productive feature in
--- `galaxy.terrain`, and `tools/test_wire.lua` fails if one is missing - an
--- outpost with no glyph would be a tile the player cannot tell from open ground
+-- `realm.terrain`, and `tools/test_wire.lua` fails if one is missing - an
+-- holding with no glyph would be a tile the player cannot tell from open ground
 -- while it quietly counts towards somebody's victory.
 local FEATURE_EMOJI = {
 	ruins  = "ruins",
@@ -119,9 +119,9 @@ local FEATURE_EMOJI = {
 }
 
 --- The atlas image for a tile's ground.
-function M.tile_for(galaxy, id)
-	local star = galaxy.stars[id]
-	return "tile_" .. star.biome .. "_" .. star.terrain
+function M.tile_for(realm, id)
+	local tile = realm.tiles[id]
+	return "tile_" .. tile.biome .. "_" .. tile.terrain
 end
 
 --- The atlas image for a stretch of sea.
@@ -131,14 +131,14 @@ end
 
 --- The glyph name for a tile, or **nil for open country**.
 --
--- `is_capital` is game state rather than map data, so the caller supplies it;
+-- `is_seat` is game state rather than map data, so the caller gold it;
 -- browsing a bare seed never draws a castle.
-function M.emoji_for(galaxy, id, is_capital)
-	if is_capital then return "capital" end
-	local kind = systems.kind(galaxy, id)
-	if kind == systems.COLONY then return "colony" end
-	if kind == systems.WAYPOINT then return nil end
-	return FEATURE_EMOJI[galaxy.stars[id].feature]
+function M.emoji_for(realm, id, is_seat)
+	if is_seat then return "seat" end
+	local kind = tiles.kind(realm, id)
+	if kind == tiles.CITY then return "city" end
+	if kind == tiles.WILDS then return nil end
+	return FEATURE_EMOJI[realm.tiles[id].feature]
 end
 
 return M

@@ -2,7 +2,7 @@
 """Drive a running debug build through the Automation Bridge.
 
 Why this exists: before it, testing a change on the device meant guessing where
-things were. Star positions were worked out by regenerating the galaxy offline
+things were. Tile positions were worked out by regenerating the realm offline
 and solving for the camera from two reference taps; whether a tap had even
 reached the game was answered by adding print statements and rebuilding. Both
 are now questions the running engine will simply answer.
@@ -41,7 +41,7 @@ def connect(port, device=None):
     # controller per session, so a fresh session per command means the second
     # one is refused with `input_controller_busy` - which is right for two
     # clients fighting, and wrong for one CLI used twice in a row.
-    game = engine.Client(port, client_id="galaxy-drive", session_id="galaxy-drive")
+    game = engine.Client(port, client_id="realm-drive", session_id="realm-drive")
     game.wait_ready()
     if device is None:
         # On a phone the game keys on `action.touch`: main/camera.script latches
@@ -142,7 +142,7 @@ def cmd_shot(game, args):
 
 def view_state(game):
     """The transform the game publishes (main/automation.lua)."""
-    snap = game.state("galaxy.view")
+    snap = game.state("realm.view")
     return getattr(snap, "value", None) or {}
 
 
@@ -158,58 +158,58 @@ def world_to_device(v, wx, wy):
             v["pixel_height"] - sy * v["pixel_height"] / v["view_height"])
 
 
-def star_positions(seed):
-    """Every star in the seed's galaxy, as name -> (x, y).
+def tile_positions(seed):
+    """Every tile in the seed's realm, as name -> (x, y).
 
-    Generated rather than transmitted: the galaxy is a pure function of the seed
+    Generated rather than transmitted: the realm is a pure function of the seed
     and the generator runs standalone under luajit, so there is no reason for the
     game to send two hundred positions it can regenerate in fifty milliseconds.
     """
     import subprocess
     lua = (
         'package.path="./?.lua;"..package.path '
-        'local g=require("galaxy.generate").build(%d) '
-        'for i=1,#g.stars do local s=g.stars[i] '
+        'local g=require("realm.generate").build(%d) '
+        'for i=1,#g.tiles do local s=g.tiles[i] '
         'print(string.format("%%d\\t%%s\\t%%f\\t%%f",s.id,s.name,s.x,s.y)) end'
     ) % seed
     out = subprocess.run(["luajit", "-e", lua], capture_output=True, text=True,
                          cwd=os.path.join(os.path.dirname(__file__), ".."))
     if out.returncode != 0:
-        raise SystemExit("could not generate the galaxy: " + out.stderr.strip())
-    stars = {}
+        raise SystemExit("could not generate the realm: " + out.stderr.strip())
+    tiles = {}
     for line in out.stdout.splitlines():
         sid, name, x, y = line.split("\t")
-        stars[name] = (int(sid), float(x), float(y))
-    return stars
+        tiles[name] = (int(sid), float(x), float(y))
+    return tiles
 
 
-def resolve_star(game, name):
+def resolve_tile(game, name):
     v = view_state(game)
     if not v:
-        raise SystemExit("no galaxy.view state - is this a debug build on the map?")
-    stars = star_positions(int(v["seed"]))
+        raise SystemExit("no realm.view state - is this a debug build on the map?")
+    tiles = tile_positions(int(v["seed"]))
     needle = name.lower()
-    hits = [(n, d) for n, d in stars.items() if needle in n.lower()]
+    hits = [(n, d) for n, d in tiles.items() if needle in n.lower()]
     if not hits:
-        raise SystemExit(f"no star matching {name!r}")
+        raise SystemExit(f"no tile matching {name!r}")
     if len(hits) > 1:
         exact = [h for h in hits if h[0].lower() == needle]
         if not exact:
             raise SystemExit(f"{name!r} is ambiguous: "
                              + ", ".join(sorted(n for n, _ in hits))[:200])
         hits = exact
-    star_name, (sid, wx, wy) = hits[0]
+    tile_name, (sid, wx, wy) = hits[0]
     x, y = world_to_device(v, wx, wy)
-    return star_name, sid, x, y
+    return tile_name, sid, x, y
 
 
-def cmd_star(game, args):
-    name, sid, x, y = resolve_star(game, args.name)
+def cmd_tile(game, args):
+    name, sid, x, y = resolve_tile(game, args.name)
     print(f"{name} (id {sid}) is at device {x:.0f},{y:.0f}")
 
 
 def cmd_tapstar(game, args):
-    name, sid, x, y = resolve_star(game, args.name)
+    name, sid, x, y = resolve_tile(game, args.name)
     game.click((x, y), wait="released", device=game.default_device)
     print(f"tapped {name} (id {sid}) at {x:.0f},{y:.0f}")
 
@@ -218,7 +218,7 @@ def cmd_state(game, _args):
     import json
     v = view_state(game)
     if not v:
-        print("no galaxy.view published (debug build? on the map screen?)")
+        print("no realm.view published (debug build? on the map screen?)")
         return 1
     print(json.dumps(v, indent=1, sort_keys=True))
     return 0
@@ -237,7 +237,7 @@ def main():
     ap.add_argument("--device", choices=("mouse", "touch"),
                     help="input device to synthesise; defaults to the platform's")
     ap.add_argument("--port", type=int, default=int(os.environ.get(
-        "GALAXY_ENGINE_PORT", DEFAULT_PORT)))
+        "REALM_ENGINE_PORT", DEFAULT_PORT)))
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("health")
     sub.add_parser("text", help="every visible text node and where it is")
@@ -253,9 +253,9 @@ def main():
     p = sub.add_parser("shot")
     p.add_argument("path")
     sub.add_parser("state", help="the transform and selection the game publishes")
-    p = sub.add_parser("star", help="where a star is, in device pixels")
+    p = sub.add_parser("tile", help="where a tile is, in device pixels")
     p.add_argument("name")
-    p = sub.add_parser("tapstar", help="click a star by name")
+    p = sub.add_parser("tapstar", help="click a tile by name")
     p.add_argument("name")
     args = ap.parse_args()
 
@@ -276,7 +276,7 @@ def main():
     return {
         "health": cmd_health, "text": cmd_text, "find": cmd_find,
         "click": cmd_click, "tap": cmd_tap, "shot": cmd_shot,
-        "state": cmd_state, "star": cmd_star, "tapstar": cmd_tapstar,
+        "state": cmd_state, "tile": cmd_tile, "tapstar": cmd_tapstar,
     }[args.cmd](game, args) or 0
 
 

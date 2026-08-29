@@ -1,4 +1,4 @@
---- One upgrade slot, opened from the system sheet.
+--- One upgrade slot, opened from the tile sheet.
 --
 -- **The card was out of room, and the choice deserved the screen.** Five
 -- buildings with a name, a line of what they do and a price is a catalogue, and
@@ -31,7 +31,7 @@ local ROW_H = 78
 -- Kept in step with the same table in main/hud.gui_script: a filled slot has to
 -- be recognisable from the card and from here as the same thing. It was not -
 -- these were still the pre-rename ids, so three of the five drew the fallback
--- star while the card beside them drew the right glyph.
+-- tile while the card beside them drew the right glyph.
 local BUILDING_ICON = {
 	berths = "icon_warship",
 	interceptor_bay = "icon_speed",
@@ -56,21 +56,21 @@ local function spec_of(view, id)
 	end
 end
 
---- What is already standing on this colony, so it is not offered twice.
+--- What is already standing on this city, so it is not offered twice.
 local function built_at(view, at)
-	local sys = view and view.systems and view.systems[tostring(at)]
+	local sys = view and view.tiles and view.tiles[tostring(at)]
 	return (sys and sys.buildings) or {}
 end
 
 -- Building here -------------------------------------------------------------
 
 local function build_picker(self, x, y, text_w, view, at)
-	local purse = view.supply or 0
+	local purse = view.gold or 0
 	local built = built_at(view, at)
 
 	ui.h2(x, y - 40, "Build here")
 	ui.small(x, y - 84,
-		"A colony only ever gets four, and they do not stack - so this is what "
+		"A city only ever gets four, and they do not stack - so this is what "
 		.. "this world is for.", ui.DIM, { width = text_w, anchor_top = true })
 
 	local row_y = y - 150
@@ -85,7 +85,7 @@ local function build_picker(self, x, y, text_w, view, at)
 		local row = ui.panel(x, row_y + ROW_H - 8, text_w, ROW_H - 12,
 			have and ui.CARD or ui.CARD_ALT)
 		ui.icon(x + 16, row_y + ROW_H - 26, 30,
-			BUILDING_ICON[spec.id] or "icon_star",
+			BUILDING_ICON[spec.id] or "icon_tile",
 			have and ui.GOOD or (afford and ui.TEXT or ui.FAINT))
 		ui.body(x + 62, row_y + 44, spec.name,
 			(afford and not have) and ui.TEXT or ui.FAINT)
@@ -114,7 +114,7 @@ local function build_action(self, x, y, text_w, view, at, id)
 	local spec = spec_of(view, id)
 	local rates = view.rates or {}
 
-	ui.icon(x, y - 20, 40, BUILDING_ICON[id] or "icon_star", ui.TEXT)
+	ui.icon(x, y - 20, 40, BUILDING_ICON[id] or "icon_tile", ui.TEXT)
 	ui.h2(x + 56, y - 40, (spec and spec.name) or id)
 	ui.small(x, y - 104, spec and spec.blurb or "", ui.DIM,
 		{ width = text_w, anchor_top = true })
@@ -129,23 +129,23 @@ local function build_action(self, x, y, text_w, view, at, id)
 		return bottom - 40
 	end
 
-	local cost = rates.captain_cost or 0
-	local room = (rates.captains or 0) < (rates.captain_cap or 1)
-	local afford = (view.supply or 0) >= cost
+	local cost = rates.commander_cost or 0
+	local room = (rates.commanders or 0) < (rates.commander_cap or 1)
+	local afford = (view.gold or 0) >= cost
 
-	ui.small(x, bottom, string.format("%d of %d captains in the field",
-		rates.captains or 0, rates.captain_cap or 1), ui.DIM)
+	ui.small(x, bottom, string.format("%d of %d commanders in the field",
+		rates.commanders or 0, rates.commander_cap or 1), ui.DIM)
 	bottom = bottom - 52
 	local handle = ui.button(self.druid, x, bottom + 40, text_w, ui.CONTROL,
-		string.format("RAISE A CAPTAIN   %d", cost),
+		string.format("RAISE A COMMANDER   %d", cost),
 		function() request({ kind = "recruit", at = at }) end,
 		{ style = "primary", size = ui.CAPS })
 	if not room or not afford then
 		handle.set_enabled(false)
 		bottom = bottom - 34
 		ui.small(x, bottom + 24,
-			(not room) and "Every captain you are allowed is already raised"
-				or "Not enough supply", ui.WARN)
+			(not room) and "Every commander you are allowed is already raised"
+				or "Not enough gold", ui.WARN)
 	end
 	return bottom - 20
 end
@@ -162,7 +162,7 @@ local function build(self)
 	local at = data.at
 
 	-- **The card is sized to its content, and the content is laid out first.**
-	-- Same trick as the system sheet: the card is made at a placeholder height
+	-- Same trick as the tile sheet: the card is made at a placeholder height
 	-- so it sits behind everything, the content decides how deep it goes, and
 	-- then the whole lot is moved into place as one. Guessing the height
 	-- instead is what stranded the battle screen's controls in a field of

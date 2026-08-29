@@ -10,7 +10,7 @@ and in what order.
 **Portraits are grouped by race.** The source set is not labelled, but it is
 drawn in species: crimson devils, green orc-folk, violet tentacled things,
 cyan ice-people, gold-armoured nobles, blue-uniformed soldiers. Every one of the
-six races in galaxy/sim/races.lua already declares a colour, and they land on
+six races in realm/sim/races.lua already declares a colour, and they land on
 those groups almost exactly - so the grouping is done by measuring each image's
 dominant hue rather than by classifying five hundred pictures by hand.
 
@@ -30,7 +30,7 @@ Two things are traded off inside a band, and both matter:
     times. Picks are therefore kept a minimum id apart.
 
 The order is what matters. A commander's portrait is chosen by their race plus
-the same index as their surname (galaxy/sim/commanders.lua), so the nth officer
+the same index as their surname (realm/sim/commanders.lua), so the nth officer
 a player of a given race raises always has both the same name and the same face.
 Changing the bands, the count, or the tie-breaks silently reassigns every
 existing commander's portrait - the manifest written alongside the images is

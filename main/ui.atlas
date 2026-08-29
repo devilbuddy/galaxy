@@ -91,7 +91,7 @@ images {
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {
-  image: "/main/assets/ui/icon_star.png"
+  image: "/main/assets/ui/icon_tile.png"
   sprite_trim_mode: SPRITE_TRIM_MODE_OFF
 }
 images {

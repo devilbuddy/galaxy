@@ -28,7 +28,7 @@ NOTO_URL = "https://raw.githubusercontent.com/googlefonts/noto-emoji/%s/png/512/
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CACHE = os.path.join(ROOT, "build", "emoji_cache")
 TILE_DIR = os.path.join(ROOT, "main", "assets", "tiles")
-FONT_PATH = "/System/Library/Fonts/Supplemental/Futura.ttc"
+FONT_PATH = "/Tile/Library/Fonts/Supplemental/Futura.ttc"
 
 # The paper the hexes sit on. Mirrors game.project's [render] clear colour, which
 # is the only backdrop the map has now - the parchment mottle mesh went with the
@@ -45,8 +45,8 @@ HEX_SIZE = TILE_W / 2.0
 # Emoji size as a fraction of the tile width. A glyph has to read as sitting *on*
 # the hex rather than covering it, and the hex's own art is the thing saying what
 # the ground is.
-EMOJI_SCALE = {"colony": 0.46, "outpost": 0.40, "waypoint": 0.0}
-CAPITAL_SCALE = 0.56
+EMOJI_SCALE = {"city": 0.46, "holding": 0.40, "wilds": 0.0}
+SEAT_SCALE = 0.56
 
 
 def font(sz):
@@ -129,7 +129,7 @@ def render(data, size=1500, labels=True):
         cp = emoji_cp.get(name)
         if not cp:
             sys.exit("render_map: theme named %r with no codepoint" % name)
-        frac = CAPITAL_SCALE if t.get("capital") else EMOJI_SCALE.get(t["kind"], 0.40)
+        frac = SEAT_SCALE if t.get("seat") else EMOJI_SCALE.get(t["kind"], 0.40)
         px = max(4, int(round(tw * frac)))
         gx, gy = place(t["x"], t["y"])
         img.alpha_composite(glyph(cp, px),
@@ -138,11 +138,11 @@ def render(data, size=1500, labels=True):
     if labels:
         draw = ImageDraw.Draw(img)
         fnt = font(max(9, int(tw * 0.13)))
-        # Only places worth naming, same rule the HUD uses: a capital, a colony,
-        # an outpost. Naming open country is what turned the old map into a wall
+        # Only places worth naming, same rule the HUD uses: a seat, a city,
+        # a holding. Naming open country is what turned the old map into a wall
         # of words with the geography buried underneath.
         for t in tiles:
-            if not t.get("capital") and t["kind"] == "waypoint":
+            if not t.get("seat") and t["kind"] == "wilds":
                 continue
             gx, gy = place(t["x"], t["y"])
             cx = gx + tw / 2.0

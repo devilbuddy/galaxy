@@ -16,7 +16,7 @@
 -- most likely to be deleted wholesale one day, and it should come out in one
 -- piece when it is.
 
-local units = require("galaxy.sim.units")
+local units = require("realm.sim.units")
 
 local M = {}
 
@@ -34,7 +34,7 @@ end
 --- A battle worth looking at, built from the real catalogue.
 --
 -- Hand-written rather than resolved, because producing one for real means
--- generating a galaxy, opening a game and playing until somebody defends
+-- generating a realm, opening a game and playing until somebody defends
 -- something - which is exactly the friction this exists to get around.
 --
 -- The numbers are self-consistent on purpose: what went in equals what was lost
@@ -51,10 +51,10 @@ function M.sample_battle()
 		player = 1, against = 2,
 		name = "Kess", rank = "Commodore", level = 5,
 		-- Both halves beaten, which is why there was a battle at all.
-		fortification = 17, fleet = 12,
-		siege = 24, fleet_power = 20,
+		fortification = 17, army = 12,
+		siege = 24, army_power = 20,
 		garrison = {
-			{ captain = 9, name = "Vantor", rank = "Commander", power = 12 },
+			{ commander = 9, name = "Vantor", rank = "Commander", power = 12 },
 		},
 		exchanges = {
 			{ lost = { escort = 3 }, shield = 2 },

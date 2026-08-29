@@ -1,4 +1,4 @@
---- What to put in an empty berth, opened from the system sheet's shipyard rack.
+--- What to put in an empty berth, opened from the tile sheet's shipyard rack.
 --
 -- **One slot is one unit**, so this buys exactly one and gets out of the way.
 -- That is what makes it a picker rather than a basket: the rack behind it is
@@ -21,7 +21,7 @@ local druid = require("druid.druid")
 local monarch = require("monarch.monarch")
 local store = require("main.store")
 local ui = require("main.ui")
-local sim_units = require("galaxy.sim.units")
+local sim_units = require("realm.sim.units")
 local emoji_ui = require("main.emoji_ui")
 
 local CARD_W = 620
@@ -48,7 +48,7 @@ local function basket_at(at)
 	return nil
 end
 
---- The types this colony has a dwelling for, plus anything already standing
+--- The types this city has a dwelling for, plus anything already standing
 --- here - so a garrison taken along with the world is still accounted for.
 local function offered(view, sys)
 	local built = (sys and sys.buildings) or {}
@@ -78,10 +78,10 @@ local function build(self)
 	local data = monarch.data(hash("buy")) or {}
 	local view = store.game_view or {}
 	local at = data.at
-	local sys = view.systems and view.systems[tostring(at)]
+	local sys = view.tiles and view.tiles[tostring(at)]
 
 	-- **The card is sized to its content, and the content is laid out first** -
-	-- the same trick as the system sheet and the slot popup. Guessing the
+	-- the same trick as the tile sheet and the slot popup. Guessing the
 	-- height instead is what stranded the battle screen's controls in a field
 	-- of nothing.
 	local moving = {}
@@ -93,7 +93,7 @@ local function build(self)
 
 	local basket = basket_at(at)
 	local spent = basket and sim_units.price(basket) or 0
-	local left = (view.supply or 0) - spent
+	local left = (view.gold or 0) - spent
 	local garrison = sim_units.normalise(sys and sys.garrison)
 	local room = ((view.rates or {}).garrison_cap or 6)
 		- sim_units.count(garrison)
@@ -129,7 +129,7 @@ local function build(self)
 		-- broken one.
 		local why = nil
 		if picked >= ready then why = "none ready here"
-		elseif left < cost then why = "not enough supply"
+		elseif left < cost then why = "not enough gold"
 		elseif room < 1 then why = "the garrison is full" end
 
 		y = y - ROW_H

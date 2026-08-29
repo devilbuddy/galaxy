@@ -7,11 +7,11 @@
 -- nobody can explain), and that the land is one connected piece (get it wrong
 -- and a player is islanded with no move, several turns into a real game).
 package.path = "./?.lua;" .. package.path
-local hex = require("galaxy.hex")
-local land_mod = require("galaxy.land")
-local terrain = require("galaxy.terrain")
-local gen = require("galaxy.generate")
-local config = require("galaxy.config")
+local hex = require("realm.hex")
+local land_mod = require("realm.land")
+local terrain = require("realm.terrain")
+local gen = require("realm.generate")
+local config = require("realm.config")
 
 local failures = 0
 local function check(name, cond, detail)
@@ -163,21 +163,21 @@ print("the generated map")
 do
 	local g = gen.build(424242)
 
-	check("land count matches the config", #g.stars == config.land_target,
-		tostring(#g.stars))
+	check("land count matches the config", #g.tiles == config.land_target,
+		tostring(#g.tiles))
 	-- The drawn sea is a band following the coast, not the whole field: it costs
 	-- the length of the coastline rather than the area of the map, and its outer
 	-- edge is the continent's shape rather than the hexagon the field happens to
 	-- be. Both halves of that have to hold - no water further out than the
 	-- margin, and no gap inside it.
 	local land_keys, water_keys = {}, {}
-	for i = 1, #g.stars do land_keys[hex.key(g.stars[i].q, g.stars[i].r)] = true end
+	for i = 1, #g.tiles do land_keys[hex.key(g.tiles[i].q, g.tiles[i].r)] = true end
 	for i = 1, #g.water do water_keys[hex.key(g.water[i].q, g.water[i].r)] = true end
 
 	local function steps_to_land(q, r)
 		local best = math.huge
-		for i = 1, #g.stars do
-			local d = hex.distance(q, r, g.stars[i].q, g.stars[i].r)
+		for i = 1, #g.tiles do
+			local d = hex.distance(q, r, g.tiles[i].q, g.tiles[i].r)
 			if d < best then best = d end
 		end
 		return best
@@ -204,8 +204,8 @@ do
 	check("and every cell inside the margin is drawn", missing_water == nil,
 		tostring(missing_water))
 	check("the continent never reaches the edge of the field", (function()
-		for i = 1, #g.stars do
-			if hex.distance(g.stars[i].q, g.stars[i].r, 0, 0) >= g.field_radius then
+		for i = 1, #g.tiles do
+			if hex.distance(g.tiles[i].q, g.tiles[i].r, 0, 0) >= g.field_radius then
 				return false, "tile " .. i
 			end
 		end
@@ -217,10 +217,10 @@ do
 	-- and every entry a genuine neighbour. The resolver walks these lists for
 	-- every move of every turn.
 	local index = {}
-	for i = 1, #g.stars do index[hex.key(g.stars[i].q, g.stars[i].r)] = i end
+	for i = 1, #g.tiles do index[hex.key(g.tiles[i].q, g.tiles[i].r)] = i end
 	local self_loop, asymmetric, not_neighbour, missing = nil, nil, nil, nil
-	for i = 1, #g.stars do
-		local s = g.stars[i]
+	for i = 1, #g.tiles do
+		local s = g.tiles[i]
 		local have = {}
 		for _, j in ipairs(g.adjacency[i]) do
 			have[j] = true
@@ -230,7 +230,7 @@ do
 				if k == i then back = true end
 			end
 			if not back then asymmetric = i .. "->" .. j end
-			if hex.distance(s.q, s.r, g.stars[j].q, g.stars[j].r) ~= 1 then
+			if hex.distance(s.q, s.r, g.tiles[j].q, g.tiles[j].r) ~= 1 then
 				not_neighbour = i .. "->" .. j
 			end
 		end
@@ -252,8 +252,8 @@ do
 	local water_keys = {}
 	for _, w in ipairs(g.water) do water_keys[hex.key(w.q, w.r)] = true end
 	local sea_in_graph = nil
-	for i = 1, #g.stars do
-		if water_keys[hex.key(g.stars[i].q, g.stars[i].r)] then sea_in_graph = i end
+	for i = 1, #g.tiles do
+		if water_keys[hex.key(g.tiles[i].q, g.tiles[i].r)] then sea_in_graph = i end
 	end
 	check("no sea tile is in the graph at all", sea_in_graph == nil,
 		tostring(sea_in_graph))
@@ -262,8 +262,8 @@ do
 	local biomes = {}
 	for _, b in ipairs(terrain.BIOMES) do biomes[b] = true end
 	local bad_terrain, bad_biome, bad_feature, water_on_land = nil, nil, nil, nil
-	for i = 1, #g.stars do
-		local s = g.stars[i]
+	for i = 1, #g.tiles do
+		local s = g.tiles[i]
 		if not terrain.by_id(s.terrain) then bad_terrain = s.terrain end
 		if s.terrain == "water" then water_on_land = i end
 		if not biomes[s.biome] then bad_biome = s.biome end
@@ -274,20 +274,20 @@ do
 	check("every tile has a declared biome", bad_biome == nil, tostring(bad_biome))
 	check("every tile has a feature in the table", bad_feature == nil, tostring(bad_feature))
 
-	-- Region carving still has to produce something playable on the new
-	-- substrate: every tile in a region, every region non-empty.
+	-- Province carving still has to produce something playable on the new
+	-- substrate: every tile in a province, every province non-empty.
 	local unassigned, empty = nil, nil
 	local counted = {}
-	for i = 1, #g.regions do counted[i] = 0 end
-	for i = 1, #g.stars do
-		local r = g.stars[i].region
+	for i = 1, #g.provinces do counted[i] = 0 end
+	for i = 1, #g.tiles do
+		local r = g.tiles[i].province
 		if not r or not counted[r] then unassigned = i else counted[r] = counted[r] + 1 end
 	end
-	for i = 1, #g.regions do
+	for i = 1, #g.provinces do
 		if counted[i] == 0 then empty = i end
 	end
-	check("every tile belongs to a region", unassigned == nil, tostring(unassigned))
-	check("and no region is empty", empty == nil, tostring(empty))
+	check("every tile belongs to a province", unassigned == nil, tostring(unassigned))
+	check("and no province is empty", empty == nil, tostring(empty))
 end
 
 if failures == 0 then

@@ -1,4 +1,4 @@
---- Nakama backend: device authentication and galaxy retrieval.
+--- Nakama backend: device authentication and realm retrieval.
 --
 -- Wraps the nakama-defold client so the rest of the game does not have to know
 -- about coroutines or REST shapes. Every call is callback-based; internally
@@ -6,7 +6,7 @@
 -- calls yield.
 --
 -- The server is authoritative for the map. It also *generates* it with the same
--- Lua modules this client has (see docker-compose.yml), so a galaxy that
+-- Lua modules this client has (see docker-compose.yml), so a realm that
 -- arrives over the network is identical to one generated locally from the same
 -- seed - which is what makes the local fallback below safe rather than a
 -- divergence waiting to happen.
@@ -17,7 +17,7 @@ local nakama_log = require("nakama.util.log")
 -- The extension swaps in Defold's native json.encode when it exists and falls
 -- back to a pure-Lua one otherwise, so this is safe on every target.
 local njson = require("nakama.util.json")
-local wire = require("galaxy.wire")
+local wire = require("realm.wire")
 
 local M = {}
 
@@ -29,7 +29,7 @@ M.user_id = nil
 local client = nil
 
 local function setting(key, default)
-	local value = sys.get_config_string("galaxy." .. key, default)
+	local value = sys.get_config_string("realm." .. key, default)
 	if value == nil or value == "" then return default end
 	return value
 end
@@ -48,7 +48,7 @@ end
 local function ensure_client()
 	if client then return client end
 	-- The extension logs nothing by default, which makes a failed handshake look
-	-- like a hang. galaxy.nakama_debug = 1 turns on full request/response
+	-- like a hang. realm.nakama_debug = 1 turns on full request/response
 	-- tracing - useful, but it prints the session token, so keep it off except
 	-- while debugging.
 	if setting("nakama_debug", "0") == "1" then
@@ -170,19 +170,19 @@ end
 --- Ask what path an order would actually take.
 --
 -- The route is expanded server-side by the same function the resolver uses, so
--- what the map draws is what the turn will fly. `fixed` is the lane a moving
--- fleet has to finish before it can turn, or nil.
--- @param done function(result, err) with result.route as a list of system ids
-function M.game_route(game_id, from, waypoints, fixed, done)
+-- what the map draws is what the turn will fly. `fixed` is the tile a moving
+-- army has to finish before it can turn, or nil.
+-- @param done function(result, err) with result.route as a list of tile ids
+function M.game_route(game_id, from, wilds, fixed, done)
 	M.rpc("game.route", {
 		game_id = game_id, from = from,
-		waypoints = waypoints or {}, fixed = fixed,
+		wilds = wilds or {}, fixed = fixed,
 	}, done)
 end
 
---- Ask the server for the galaxy with this seed.
--- @param done function(galaxy, err, info)
-function M.fetch_galaxy(seed, done)
+--- Ask the server for the realm with this seed.
+-- @param done function(realm, err, info)
+function M.fetch_realm(seed, done)
 	if not M.ready() then
 		done(nil, "not connected")
 		return
@@ -195,10 +195,10 @@ function M.fetch_galaxy(seed, done)
 		-- rpc_func, not rpc_func2: the latter sends the payload as a `?payload=`
 		-- query parameter, which Nakama 3.27 hands to the RPC as an empty
 		-- string. The server then silently fell back to its default seed, so
-		-- every request returned the same galaxy. rpc_func POSTs the payload as
+		-- every request returned the same realm. rpc_func POSTs the payload as
 		-- the request body, which arrives intact.
 		local request = string.format('{"seed":%d}', math.floor(seed))
-		local result = nakama.rpc_func(client, "galaxy.get", request, nil)
+		local result = nakama.rpc_func(client, "realm.get", request, nil)
 
 		if not result or result.error then
 			done(nil, result and (result.message or tostring(result.error)) or "no response")
@@ -207,7 +207,7 @@ function M.fetch_galaxy(seed, done)
 
 		local ok, decoded = pcall(json.decode, result.payload)
 		if not ok or type(decoded) ~= "table" then
-			done(nil, "malformed galaxy payload")
+			done(nil, "malformed realm payload")
 			return
 		end
 

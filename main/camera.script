@@ -8,7 +8,7 @@ local store = require("main.store")
 local gestures = require("main.gestures")
 
 -- Zoom is world-pixels per screen-pixel: 1.0 shows the map at native scale.
--- The lower bound is recomputed on start so the whole galaxy always fits.
+-- The lower bound is recomputed on start so the whole realm always fits.
 --
 -- The ceiling used to be 9.0, and nothing had ever been there: pinch cannot be
 -- injected from a workstation, so until the on-screen controls existed the
@@ -20,9 +20,9 @@ local ZOOM_MIN_FLOOR = 0.05
 
 -- The zoom-out floor, as a multiple of the whole-map fit.
 --
--- **This was 2.0, and the hex map is the reason it is not.** On the star map,
+-- **This was 2.0, and the hex map is the reason it is not.** On the tile map,
 -- seeing everything at once was deliberately impossible: the field was mostly
--- scenery, the widest useful view was a stretch of regions rather than the
+-- scenery, the widest useful view was a stretch of provinces rather than the
 -- poster, and a higher floor also kept the smallest an emoji ever rendered
 -- legible. None of those three still hold. The ground is now drawn art rather
 -- than a dot on a dark field, so it reads far smaller than a glyph did; the
@@ -63,8 +63,8 @@ local function clamp_position(self)
 	local half_view_x = (w * 0.5) / self.zoom
 	-- Vertically the map is only visible between the chrome, so the slack it can
 	-- be moved through is reckoned against that band and not the window. Without
-	-- this the galaxy fits the *window* at fit zoom, the camera is pinned, and a
-	-- system under the sheet can never be lifted out from under it.
+	-- this the realm fits the *window* at fit zoom, the camera is pinned, and a
+	-- tile under the sheet can never be lifted out from under it.
 	local band = store.hud_band
 	local visible_h = h
 	if band.ceiling > band.floor then visible_h = band.ceiling - band.floor end
@@ -125,9 +125,9 @@ end
 -- the map as far as anyone looking at it is concerned - the same reason the
 -- camera clamps against the band rather than the window.
 --
--- Better still, when a system is selected: zooming in is almost always "closer
+-- Better still, when a tile is selected: zooming in is almost always "closer
 -- to *that*". Anchoring anywhere else slides it steadily off the pivot, and
--- three presses later the star is behind the sheet describing it - which is
+-- three presses later the tile is behind the sheet describing it - which is
 -- exactly what the first run of these buttons did.
 local function band_anchor(self)
 	local w, h = viewport(self)
@@ -135,13 +135,13 @@ local function band_anchor(self)
 	local low, high = 0, h
 	if band.ceiling > band.floor then low, high = band.floor, band.ceiling end
 
-	local g, id = store.galaxy, store.selected
-	local star = id and g and g.stars[id]
-	if star then
+	local g, id = store.realm, store.selected
+	local tile = id and g and g.tiles[id]
+	if tile then
 		-- The same relationship the render script projects with, inverted by
 		-- zoom_to below.
-		local sx = (star.x - self.x) * self.zoom + w * 0.5
-		local sy = (star.y - self.y) * self.zoom + h * 0.5
+		local sx = (tile.x - self.x) * self.zoom + w * 0.5
+		local sy = (tile.y - self.y) * self.zoom + h * 0.5
 		-- Only if it is somewhere the player can actually see it; a selection
 		-- off the edge of the screen is not what they are reaching toward.
 		if sx >= 0 and sx <= w and sy >= low and sy <= high then
@@ -167,7 +167,7 @@ end
 -- The usable height excludes the HUD bar, so the frame is judged against the
 -- space the player can actually see rather than partly behind the controls.
 -- The floor sits ZOOM_OUT_LIMIT above the whole-map fit: the widest view is a
--- neighbourhood of the galaxy, never all of it.
+-- neighbourhood of the realm, never all of it.
 local function refresh_zoom_bounds(self)
 	local w, h = viewport(self)
 	local bar = store.hud_bar_height or 0
@@ -199,7 +199,7 @@ function init(self)
 	self.mouse_down = false
 	-- Once the player zooms, stop re-fitting the view on window changes.
 	self.user_zoomed = false
-	-- Set the first time a galaxy is framed, so a rebuild of the same one does
+	-- Set the first time a realm is framed, so a rebuild of the same one does
 	-- not throw the view away.
 	self.framed = false
 	self.last_w, self.last_h = -1, -1
@@ -225,19 +225,19 @@ local function active_touches(action)
 	return out
 end
 
---- Nearest star to a world point, within a screen-space radius.
-local function pick_star(self, screen_x, screen_y)
-	local g = store.galaxy
+--- Nearest tile to a world point, within a screen-space radius.
+local function pick_tile(self, screen_x, screen_y)
+	local g = store.realm
 	if not g then return nil end
 	local w, h = viewport(self)
 	local wx = self.x + (screen_x - w * 0.5) / self.zoom
 	local wy = self.y + (screen_y - h * 0.5) / self.zoom
-	-- A generous fixed *screen* radius: at low zoom the stars are tiny, and a
+	-- A generous fixed *screen* radius: at low zoom the tiles are tiny, and a
 	-- world-space radius would make them impossible to hit.
 	local reach = 26 / self.zoom
 	local best, best_d = nil, reach * reach
-	for i = 1, #g.stars do
-		local s = g.stars[i]
+	for i = 1, #g.tiles do
+		local s = g.tiles[i]
 		local dx, dy = s.x - wx, s.y - wy
 		local d = dx * dx + dy * dy
 		if d < best_d then best, best_d = i, d end
@@ -251,7 +251,7 @@ end
 --
 -- Eased rather than snapped because the map is the one thing the player holds a
 -- mental picture of: a cut leaves them re-reading the whole screen to work out
--- what moved, where a glide carries the eye across and the surrounding systems
+-- what moved, where a glide carries the eye across and the surrounding tiles
 -- stay recognisable.
 local FOCUS_RATE = 7.5
 -- Below this the glide is over. In world units, so it scales with zoom the way
@@ -279,9 +279,9 @@ end
 --
 -- The way *back* is the control that matters most: stepping out of a deep
 -- zoom one press at a time is the kind of thing a player does once and then
--- stops zooming in at all. It used to frame the whole galaxy; with the floor
+-- stops zooming in at all. It used to frame the whole realm; with the floor
 -- above the fit, the widest view no longer holds everything - so it keeps
--- the player's centre rather than gliding to the galaxy's. Recentring on the
+-- the player's centre rather than gliding to the realm's. Recentring on the
 -- middle of a map you cannot fully see would carry you away from your own
 -- empire, which is the opposite of getting your bearings.
 local function zoom_fit(self)
@@ -295,7 +295,7 @@ function update(self, dt)
 	if self.zoom_target then
 		-- Eased for the same reason `focus` is: a cut leaves the player
 		-- re-reading the screen to work out what moved, and a 1.5x jump moves
-		-- every star at once.
+		-- every tile at once.
 		local ratio = self.zoom_target / self.zoom
 		local next_zoom = self.zoom + (self.zoom_target - self.zoom) * math.min(1, dt * ZOOM_RATE)
 		if ratio < ZOOM_SETTLED and ratio > 1 / ZOOM_SETTLED then
@@ -360,7 +360,7 @@ local function apply_gesture(self, g)
 		apply(self)
 	end
 	if g.tap_x then
-		store.selected = pick_star(self, g.tap_x, g.tap_y)
+		store.selected = pick_tile(self, g.tap_x, g.tap_y)
 	end
 end
 
@@ -441,16 +441,16 @@ function on_message(self, message_id, message)
 	if message_id == hash("zoom_level") then
 		-- An absolute level, for the one caller that has a reason to pick one:
 		-- a replay has to frame what it is showing, and the fit zoom - where a
-		-- captain is four pixels wide - is where the map always starts.
+		-- commander is four pixels wide - is where the map always starts.
 		set_zoom_target(self, message.zoom)
 		return
 	end
 	if message_id == hash("map_ready") then
 		local w = math.max(1, message.content_width)
 		local h = math.max(1, message.content_height)
-		-- Re-frame only for a galaxy we have not framed before. The map is
+		-- Re-frame only for a realm we have not framed before. The map is
 		-- rebuilt whenever a turn resolves, and treating every rebuild as a new
-		-- galaxy snapped the player's zoom back to the whole-map fit - which,
+		-- realm snapped the player's zoom back to the whole-map fit - which,
 		-- with a poll every ten seconds, looked like the zoom resetting itself.
 		local fresh = not self.framed
 			or w ~= self.content_w or h ~= self.content_h
@@ -465,7 +465,7 @@ function on_message(self, message_id, message)
 		refresh_zoom_bounds(self)
 
 		if fresh then
-			-- Start framed on the whole galaxy, then let the player zoom in.
+			-- Start framed on the whole realm, then let the player zoom in.
 			self.framed = true
 			self.user_zoomed = false
 			self.zoom = self.zoom_min

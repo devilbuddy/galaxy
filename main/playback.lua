@@ -3,7 +3,7 @@
 -- A list of forty turns is a changelog. What a player actually wants to know
 -- after two days away is *where the war moved*, and that is a shape on a map,
 -- not a sentence. This turns the digest into a timeline the map can play:
--- who was where at the start of each turn, which lanes they crossed, and what
+-- who was where at the start of each turn, which tiles they crossed, and what
 -- changed hands when.
 --
 -- **Engine-free on purpose**, like `main/gestures.lua`. The interesting part is
@@ -18,7 +18,7 @@
 -- record, deliberately.
 --
 -- It does not have to be told. **The event log is reversible.** `claimed` says
--- a system was unowned before it, and `battle` names the player it was taken
+-- a tile was unowned before it, and `battle` names the player it was taken
 -- from, so winding the log backwards from today's ownership gives the ownership
 -- at any earlier turn exactly. Nothing is inferred and nothing is approximated;
 -- if an event is missing from the digest the reconstruction is wrong in exactly
@@ -26,13 +26,13 @@
 
 local M = {}
 
--- What a turn's events can do to who owns a system, and how to undo it.
+-- What a turn's events can do to who owns a tile, and how to undo it.
 local OWNERSHIP_KINDS = { claimed = true, battle = true }
 
 --- Bucket events by turn, keeping the order within each turn.
 --
 -- The resolver emits a turn's events in the order they happened, which is what
--- makes the undo below exact: two changes to the same system in one turn have
+-- makes the undo below exact: two changes to the same tile in one turn have
 -- to be reversed in the opposite order to the one they were applied in.
 local function by_turn(events)
 	local turns, order = {}, {}
@@ -50,7 +50,7 @@ local function by_turn(events)
 	return turns, order
 end
 
---- Who a system belonged to before `event` happened.
+--- Who a tile belonged to before `event` happened.
 local function owner_before(event)
 	if event.kind == "claimed" then return 0 end
 	-- A battle names the player it was taken from, which is the whole reason
@@ -94,23 +94,23 @@ end
 --- Build a timeline from a digest.
 --
 -- @param digest   { events = , you = , turn = } as `game.state` returns it
--- @param systems  the projection's systems table, keyed by *string* id
+-- @param tiles  the projection's tiles table, keyed by *string* id
 -- @return array of steps oldest first, each:
 --   turn      the turn number
 --   owners    who held what at the **start** of the turn, keyed by number
---   moves     { player, captain, from, path, mine } - a march, or a sighting
+--   moves     { player, commander, from, path, mine } - a march, or a sighting
 --   changes   { at, to, from, battle } - ownership, in the order it happened
 --   battles   { at, player, against, resistance }
 --   quiet     true when nothing at all happened
-function M.build(digest, systems)
+function M.build(digest, tiles)
 	local events = (digest and digest.events) or {}
 	local turns, order = by_turn(events)
 
-	-- Today's ownership, as numbers. `view.project` keys systems by string id
+	-- Today's ownership, as numbers. `view.project` keys tiles by string id
 	-- because sparse integer keys do not survive JSON; everything below indexes
 	-- by number, so this is the one place that conversion happens.
 	local owners = {}
-	for key, sys in pairs(systems or {}) do
+	for key, sys in pairs(tiles or {}) do
 		local id = tonumber(key)
 		if id then owners[id] = sys.owner or 0 end
 	end
@@ -135,20 +135,20 @@ function M.build(digest, systems)
 			battles = {},
 		}
 		-- The turn's own events, kept whole so the caller can write a caption
-		-- from them. Star names live on the galaxy and region names on the
+		-- from them. Tile names live on the realm and province names on the
 		-- events; neither belongs in here.
 		step.events = bucket
 		for k = 1, #bucket do
 			local e = bucket[k]
-			if e.kind == "captain_moved" or e.kind == "contact_moved" then
+			if e.kind == "commander_moved" or e.kind == "contact_moved" then
 				step.moves[#step.moves + 1] = {
-					player = e.player, captain = e.captain,
+					player = e.player, commander = e.commander,
 					from = e.from, path = e.path or {},
 					name = e.name, rank = e.rank,
 					-- A sighting is drawn like a march but is not one: it is
 					-- only the part that was in range, so it starts and stops
 					-- in mid-air on purpose.
-					mine = e.kind == "captain_moved",
+					mine = e.kind == "commander_moved",
 				}
 			elseif e.kind == "battle" then
 				-- The whole event, not a summary of it. A battle has a screen

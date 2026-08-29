@@ -12,7 +12,7 @@
 
 local M = {}
 
-local APP_NAME = "galaxy"
+local APP_NAME = "realm"
 local FILENAME = "seen_turns"
 -- Enough for far more games than anyone has open; the cap only exists so an
 -- abandoned save file cannot grow without bound.
@@ -78,7 +78,7 @@ function M.set(game_id, turn)
 	if not sys.save(path(), d) then
 		-- A read-only filesystem costs the player a repeated digest, nothing
 		-- more, so this is worth a line in the log and not an error.
-		print("galaxy: could not persist how far the digest has been read")
+		print("realm: could not persist how far the digest has been read")
 	end
 end
 
@@ -95,7 +95,7 @@ function M.forget()
 	data = { games = {}, seq = 0 }
 	dirty_seq = 0
 	if not sys.save(path(), data) then
-		print("galaxy: could not clear how far the digest has been read")
+		print("realm: could not clear how far the digest has been read")
 		return false
 	end
 	return true

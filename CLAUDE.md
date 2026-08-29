@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-`galaxy` — a portrait-orientation mobile prototype of a 4X-style map. A single
+`realm` — a portrait-orientation mobile prototype of a 4X-style map. A single
 integer seed deterministically generates **one continent on a hex lattice**:
 ~220 land tiles grown cell by cell out of a sea, carved into named provinces,
 drawn as hand-drawn hexagonal terrain art with a Noto emoji on the places worth
@@ -15,12 +15,22 @@ A local **Nakama** backend (docker compose) authenticates by device id and is
 authoritative for the map: it generates it and ships it to the client. The client
 keeps its own copy of the generator purely as an offline fallback.
 
-**The fiction is a medieval realm; the code has not been renamed yet.** The
-modules still say `galaxy`, `stars`, `captain`, `region`; the art, the names and
-everything the player reads say continent, tile, commander, province. That gap is
-deliberate and temporary — the rename is a mechanical commit of its own, held
-back so the vocabulary is settled by what exists rather than by what was planned.
-Read `stars` as tiles wherever it appears.
+**The vocabulary is a medieval realm, in the code as well as on screen**:
+`realm/` generates it, a place is a `tile`, an officer is a `commander`, a force
+is an `army`, a named stretch of country is a `province`, the three kinds of
+place are `city` / `holding` / `wilds`, a player's home is their `seat`, and the
+currency is `gold`.
+
+Two things deliberately kept the old name. `route` stayed `route` because
+`march` is already a place-suffix and `Marches` a province noun, so seeds produce
+"Harrowmarch" and "The Inner Marches" and `commander.march` would read as a
+place. And the order kind `resupply` stayed, because it means "load the hold" -
+it is about units, not money, so following `supply -> gold` there would have been
+wrong.
+
+The app's own identity is unchanged: `com.dg.galaxy`, `libgalaxy.so` and the repo
+directory still say galaxy. Renaming the Android package orphans every installed
+debug build and buys nothing.
 
 Git: a single `main` branch pushed straight to `origin`; there is no review flow.
 
@@ -40,7 +50,7 @@ Prefer the editor HTTP API (below) for anything the user will also see in the ed
 
 ### CLI build
 
-`bob.jar` is compiled for Java 25; the system `java` (SDKMAN, Java 21) fails with `UnsupportedClassVersionError`. Use the JDK bundled with the editor:
+`bob.jar` is compiled for Java 25; the tile `java` (SDKMAN, Java 21) fails with `UnsupportedClassVersionError`. Use the JDK bundled with the editor:
 
 ```bash
 /Applications/Defold.app/Contents/Resources/packages/jdk-25+36/bin/java -jar ~/Defold/bob-1.13.1.jar resolve build
@@ -79,7 +89,7 @@ Hot-reload is the normal edit loop: change a `.script`/`.lua`, POST `hot-reload`
 
 ### Generation, outside the engine
 
-`galaxy/` is pure Lua with no engine dependency, so the whole generator runs
+`realm/` is pure Lua with no engine dependency, so the whole generator runs
 under standalone `luajit` (installed at `/opt/homebrew/bin/luajit`, the same
 LuaJIT 2.1 the engine embeds). This is by far the fastest way to iterate on
 generation — no build, no window, ~5 ms per map:
@@ -96,7 +106,7 @@ of `main/theme.lua`, so a look approved in the sketch is a sketch of the same
 decisions rather than a parallel guess. It is the right place to try a visual
 change first — `... /tmp/m.png detail` renders at 3x and crops the centre,
 roughly the game's mid zoom. The second argument to `preview_map.lua` places that
-many capitals with the real opening-state picker, so 🏰 can be judged with no
+many seats with the real opening-state picker, so 🏰 can be judged with no
 game running.
 
 There is no automated check of the interface itself; it is verified by building
@@ -131,7 +141,7 @@ either — so both go through `main/emoji.atlas` and `main/emoji_ui.lua`, and
 still one edit to `main/theme.lua` plus a re-run; `test_wire.lua` fails if the
 resolver can name art the atlas lacks.
 
-Note the texture profile: `galaxy.texture_profiles` mipmaps `/main/tiles.atlas`
+Note the texture profile: `realm.texture_profiles` mipmaps `/main/tiles.atlas`
 and `/main/emoji.atlas` **by name**. A profile matches the *generated* texture,
 not the source directory, so listing `main/assets/tiles/**` would silently do
 nothing.
@@ -145,7 +155,7 @@ The device build is bundled and installed straight from the CLI (`adb` lives at
 JAVA=/Applications/Defold.app/Contents/Resources/packages/jdk-25+36/bin/java
 $JAVA -jar ~/Defold/bob-1.13.1.jar --platform armv7-android --architectures arm64-android \
   --archive --bundle-output /tmp/android --variant debug --bundle-format apk build bundle
-~/Library/Android/sdk/platform-tools/adb install -r /tmp/android/galaxy/galaxy.apk
+~/Library/Android/sdk/platform-tools/adb install -r /tmp/android/realm/realm.apk
 ```
 
 Bob writes `debug.keystore` + `debug.keystore.pass.txt` into the project root on
@@ -154,12 +164,12 @@ the first debug bundle; both are gitignored build artifacts.
 Useful on-device loop — `print` goes to logcat under the `defold` tag:
 
 ```bash
-adb shell am force-stop com.dg.galaxy && adb logcat -c
-adb shell monkey -p com.dg.galaxy -c android.intent.category.LAUNCHER 1
+adb shell am force-stop com.dg.realm && adb logcat -c
+adb shell monkey -p com.dg.realm -c android.intent.category.LAUNCHER 1
 adb logcat -d | grep defold
 adb exec-out screencap -p > shot.png       # verify visually
 adb shell input swipe 800 1200 300 1000 400   # pan
-adb shell input tap 907 2262                  # NEW GALAXY button
+adb shell input tap 907 2262                  # NEW REALM button
 ```
 
 `adb shell input` covers taps and swipes, but **multi-touch cannot be injected**
@@ -173,7 +183,7 @@ No unit-test framework is configured. A handful of scripts carry the load, all
 exiting non-zero on failure and so working in CI as-is:
 
 `tools/lint_shared.lua` is the first thing to run: it is the only check that
-knows `galaxy/` has to satisfy two different Lua runtimes, and both of the
+knows `realm/` has to satisfy two different Lua runtimes, and both of the
 idioms it bans work perfectly under LuaJIT.
 
 `tools/lint_globals.lua` catches the other class of thing no test can see: a read
@@ -207,13 +217,13 @@ independently of the thing it is testing.
 
 To check a *runtime* agrees with standalone LuaJIT, compare digests — the game
 logs one at startup, and Nakama logs one per generated seed, and both must equal
-what `luajit` prints for the same seed. **Seed 424242 gives `2277256399`,
+what `luajit` prints for the same seed. **Seed 424242 gives `111246289`,
 confirmed on macOS LuaJIT and on gopher-lua inside Nakama.** Names are hashed, so
-touching `galaxy/names.lua` moves every seed's digest:
+touching `realm/names.lua` moves every seed's digest:
 
 ```bash
 luajit -e 'package.path="./?.lua;"..package.path
-  print(require("galaxy.digest").of(require("galaxy.generate").build(424242)))'
+  print(require("realm.digest").of(require("realm.generate").build(424242)))'
 ```
 
 ## Architecture
@@ -222,24 +232,24 @@ luajit -e 'package.path="./?.lua;"..package.path
 
 | | |
 |---|---|
-| `galaxy/` | Pure Lua generation. Runs on **both** the Defold client (LuaJIT) and the Nakama server (gopher-lua). No engine dependencies. `hex` the lattice, `land` the continent, `terrain` what a tile is made of, `graph` the province carving, `generate` the pipeline, `wire`/`digest` the contract. |
+| `realm/` | Pure Lua generation. Runs on **both** the Defold client (LuaJIT) and the Nakama server (gopher-lua). No engine dependencies. `hex` the lattice, `land` the continent, `terrain` what a tile is made of, `graph` the province carving, `generate` the pipeline, `wire`/`digest` the contract. |
 | `main/` | Defold client: rendering, camera, HUD, backend client. |
-| `server/modules/` | Nakama entry points. `docker-compose.yml` mounts `./galaxy` into Nakama's module path, so there is one generator, not two. |
+| `server/modules/` | Nakama entry points. `docker-compose.yml` mounts `./realm` into Nakama's module path, so there is one generator, not two. |
 | `tools/` | Offline harnesses and tests, run under `luajit`. |
 
-### Simulation (`galaxy/sim/`, engine-free)
+### Simulation (`realm/sim/`, engine-free)
 
 **The game is being rebuilt from the ground up.** What runs today is the
 foundation, not a reduced version of something finished:
 
-- every player has a **capital** and a single **captain**;
-- captains move along the lane graph, and whatever they pass through becomes
+- every player has a **seat** and a single **commander**;
+- commanders move along the tile graph, and whatever they pass through becomes
   theirs;
-- a captain with enough **strength** takes ground somebody else holds; one
+- a commander with enough **strength** takes ground somebody else holds; one
   without it stops at the border;
-- strength comes back only on ground you hold, fastest at your capital;
-- holding enough regions wins; losing your capital loses, and being the last one
-  with a capital also wins.
+- strength comes back only on ground you hold, fastest at your seat;
+- holding enough provinces wins; losing your seat loses, and being the last one
+  with a seat also wins.
 
 There is no production, no research and no buildings. Those were built once and
 deliberately taken out, because the loop underneath them was never the thing
@@ -250,12 +260,12 @@ the map instead of listed.**
 Combat was built back first, ahead of the production that will feed it, because
 without it the game could not end. `tools/play.lua` proved it: the map was fully
 carved by turn ~125 and then *nothing changed for 275 turns* - two players sat on
-three of the four regions they needed and neither could take the fourth, because
+three of the four provinces they needed and neither could take the fourth, because
 a border was absolute. With strength, the same seed decides on turn 133 and the
 borders move all the way through. **You cannot tune production until you know
 what it buys.**
 
-`resolve.turn(galaxy, state, orders)` advances exactly one turn and returns the
+`resolve.turn(realm, state, orders)` advances exactly one turn and returns the
 events it produced. It is a pure function of its inputs plus a per-turn seeded
 RNG (`rng.stream(seed, "turn:" .. n)`), so a turn replays identically and a whole
 game is reconstructable from `(seed, order history)`.
@@ -263,57 +273,57 @@ game is reconstructable from `(seed, order history)`.
 | module | role |
 |---|---|
 | `rules.lua` | every balance constant, so tuning never means reading logic |
-| `systems.lua` | what kind of place a system is, derived from its star |
+| `tiles.lua` | what kind of place a tile is, derived from its tile |
 | `races.lua` | the six playable races, as pure modifier bundles |
 | `modifiers.lua` | folds race into the numbers the resolver reads |
 | `commanders.lua` | the named officer: rank, portrait, reach and what they lead |
-| `units.lua` | the three things a colony can put aboard, and what each is for |
+| `units.lua` | the three things a city can put aboard, and what each is for |
 | `bots.lua` | what a bot does with its turn, on the server and in the harness |
-| `state.lua` | opening state, captains, and JSON-round-trip repair |
-| `path.lua` | Dijkstra along lanes; captains never move in straight lines |
-| `regions.lua` | who holds a stretch of the galaxy, and who wins because of it |
+| `state.lua` | opening state, commanders, and JSON-round-trip repair |
+| `path.lua` | Dijkstra along tiles; commanders never move in straight lines |
+| `provinces.lua` | who holds a stretch of the realm, and who wins because of it |
 | `resolve.lua` | the four phases of a turn |
 | `view.lua` | fog of war: detection range, remembered state, per-player projection |
 
 Turn order is **orders → movement → logistics → aftermath → visibility**. It was nine
 phases; five of them belonged to production and went with it. Combat lives
 inside movement rather than in a phase of its own, because it is what happens
-when a captain tries to enter a system - not a separate step.
+when a commander tries to enter a tile - not a separate step.
 
-#### One captain, one verb
+#### One commander, one verb
 
 There is exactly one order:
 
 ```lua
-{ kind = "move", captain = <id>, route = { <system>, ... } }
+{ kind = "move", commander = <id>, route = { <tile>, ... } }
 ```
 
-A route is a list of **waypoints**, expanded lane-by-lane by the pathfinder.
+A route is a list of **wilds**, expanded tile-by-tile by the pathfinder.
 With two logins a day, standing orders are what make this playable rather than
-tedious. Unclaimed systems are taken *in passing* and do not stop the captain,
-so a route through a chain of empty systems sweeps them all up.
+tedious. Unclaimed tiles are taken *in passing* and do not stop the commander,
+so a route through a chain of empty tiles sweeps them all up.
 
-**A captain stops *before* a border, not on it.** Entering and then being
-repelled would mean standing in a system you do not hold; the route is dropped
-rather than held, so a captain never waits on something that may never change.
+**A commander stops *before* a border, not on it.** Entering and then being
+repelled would mean standing in a tile you do not hold; the route is dropped
+rather than held, so a commander never waits on something that may never change.
 
 #### Whether you win is computed; what it costs is simulated
 
 **Resistance has two halves, and both are public:**
 
 ```
-fortification   the world's own, from its star + Bastion + capital
-fleet           whoever is standing on it
+fortification   the world's own, from its tile + Bastion + seat
+army           whoever is standing on it
 ```
 
 **Two comparisons, and both must hold.** Your siege power against the walls,
-your fleet power against the garrison. Beat both and you take it; fail either
-and the captain stops at the border exactly as it did when there was one number,
+your army power against the garrison. Beat both and you take it; fail either
+and the commander stops at the border exactly as it did when there was one number,
 with the event naming all four figures so the player can see which half turned
 them back.
 
 That is the arithmetic a player does *themselves*, on the sheet, before
-committing a captain to a turn that resolves twelve hours later - which is why
+committing a commander to a turn that resolves twelve hours later - which is why
 combat has never needed a forecast, and the property unit types were designed
 around rather than against. No dice: the per-turn RNG stream is still derived
 and nothing rolls it.
@@ -332,25 +342,25 @@ pays less, which is where composition earns its keep.
 
 | | |
 |---|---|
-| `rules.defence` | `waypoint 2, outpost 5, colony 9`, plus `capital_defence 12` |
-| `rules.captain_strength` | 6 at level one, `+1` a level - see below |
+| `rules.defence` | `wilds 2, holding 5, city 9`, plus `seat_defence 12` |
+| `rules.commander_strength` | 6 at level one, `+1` a level - see below |
 | `rules.exchange_depth` | how drawn-out an even fight is |
-| `rules.shield_per_levels` | what a captain's own rank absorbs each exchange |
+| `rules.shield_per_levels` | what a commander's own rank absorbs each exchange |
 
 **An officer's own command is deliberately small.** It is never *spent* - a
-battle takes units, and a captain with none loses nothing - so at 12 and `+3` a
-level a level-four officer out-fought any colony on the map and could do it again
-every turn, for ever, at no cost. Six and `+1` keeps a bare captain able to sweep
-empty terrain, which is what early expansion is, while a colony at 9 needs
-something aboard and a capital at 21 needs a real army.
+battle takes units, and a commander with none loses nothing - so at 12 and `+3` a
+level a level-four officer out-fought any city on the map and could do it again
+every turn, for ever, at no cost. Six and `+1` keeps a bare commander able to sweep
+empty terrain, which is what early expansion is, while a city at 9 needs
+something aboard and a seat at 21 needs a real army.
 
-**The captain's shield only ever reduces losses, never the outcome.** That is
+**The commander's shield only ever reduces losses, never the outcome.** That is
 what makes it safe to have at all: a veteran wins the same fights and comes out
 of them stronger, without making the sheet's arithmetic a lie.
 
 #### Three types, and an army is aimed rather than large
 
-| | vs fortification | vs fleet | cost |
+| | vs fortification | vs army | cost |
 |---|---|---|---|
 | **Line** | 1 | 1 | 20 |
 | **Lance** | 1 | 3 | 34 |
@@ -363,29 +373,29 @@ fractional, and the whole design collapses back into needing a forecast.
 **Line dies first**, which is what makes it worth buying - it is the only type
 whose job is to still be there when the shooting stops.
 
-**Composition is chosen at embarkation**, not fixed per colony. A colony holds
-generic berths; the mix is picked when a captain loads, which is when the player
-already knows what they are marching at. Fixing it per colony would be more
+**Composition is chosen at embarkation**, not fixed per city. A city holds
+generic berths; the mix is picked when a commander loads, which is when the player
+already knows what they are marching at. Fixing it per city would be more
 strategic on paper and miserable in practice: with three orders a turn, "my
-Siege is nine lanes from the fortress" is a logistics puzzle rather than a
+Siege is nine tiles from the fortress" is a logistics puzzle rather than a
 decision.
 
 Two consequences worth keeping:
 
-- **A capital needs a veteran.** `capital_defence` puts a capital above a fresh
-  captain's entire ceiling, so eliminating a player takes an officer who has been
+- **A seat needs a veteran.** `seat_defence` puts a seat above a fresh
+  commander's entire ceiling, so eliminating a player takes an officer who has been
   winning - not an opening rush.
 - **Strength does not come back on its own.** It is bought - see the economy
   below - which is what stops a deep raid running for ever and what makes the
   trip home mean something.
 
-**A defeated captain is broken, not killed** (`commanders.demote`): thrown back
-to its capital at zero strength and stripped of a rank. With one captain each, an
+**A defeated commander is broken, not killed** (`commanders.demote`): thrown back
+to its seat at zero strength and stripped of a rank. With one commander each, an
 officer that could be removed from the board would end a player's game on a
 single turn, and everyone would stop committing.
 
 **Battles are the only source of experience**, worth the resistance overcome - so
-a colony is worth more than a waypoint without any table having to say so.
+a city is worth more than open country without any table having to say so.
 
 **An empty batch is meaningful.** It is how a player says "I am done this turn",
 which is what lets a turn resolve early once everyone has said it.
@@ -393,25 +403,25 @@ which is what lets a turn resolve early once everyone has said it.
 #### Three kinds of place
 
 Every tile carries a **terrain**, a **biome**, a **feature** and a habitability
-flag, all public map data. `systems.lua` turns those into three kinds of place:
+flag, all public map data. `tiles.lua` turns those into three kinds of place:
 
 | kind | derived from |
 |---|---|
-| **colony** | `habitable` |
-| **outpost** | any feature but `none` |
-| **waypoint** | everything else - open country |
+| **city** | `habitable` |
+| **holding** | any feature but `none` |
+| **wilds** | everything else - open country |
 
-**An outpost is exactly a tile with a feature**, and nothing else. The star map
-also promoted energetic star classes, which meant an outpost could exist with
+**A holding is exactly a tile with a feature**, and nothing else. The star map
+also promoted energetic star classes, which meant a holding could exist with
 nothing drawn to say why. Here the feature *is* drawn - old ruins, a mine, a
 shrine, a barrow, a wild gate, a gem seam - so the glyph is the reason, and a
 player can price a conquest on the far side of the map by looking at it.
 
-None of them currently produce anything beyond supply - the distinction is what
-capitals are placed on, what counts towards a province, **what it costs to take**
-(see `systems.defence`), and what city upgrades are priced against.
+None of them currently produce anything beyond gold - the distinction is what
+seats are placed on, what counts towards a province, **what it costs to take**
+(see `tiles.defence`), and what city upgrades are priced against.
 `profile.industry` and `profile.science` come off the terrain and feature tables
-in `galaxy/terrain.lua`, which is where all the per-kind numbers live; there is
+in `realm/terrain.lua`, which is where all the per-kind numbers live; there is
 no second copy in the simulation.
 
 **The terrain mix is fixed by ranking, not by thresholds.**
@@ -423,7 +433,7 @@ and clusters hard around 0.5, so an absolute threshold of 0.72 is nearly two
 standard deviations out and picked 3.6% of the map rather than the ~25% it looks
 like. The first pass shipped 8 mountains on a 220-tile map for exactly that
 reason. Ranking also makes the mix identical on every seed while leaving *where*
-the mountains are entirely to the noise - the same trade `galaxy/land.lua` makes
+the mountains are entirely to the noise - the same trade `realm/land.lua` makes
 to get an exact land count.
 
 **Biome is a climate, and the order of the tests is the whole tuning.** Blight
@@ -435,63 +445,63 @@ claim, so a loose early threshold starves everything below - `sandlands` at
 with the scraps. The shipped mix is roughly 48% greenlands, 18% drylands, 18%
 sandlands, 10% deadlands, 7% icelands.
 
-**The generator guarantees a colony floor** (`config.colony_fraction`).
+**The generator guarantees a city floor** (`config.city_fraction`).
 Habitability is a per-tile roll, and the per-terrain chances in
-`galaxy/terrain.lua` are deliberately tuned to average *just under* the floor, so
-the floor always binds and every seed gets the same number of colonies - which is
+`realm/terrain.lua` are deliberately tuned to average *just under* the floor, so
+the floor always binds and every seed gets the same number of cities - which is
 what the economy sweep priced against. Letting the roll win instead gave 28%, or
-62 colonies where the prices assume 44. What the roll still decides is *which*
+62 cities where the prices assume 44. What the roll still decides is *which*
 tiles they are.
 
 #### The economy: one currency, and one thing it cannot buy
 
-**Supply is fungible; units are not.** A system pays supply each turn, scaled by
-the star's own `industry` — a number the generator has computed since it was
-written and nothing read until now. Units accumulate *only* at colonies, up to
-`colony_stock_cap`, and become strength *only* where a captain is standing. So
-wealth alone never wins a front: it converts to force at a colony, and somebody
+**Gold is fungible; units are not.** A tile pays gold each turn, scaled by
+the tile's own `industry` — a number the generator has computed since it was
+written and nothing read until now. Units accumulate *only* at cities, up to
+`city_stock_cap`, and become strength *only* where a commander is standing. So
+wealth alone never wins a front: it converts to force at a city, and somebody
 has to walk there.
 
 | | pays | builds |
 |---|---|---|
-| waypoint | **nothing** | — |
-| outpost | by `industry`, ~2 | — |
-| colony | by `industry`, ~3 | only what it has dwellings for |
-| a capital, on top | `rules.capital_yield` | |
+| wilds | **nothing** | — |
+| holding | by `industry`, ~2 | — |
+| city | by `industry`, ~3 | only what it has dwellings for |
+| a seat, on top | `rules.seat_yield` | |
 
 **Road pays nothing, because the map had already decided that.**
-`regions.lua:31` counts only colonies and outposts towards victory, so a
-waypoint was already terrain for the purpose of *winning* and still wages for
-the purpose of *paying*. Walking a captain down an empty chain was income for
-the rest of the game, in a design whose whole point is that "systems owned" is a
-poor measure. Colonies are towns, outposts are mines, the lane between them is
+`provinces.lua:31` counts only cities and holdings towards victory, so a
+wilds was already terrain for the purpose of *winning* and still wages for
+the purpose of *paying*. Walking a commander down an empty chain was income for
+the rest of the game, in a design whose whole point is that "tiles owned" is a
+poor measure. Cities are towns, holdings are mines, the tile between them is
 road.
 
-It began as a pure redistribution — waypoints were 45% of the systems and 22%
-of the income, and moving that onto the other two left whole-galaxy income
+It began as a pure redistribution — wilds were 45% of the tiles and 22%
+of the income, and moving that onto the other two left whole-realm income
 within a percent of where it was. **The sweep then took a third of it away**,
 and the game got faster. See the pricing sweep below: every sink in this design
 is capped, so income beyond what the sinks can absorb is not wealth, it is a
 number going up.
 
-**The capital's bonus is what makes the opening work.** With road paying
-nothing, a player who has taken two systems and a stretch of lane earns almost
-what they earned on turn one, and the capital is the only thing anyone is
+**The seat's bonus is what makes the opening work.** With road paying
+nothing, a player who has taken two tiles and a stretch of tile earns almost
+what they earned on turn one, and the seat is the only thing anyone is
 guaranteed to hold. It is a shape rather than a decision — the generator places
-the capital, so there is nothing to choose; the version with a choice in it is a
+the seat, so there is nothing to choose; the version with a choice in it is a
 building that pays, and there is no room for one at four slots.
 
 **A bot values ground at what it pays**, not from a table of its own:
-`bots.lua`'s `score` calls `systems.yield` directly, so a bot follows the
+`bots.lua`'s `score` calls `tiles.yield` directly, so a bot follows the
 economy automatically whenever it is retuned and there is no parallel ranking to
-drift. It deliberately ignores the capital bonus — a bot cannot take a capital
-and keep it paying, and pricing one as though it could would aim captains at the
+drift. It deliberately ignores the seat bonus — a bot cannot take a seat
+and keep it paying, and pricing one as though it could would aim commanders at the
 target they are least able to hold. This had to land *with* the rate change:
 until a bot knows road is worthless, every number `play.lua` produces is a bot
 playing the old economy.
 
 **Availability accumulates whether or not you visit, and does not decay.** A
-distant colony is not wasted production - it is a reason to march. That is
+distant city is not wasted production - it is a reason to march. That is
 lifted straight from Heroes of Might and Magic, along with the shape that makes
 it a decision at all: **you have to pay for what is available.** Without the
 cost, collecting is a chore rather than a choice, and you always take
@@ -499,52 +509,52 @@ everything.
 
 #### The garrison: two complements, and only one of them is yours yet
 
-A colony carries two, and they are not the same thing:
+A city carries two, and they are not the same thing:
 
 | | |
 |---|---|
 | `available` | what the dwellings have made and nobody has paid for, per type, to each dwelling's cap |
-| `garrison` | what you bought. Sits here until a captain carries it away |
+| `garrison` | what you bought. Sits here until a commander carries it away |
 
-**Buying belongs to the colony, not to a captain.** What is bought goes into the
+**Buying belongs to the city, not to a commander.** What is bought goes into the
 garrison and waits, so a player spends the turn they have the money and collects
 whenever somebody can get there. Before this, arming needed an officer standing
 on the spot at the moment of purchase - which with three dwellings in three
 places is three tours to synchronise with a purse.
 
 **Buying and transferring cost no order** (`rules.order_cost`). An order is
-something that *happens somewhere*: moving a captain, raising a building,
-raising an officer. Buying is spending, and a transfer is a captain rearranging
+something that *happens somewhere*: moving a commander, raising a building,
+raising an officer. Buying is spending, and a transfer is a commander rearranging
 what is already yours at a place it is already standing. Charging for a purchase
 was right while one went straight into a hold; it stopped being right the moment
-purchases went into the colony, because charging an empire act means a rich
-player banks supply they cannot convert - which is precisely the failure
+purchases went into the city, because charging an empire act means a rich
+player banks gold they cannot convert - which is precisely the failure
 buildings were introduced to fix, one level down.
 
-**A transfer carries a target hold, not a delta.** Whatever the captain should
+**A transfer carries a target hold, not a delta.** Whatever the commander should
 have aboard when the turn is over; the resolver works out which way each type
 moves. A delta would be wrong the moment anything else touched either side first
 - a purchase landing the same turn, a battle on the way in - and this way the
 client only ever states the thing the player chose. Buying settles before
 transferring, so a purchase and a collection are one turn's work.
 
-**The garrison defends**, folding into the `fleet` half of the two comparisons
+**The garrison defends**, folding into the `army` half of the two comparisons
 that already exist rather than adding a concept. Production used to defend the
 world holding it and had to be taken out, because defence accumulated for free
-while an attacker carried theirs across the galaxy. A garrison is not that: it
-is bought, so every unit standing on a world is a unit not in a captain's hold
+while an attacker carried theirs across the realm. A garrison is not that: it
+is bought, so every unit standing on a world is a unit not in a commander's hold
 and the trade pays for itself.
 
 **But being bought was not enough, and that is why there is a cap.**
 `rules.garrison_cap` exists because the two sides are not symmetrical: an
-attacker's power is bounded by `captain_units` - no amount of wealth brings more
+attacker's power is bounded by `commander_units` - no amount of wealth brings more
 than a hold - while a defender's was bounded by nothing. Measured, uncapped:
 **three seeds in ten never decided at all**, territory bit-identical from turn
-800 to 900, two players sitting on three of the four regions they needed. The
+800 to 900, two players sitting on three of the four provinces they needed. The
 same freeze combat was built to end, wearing a receipt. Capped at what one
-captain carries, all ten decide again.
+commander carries, all ten decide again.
 
-**What was ready scatters; what was built stands.** A colony that changed hands
+**What was ready scatters; what was built stands.** A city that changed hands
 handing its conqueror an instant army would pay for taking it twice over, so
 `available` is emptied and the garrison dies in the fight that took the world.
 The dwellings do not: they are the prize.
@@ -553,13 +563,13 @@ The dwellings do not: they are the prize.
 
 One variant per process, because the modules are cached and mutating `rules` in
 place leaks into every later run in the same VM. Overrides are assignments -
-`rules.garrison_cap=8`, `foundry.every=2`, `rules.supply_yield.colony=3` - and
+`rules.garrison_cap=8`, `foundry.every=2`, `rules.gold_yield.city=3` - and
 what it reports is deliberately more than how long a game takes:
 
     decided 20/20  median 125  range 71-191  first fight 30  idle 415  built 122
     raised: berths 767  interceptor_bay 675  foundry 585  bastion 325  admiralty 103
 
-**`idle` is the number that found everything.** It is the supply a surviving
+**`idle` is the number that found everything.** It is the gold a surviving
 player is still holding when the game ends, and at the shipped prices it was
 **8,316** - fifty turns of income nobody could spend. Every sink here is capped
 (four slots, six in a garrison, two of a type ready), so past a point the
@@ -568,22 +578,22 @@ economy simply stopped being a decision.
 What the sweep established, in order:
 
 - **Money was never the constraint; throughput was.** Halving every dwelling
-  price moved the median the *wrong* way (181 → 167) and pushed idle supply to
+  price moved the median the *wrong* way (181 → 167) and pushed idle gold to
   8,800. Raising the stockpile cap did nothing either. Only the cadence moved
   it: `every = 1` on all three took the median to 128 and idle to 2,500.
 - **That reverses an older rule** which said every-turn production never
-  decides. True of a pooled stock every colony got free; not true once
+  decides. True of a pooled stock every city got free; not true once
   production is gated behind a building bought with an order and a slot.
 - **Then income came down 38%**, and the game got *faster* again — 125, with
   idle at 415. Money running out is what keeps the economy a decision all game.
 - **Two prices I expected to be wrong were not.** The Admiralty is reachable —
-  players finish with a median of two to three captains against a ceiling of
+  players finish with a median of two to three commanders against a ceiling of
   four — and Bastion gets built. Doubling `bastion_defence` made games *slower*
-  and left more supply idle, so 8 is not a placeholder.
+  and left more gold idle, so 8 is not a placeholder.
 - **The four-slot cap does bind.** Five slots is ~9 turns faster with less idle
-  supply. Keeping four is a deliberate cost, now a measured one.
-- **The captain ceiling earns its place.** Capping at two rather than four cost
-  9 turns and doubled idle supply — parallel officers are how an empire spends.
+  gold. Keeping four is a deliberate cost, now a measured one.
+- **The commander ceiling earns its place.** Capping at two rather than four cost
+  9 turns and doubled idle gold — parallel officers are how an empire spends.
 
 Twenty seeds, every player count. "before the sweep" is the prices as first
 shipped, "after" is what the sweep set them to, and "hex" is those same prices on
@@ -601,35 +611,35 @@ the new substrate — **nothing in `rules.lua` moved between the last two column
 All twenty decide at every count, on both substrates.
 
 **Games are about 25% shorter on the hex map, and the cause is connectivity
-rather than economy.** A pruned Delaunay lane network was tuned to a mean degree
+rather than economy.** A pruned Delaunay tile network was tuned to a mean degree
 of 2.9; a hex lattice gives every inland tile six neighbours and comes out at
 ~5.0. Commanders manoeuvre far more freely, fronts are wider, and ground changes
-hands sooner. Idle supply came down with it, which is the healthy direction — the
+hands sooner. Idle gold came down with it, which is the healthy direction — the
 economy is still a decision all game rather than a number going up.
 
 Nothing was retuned to compensate, deliberately: the substrate swap was meant to
 leave the game underneath alone, and 93 turns at two a day is still six weeks of
 real time. If it ever wants slowing, the honest levers are the map's size and
-`captain_steps`, not the prices the sweep established.
+`commander_steps`, not the prices the sweep established.
 
-**Rank sets where a captain starts, not what they can carry.** `base_strength`
+**Rank sets where a commander starts, not what they can carry.** `base_strength`
 is the officer's own command and where a broken one reforms; `max_units` is what
 they can lead on top of it, and it is generous. Capping the *total* at the rank
-base walled the game shut - a fresh captain could not cover a defended colony,
+base walled the game shut - a fresh commander could not cover a defended city,
 so could never win the battle that would have promoted them, so never got any
-stronger. Every game froze with two players on three of the four regions they
+stronger. Every game froze with two players on three of the four provinces they
 needed and full purses they could not spend.
 
-**Stock deliberately does not defend the colony holding it.** It did, and it
-nearly doubled what a colony cost to take, which re-froze the map that combat
+**Stock deliberately does not defend the city holding it.** It did, and it
+nearly doubled what a city cost to take, which re-froze the map that combat
 had just unfrozen: defence accumulated for free while an attacker had to carry
-theirs across the galaxy. Fortifying will be a choice a player makes, not
+theirs across the realm. Fortifying will be a choice a player makes, not
 something that happens to a world nobody visited.
 
-**A captain buys where it *ends* the turn**, so a march onto one of your own
-colonies and an embarkation there are one turn's work. The RPC supersedes per
+**A commander buys where it *ends* the turn**, so a march onto one of your own
+cities and an embarkation there are one turn's work. The RPC supersedes per
 *kind* for that reason - a resupply that superseded the march would leave the
-captain buying where it already stood.
+commander buying where it already stood.
 
 The numbers were measured, not guessed (`tools/play.lua`):
 
@@ -644,9 +654,9 @@ refit as fast as they can spend never moves.
 
 #### Buildings: four slots, five things, and they do not stack
 
-A colony **specialises**, so the decision is spatial rather than numeric: this
+A city **specialises**, so the decision is spatial rather than numeric: this
 one makes escorts, that one is where officers come from, the one on the frontier
-is a fortress. You give up exactly one, and where the colony sits decides which.
+is a fortress. You give up exactly one, and where the city sits decides which.
 
 | | | |
 |---|---|---|
@@ -654,70 +664,70 @@ is a fortress. You give up exactly one, and where the colony sits decides which.
 | **Interceptor Bay** | 140 | Interceptors accumulate here |
 | **Foundry** | 160 | Bombards accumulate here |
 | **Bastion** | 100 | flat resistance, and arms nobody |
-| **Admiralty** | 220 | another captain allowed, and the place to raise them |
+| **Admiralty** | 220 | another commander allowed, and the place to raise them |
 
-**A colony makes only what it has dwellings for.** There is no base production:
-a world you have just taken pays supply, counts towards its region and is
+**A city makes only what it has dwellings for.** There is no base production:
+a world you have just taken pays gold, counts towards its province and is
 somewhere to stand, but has no shipyard until you put one there. That is what
 makes the four slots the whole decision rather than a bonus on top of one — and
-because **buildings live on the system**, a colony changes hands with everything
+because **buildings live on the tile**, a city changes hands with everything
 built on it. Somebody else's developed arsenal is a target worth marching on,
 which is the first time the map has had a reason to want a *particular* world
-that was not a region tick or a capital.
+that was not a province tick or a seat.
 
-**A capital opens with Berths standing.** A player who cannot arm at all until
+**A seat opens with Berths standing.** A player who cannot arm at all until
 they have saved the price of a dwelling has no opening — they watch a number
 climb for several turns and do nothing.
 
 Slots went from two to four with the dwellings: two was right when a building
 was a multiplier on production that happened anyway, and would have meant a
-colony could make one thing *or* be anything else.
+city could make one thing *or* be anything else.
 
-**Buildings need no captain present.** Raising one is an empire's decision, not
+**Buildings need no commander present.** Raising one is an empire's decision, not
 an errand, and requiring an officer to stand there would make the whole economy
-hostage to one captain's touring speed. It is also the sink that absorbs a large
-empire's surplus, which units alone never could - colonies produce at a fixed
-rate however rich you are, so before buildings a hundred-system empire banked
+hostage to one commander's touring speed. It is also the sink that absorbs a large
+empire's surplus, which units alone never could - cities produce at a fixed
+rate however rich you are, so before buildings a hundred-tile empire banked
 tens of thousands it could not spend.
 
 **A Bastion is the only way a world gets harder to take.** Production used to
-defend the colony holding it, which meant a world nobody had visited fortified
+defend the city holding it, which meant a world nobody had visited fortified
 itself for free; fortifying is now something a player chooses and pays for.
 
-**Captains: one, plus one per Admiralty, to a ceiling of four.** The ceiling is a
+**Commanders: one, plus one per Admiralty, to a ceiling of four.** The ceiling is a
 rule rather than a layout accident - the commander strip is a row of faces, not
-a list, and stops being readable past four. A second captain is the answer to the
+a list, and stops being readable past four. A second commander is the answer to the
 touring problem: parallel collection, parallel fronts.
 
 Buildings and recruitment settle in the **logistics** phase, after movement, so a
-colony taken this turn can be built on this turn - and a build on a colony *lost*
+city taken this turn can be built on this turn - and a build on a city *lost*
 this turn is refused rather than quietly enriching whoever took it.
 
-#### Capitals
+#### Seats
 
-`pick_capitals` places every player on a colony with at least
-`rules.capital_neighbours` more within `rules.capital_hops` tiles, then spreads
+`pick_seats` places every player on a city with at least
+`rules.seat_neighbours` more within `rules.seat_hops` tiles, then spreads
 them by farthest-point sampling. A player who spawns on a barren headland, or
 next door to a rival, has lost at generation rather than in play.
 
-A capital is currently only a spawn and a losing condition - **hold it or you
+A seat is currently only a spawn and a losing condition - **hold it or you
 are out** - and is the one place a player will build once upgrades exist.
 
-#### Captains
+#### Commanders
 
-A captain is a named officer with a rank, a face and a speed. The name and the
+A commander is a named officer with a rank, a face and a speed. The name and the
 portrait are most of the point: a piece a player is attached to is worth more
 than a token. Everything derives from `level`, so state carries only a level and
 an experience total.
 
 **Battles award experience**, worth the resistance overcome. Rank buys reach
-*and* weight, so a veteran covers more lanes a turn and can crack a capital a
+*and* weight, so a veteran covers more tiles a turn and can crack a seat a
 fresh officer cannot.
 
-**Movement is whole tiles.** A captain crosses `rules.captain_steps` tiles a
+**Movement is whole tiles.** A commander crosses `rules.commander_steps` tiles a
 turn and always ends the turn *at* a tile.
 
-It used to be a speed - 95 world units a turn along lanes varying from roughly
+It used to be a speed - 95 world units a turn along tiles varying from roughly
 60 to 200 - and the problem was not the arithmetic but that **the number the rule
 depended on was invisible.** Lane length was never drawn, never stated and could
 not be eyeballed, so "when does Kess arrive?" had no answer a player could work
@@ -731,36 +741,36 @@ walk with no tiebreak. What the star map gave up to get countable movement, the
 hex map simply has.
 
 **Rank buys reach rather than pace** (`rules.steps_at_rank`): a Commodore covers
-two lanes a turn, a Grand Admiral three, and a race with a mobility bonus adds a
+two tiles a turn, a Grand Admiral three, and a race with a mobility bonus adds a
 whole extra one. Fractions of a step would be exactly the invisible arithmetic
 this replaced.
 
 **Determinism in the pathfinder comes from the frontier order**, not from a
-tiebreak. `galaxy.adjacency` is sorted ascending when it is built, so neighbours
+tiebreak. `realm.adjacency` is sorted ascending when it is built, so neighbours
 are always visited in the same order and the same route is found every time, on
 every runtime.
 
 **Terrain does not cost movement.** Mountains and forest are drawn, so a varied
 cost would for the first time be *legible* rather than invisible arithmetic - it
 is the one thing the lattice newly makes possible. It is deliberately not taken:
-it would reprice `captain_steps`, `steps_at_rank` and every pacing number the
+it would reprice `commander_steps`, `steps_at_rank` and every pacing number the
 sweep established, and the substrate swap was meant to leave the game underneath
 alone. The route detours are real without it - a march around a bay runs up to
 ten tiles longer than the straight-line distance.
 
 #### Detection is a range
 
-Each *source* sees a distance of its own: a system you hold reaches
-`base + race`, a captain barely past itself. The visible set is the union,
+Each *source* sees a distance of its own: a tile you hold reaches
+`base + race`, a commander barely past itself. The visible set is the union,
 computed as a relaxation rather than a plain breadth-first walk, because the
 widest source has to win wherever two overlap.
 
-**Rival captains are visible where you have eyes.** Their rank and heading show;
+**Rival commanders are visible where you have eyes.** Their rank and heading show;
 their orders do not.
 
 #### Bots
 
-`galaxy/sim/bots.lua` is engine-free like the rest of the simulation, so the
+`realm/sim/bots.lua` is engine-free like the rest of the simulation, so the
 same code decides a bot's move on Nakama and in `tools/play.lua` under luajit.
 **One implementation on purpose**: an AI that only existed in the harness would
 be the one nobody plays against, and the one that shipped would be the one
@@ -778,37 +788,37 @@ nobody tests.
   three of them resolves the instant the human ends their turn. That is most of
   what having them is for.
 - **They never walk into a border.** The search only travels through ground the
-  bot already holds, because a captain turned back has wasted the trip.
+  bot already holds, because a commander turned back has wasted the trip.
 
 It is a plain function rather than a behaviour tree. The game has one verb, so
-the whole decision is "which system next", and a tree there is ceremony around
+the whole decision is "which tile next", and a tree there is ceremony around
 an `if`. When a bot has to weigh expanding against defending against raiding
 against building, that is the moment to reach for one - and to vet it against
 the gopher-lua traps first.
 
-#### Regions are the objective
+#### Provinces are the objective
 
 The map is deliberately far bigger than any one player will touch. With one
-captain each and two hundred systems, most of the galaxy is scenery - and that
-is the intent. What it means is that "systems owned" is a poor objective: it
-counts the empty road a captain walked down alongside the world they fought for.
+commander each and two hundred tiles, most of the realm is scenery - and that
+is the intent. What it means is that "tiles owned" is a poor objective: it
+counts the empty road a commander walked down alongside the world they fought for.
 
-So the unit of contest is the **region** the generator already carves: a named,
-contiguous stretch of a dozen or so systems, of which only the colonies and
-outposts count. A player holds a region by holding **more than half** of what is
+So the unit of contest is the **province** the generator already carves: a named,
+contiguous stretch of a dozen or so tiles, of which only the cities and
+holdings count. A player holds a province by holding **more than half** of what is
 worth holding in it, and the game is won by holding
-`rules.victory_region_fraction` of all regions.
+`rules.victory_province_fraction` of all provinces.
 
 Nothing about control is stored. It is a pure function of who owns what, so it
 is recomputed rather than tracked.
 
 #### Pacing
 
-`tools/play.lua` plays a full game with a captain-per-player AI. On the default
+`tools/play.lua` plays a full game with a commander-per-player AI. On the default
 map four players carve it up and one wins around turn 130–150 — about two months
 at two turns a day. `tools/sweep.lua` is the broader instrument: twenty seeds, any
 player count, reporting how many games decided, the median length, how much
-supply a survivor is still sitting on, and what got built. See the table under
+gold a survivor is still sitting on, and what got built. See the table under
 **Pricing it** above for what it says on the hex map.
 
 It is also where the losing-player problem is visible: an AI boxed in early
@@ -816,31 +826,31 @@ finishes with a tenth of the map and no way back.
 
 ### The game (server-authoritative, asynchronous)
 
-2-10 players compete for the galaxy. Turns resolve on a schedule, players issue
+2-10 players compete for the realm. Turns resolve on a schedule, players issue
 orders between them, and the map is public while state is fogged.
 
 RPCs in `server/modules/game_rpc.lua`:
 
 One order became four. `game.orders` takes `move`, `resupply`, `build` and
-`recruit`; a captain may carry one move and one resupply in a turn, and a colony
+`recruit`; a commander may carry one move and one resupply in a turn, and a city
 one build. A `resupply` carries a **mix**, not a count - and both the RPC's
 cleaning pass and `catch_up`'s rebuild put it through `units.normalise`, because
 this is the third time a widened order shape has been silently flattened by a
 `tonumber` in one of those two places.
 
 **A turn is worth only `rules.orders_per_turn` of them.** Not a safety limit - a
-scarcity. With four captains and a dozen colonies there is always more worth
+scarcity. With four commanders and a dozen cities there is always more worth
 doing than three orders allow, so a turn is a choice about what matters most
 rather than a round of housekeeping.
 
-It works at three because **a route is a standing order**: a captain given
+It works at three because **a route is a standing order**: a commander given
 somewhere to go keeps going, for as many turns as it takes, at no further cost.
 An order is what it costs to *change* a plan, not to maintain one.
 
 Three things make it a decision rather than a wall:
 
 - **Revising is free.** Superseding runs before the budget, so re-routing a
-  captain or changing which building a colony gets costs nothing extra - it is
+  commander or changing which building a city gets costs nothing extra - it is
   the same decision, changed.
 - **An order can be taken back** before it is sent (`store.plan_remove`, and the
   `x` beside each line in the order bar). Taking one back is as much a decision
@@ -849,7 +859,7 @@ Three things make it a decision rather than a wall:
   budget the player has to work out for themselves is not one they can spend.
 
 `rules.order_cost` is a table rather than a rule buried in the resolver, so
-making a kind free is one edit. Resupply is deliberately not free: a captain
+making a kind free is one edit. Resupply is deliberately not free: a commander
 that could always top up for nothing would always top up, and collecting would
 be a chore rather than a decision again.
 
@@ -870,11 +880,11 @@ four-player spread went from 94-315 turns to 85-174.
 There is one order, and `game.orders` replaces the whole batch:
 
 ```lua
-{ kind = "move", captain, route }
+{ kind = "move", commander, route }
 ```
 
 The RPC checks *shape* only, and supersedes rather than appends: a second order
-for the same captain replaces the first, so the array's position never carries
+for the same commander replaces the first, so the array's position never carries
 meaning a client would have to know about. Whether an order is *legal* depends
 on state that will have moved on by the time it resolves, so the resolver
 decides that and emits an `order_rejected` event carrying a reason the client
@@ -902,33 +912,33 @@ its work and re-reads.
 Storage layout (Nakama storage; the Lua runtime has **no SQL access**):
 
 ```
-games      / <id>          system-owned   lobby, schedule, roster
-game_state / <id>          system-owned   the simulation state
-game_events/ <id>:<turn>   system-owned   one turn's events
+games      / <id>          tile-owned   lobby, schedule, roster
+game_state / <id>          tile-owned   the simulation state
+game_events/ <id>:<turn>   tile-owned   one turn's events
 game_orders/ <id>:<turn>   per-user       that player's orders
 ```
 
-Everything is system-owned except orders, so a player cannot read another
+Everything is tile-owned except orders, so a player cannot read another
 player's pending moves straight from storage.
 
 **Sim state is repaired on read** (`state.normalise`). It round-trips as JSON,
-and while dense arrays survive, `knowledge[player]` is keyed by star id and
+and while dense arrays survive, `knowledge[player]` is keyed by tile id and
 *sparse*, so it returns with string keys. Indexing it with a number would then
 silently miss and every player's fog memory would look empty after each turn.
 
 **The repair has to match the shape it is repairing.** This one coerced each
 entry with `tonumber(entry) or 0`, which was correct when memory was `id -> turn`
 and quietly flattened every record to the number zero once `view.remember`
-started storing `{ turn, owner, capital_of }`. The function written to *stop* fog
+started storing `{ turn, owner, seat_of }`. The function written to *stop* fog
 memory being wiped on every read was the thing wiping it, and `view.project`
 crashed outright the first time a player remembered somewhere they could no
 longer see. Nothing offline caught it: under LuaJIT the crash needs a remembered
-system that is not also currently visible, which the tests happened not to
+tile that is not also currently visible, which the tests happened not to
 produce. It was found by playing a game through the real RPCs.
 
-For the same reason `view.project` keys systems by **string** id: a Lua table
+For the same reason `view.project` keys tiles by **string** id: a Lua table
 with sparse integer keys encodes ambiguously, and the client must be able to
-tell which system each entry describes.
+tell which tile each entry describes.
 
 ### Backend (Nakama)
 
@@ -941,14 +951,14 @@ docker compose down
 Console at http://127.0.0.1:7351 (`admin` / `password`), client API on 7350.
 
 The client authenticates with a random per-install device id (`main/device_id.lua`,
-persisted via `sys.save`) and calls the `galaxy.get` RPC, which returns the map
-in the wire format defined by `galaxy/wire.lua` — a contract shared by both
+persisted via `sys.save`) and calls the `realm.get` RPC, which returns the map
+in the wire format defined by `realm/wire.lua` — a contract shared by both
 sides, so there is no encoder/decoder pair to drift. Only what cannot be derived
 is transmitted (~40 KB); colours, labels, adjacency, borders and bounds are
 recomputed on arrival from the same tables the generator used.
 
-Set `galaxy.use_server = 0` in game.project to run fully offline, or
-`galaxy.nakama_debug = 1` to trace requests — note that prints the session
+Set `realm.use_server = 0` in game.project to run fully offline, or
+`realm.nakama_debug = 1` to trace requests — note that prints the session
 token, so leave it off otherwise.
 
 **Testing against a physical device**: the phone's `127.0.0.1` is the phone, so
@@ -965,7 +975,7 @@ that, and a lattice needs neither. Nothing was micro-optimised; the work simply
 stopped existing. The same map takes ~5 ms on LuaJIT.
 
 The wire payload came down with it — **~25 KB, from ~40 KB** — because a lattice
-has no arbitrary connections to transmit. See `galaxy/wire.lua`.
+has no arbitrary connections to transmit. See `realm/wire.lua`.
 
 ### Six things that will bite you on the Nakama runtime
 
@@ -973,15 +983,15 @@ Nakama's Lua is gopher-lua, not LuaJIT, and differs in ways that fail *silently*
 
 1. **`a, b = b, a` is miscompiled.** The multiple-assignment swap is evaluated
    sequentially, so both names end up with the second value. This turned every
-   reordered edge in `delaunay.edges` into a self-loop — a third of the lane
+   reordered edge in `delaunay.edges` into a self-loop — a third of the tile
    graph — while the client was perfectly fine. `tools/lint_shared.lua` fails
-   the build if the idiom reappears in `galaxy/`. Use an explicit temporary.
-2. **There is no `bit` library.** `galaxy/rng.lua` detects this and falls back to
+   the build if the idiom reappears in `realm/`. Use an explicit temporary.
+2. **There is no `bit` library.** `realm/rng.lua` detects this and falls back to
    an arithmetic implementation that produces bit-identical results. Without it
    the generator cannot load at all.
 3. **`rpc_func`, not `rpc_func2`.** The latter sends the payload as a `?payload=`
    query parameter, which Nakama 3.27 delivers to the RPC as an empty string.
-   The server then defaults the seed and serves the same galaxy every time.
+   The server then defaults the seed and serves the same realm every time.
 4. **Nakama images before 3.27 are amd64-only** and run under emulation on Apple
    Silicon — ~5x slower again, and it was OOM-killed mid-generation. 3.27+ is
    multi-arch.
@@ -993,14 +1003,14 @@ Nakama's Lua is gopher-lua, not LuaJIT, and differs in ways that fail *silently*
    before it could answer a single request**, and the symptom is about as hostile
    as it gets: the container simply disappears, the client sees a closed socket
    after 1.6 s, and *nothing is logged anywhere*, because nothing got far enough
-   to log it. `galaxy/hex.lua` now caps `MAX_COORD` at 64, which caps the key at
+   to log it. `realm/hex.lua` now caps `MAX_COORD` at 64, which caps the key at
    16,640, and `hex.field` asserts a radius that would exceed it. If you add
    another coordinate-keyed table, keep the keys small - or use a string.
 6. **`goto` and labels are Lua 5.2.** LuaJIT accepts them happily, so a
    `goto continue` passes every offline test in `tools/` and is a coin flip on a
    5.1 runtime. Nothing in the test suite could catch it — the editor's language
    server, also configured for 5.1, was what reported it. `lint_shared.lua` now
-   fails on `goto` and on `::label::` in `galaxy/` for the same reason it fails
+   fails on `goto` and on `::label::` in `realm/` for the same reason it fails
    on the swap idiom: the hazard is that it *works* locally.
 
 `collectgarbage("count")` also returns nil under Nakama's sandbox, so it is
@@ -1021,24 +1031,35 @@ The non-obvious choices behind it:
   arithmetic, so it produces identical values on every Defold target. 32x32-bit
   multiplication is done by 16-bit splitting because the full product overflows
   a double's exact range.
+- **A stream label is a frozen salt, not a name.** `rng.stream(seed, label)`
+  derives the stream from the *string*, so renaming a label silently reshuffles
+  every map ever generated from every seed. The vocabulary rename walked straight
+  into this: `"regions"` -> `"provinces"` and `"capitals"` -> `"seats"` moved the
+  province carving and the seat placement on every seed, in a commit whose whole
+  claim was that it changed no behaviour. Both are pinned back to their original
+  strings with a note in `realm/generate.lua`, which is what let the rename be
+  *proved* behaviour-free: recomputing the digest with the old salt reproduces
+  the pre-rename value exactly. **Treat these strings like wire-format
+  constants.** The digest's own salt (`"realm:"`) was changed deliberately, and
+  it is the only reason the recorded constant moved.
 - **`rng.stream(seed, label)`** gives each subsystem its own derived stream, so
   adding or reordering a subsystem cannot shift the numbers every *other*
   subsystem sees.
 - **Never iterate a hash table with `pairs` where the order affects output.**
   Lua's `pairs` order is unspecified. Anywhere a set has to become a sequence
-  (`graph.region_adjacency`, `tools/dump.lua`), the keys are sorted first.
+  (`graph.province_adjacency`, `tools/dump.lua`), the keys are sorted first.
 - **Seeds must stay below 2^24.** `go.property` numbers are 32-bit floats, so
   larger integers do not round-trip — 20260823 comes back as 20260824.
-  `galaxy.script` floors and wraps the incoming property for this reason.
+  `realm.script` floors and wraps the incoming property for this reason.
 - **There is no transcendental arithmetic left, so nothing is quantised.** The
   spiral density field had to be snapped to a 16-bit ladder because it was built
   from `exp`/`log`/`atan2`, which — unlike `sqrt` — are not required to be
   correctly rounded, and glibc, macOS libm and Android's bionic can disagree in
-  the last bit. One flipped accept/reject cascaded into a different galaxy. The
+  the last bit. One flipped accept/reject cascaded into a different realm. The
   hex generator needs only value noise (an integer hash, a lerp and a quintic
   polynomial) and `sqrt`, so the whole class of hazard is gone with the sampler.
   **Do not reintroduce a transcendental without reintroducing the ladder with
-  it** — `galaxy/generate.lua` says so at the top.
+  it** — `realm/generate.lua` says so at the top.
 - **The digest agrees across runtimes, and that is checked rather than assumed.**
   Seed 424242 gives `2277256399` on standalone LuaJIT and in Nakama's gopher-lua;
   the server logs its digest per generated seed, so the two can be compared
@@ -1056,7 +1077,7 @@ The non-obvious choices behind it:
 Stock Defold throughout: the builtin `sprite.material`, no custom material, no
 shader, no vertex buffer, no per-sprite constant — so the whole world is **two
 draw calls, one per atlas, by construction rather than by care**. `main/tile.go`
-and `main/place.go` are one sprite apiece; `main/galaxy.script` spawns them
+and `main/place.go` are one sprite apiece; `main/realm.script` spawns them
 through two factories and calls `sprite.play_flipbook` with the image name
 `main/theme.lua` resolves.
 
@@ -1083,7 +1104,7 @@ The art's pixel dimensions are declared once, in `main/theme.lua`
 sprite scale is derived from them (`2 * hex_size / TILE_PX.w`), so a
 differently-sized pack fails the import rather than silently rescaling the map.
 
-**Open country gets no glyph.** `theme.emoji_for` returns nil for a waypoint. The
+**Open country gets no glyph.** `theme.emoji_for` returns nil for open country. The
 old map drew ✨ on every one only because a bare disc said nothing; the hex
 underneath now says it is forest, and drawing a sparkle on top would be saying it
 twice. That is also what keeps the glyph layer to ~95 sprites rather than one per
@@ -1108,7 +1129,7 @@ already carries a wobbly ink hex outline, and jittering the ground would
 desynchronise it from the baked glyph.
 
 **The sprites are built once per seed and then left alone.** `present()` in
-`main/galaxy.script` runs whenever a turn resolves, but only a *different seed*
+`main/realm.script` runs whenever a turn resolves, but only a *different seed*
 respawns anything — 571 sprites take about 4 ms, and doing that every ten-second
 poll would be the most expensive thing in the project. Two guards, because either
 alone would leave the trap set:
@@ -1119,7 +1140,7 @@ alone would leave the trap set:
   `load_game` skips the rebuild entirely when neither the seed nor the turn has
   changed.
 
-`main/render/galaxy.render_script` is down to one `sprite` predicate (the builtin
+`main/render/realm.render_script` is down to one `sprite` predicate (the builtin
 material's tag is `tile`) plus GUI. **It cannot become the builtin render script**,
 and that is the whole reason it still exists: it is the only writer of
 `store.screen` — the aspect-derived view space every GUI scene lays out in,
@@ -1135,9 +1156,9 @@ mottle mesh, its generator and the parallax that drifted it are gone.
 
 **Ownership, province borders, fog of war and drop shadows are not drawn yet.**
 That is a staging decision and it has a real cost: a player sees terrain but not
-who holds it, so the map cannot be played from — the system sheet's owner dot and
+who holds it, so the map cannot be played from — the tile sheet's owner dot and
 the commander strip are carrying that information alone. It is the first thing to
-restore. `knowledge()` and `repaint()` are kept in `main/galaxy.script` as no-ops
+restore. `knowledge()` and `repaint()` are kept in `main/realm.script` as no-ops
 precisely because they are where it comes back, and `store.playback_owners` still
 routes through `knowledge()` so a digest replay needs no new handshake.
 
@@ -1151,22 +1172,22 @@ a debt.
 touches, and naming them all turns it into a wall of words with the geography
 buried underneath. Labels are chosen by **relevance to the player**, rebuilt
 whenever what makes a tile relevant changes — the selection, the turn, the
-captains — and never per frame, because it walks every tile and sorts them.
+commanders — and never per frame, because it walks every tile and sorts them.
 
 | tier | what |
 |---|---|
 | selected | what the sheet is describing |
-| capital | anyone's |
-| captain | where one stands, and everywhere its route goes |
+| seat | anyone's |
+| commander | where one stands, and everywhere its route goes |
 | held | somewhere someone holds, including you |
-| frontier | unclaimed, but adjacent to something of yours — where a captain can be sent next |
+| frontier | unclaimed, but adjacent to something of yours — where a commander can be sent next |
 
 Everything else is never named. Zoom decides which tiers are admitted, pulled
 back rather than pushed out: at a distance you want to know whose ground you are
 looking at, not what every hill is called. The budget is a filter (22 at most)
 rather than the truncation of a much larger set.
 
-Labels and fleet markers are **GUI nodes**, pooled: a marker wants to stay a
+Labels and army markers are **GUI nodes**, pooled: a marker wants to stay a
 constant size at every zoom and carry a crisp glyph, which is exactly what the
 labels already do. Map labels are held inside the horizontal safe-area insets,
 and any name that will not fit on either side of its tile is simply not drawn —
@@ -1181,13 +1202,13 @@ device screenshot ever taken was at the fit zoom.
 
 They are on the *top* right, which costs some thumb reach, because the bottom
 right is not a stable place to put anything: the order bar spans the full width
-and grows upward as the plan does, and the system sheet comes up over it. A
+and grows upward as the plan does, and the tile sheet comes up over it. A
 control that moves when you stage an order is the problem SEND was kept still to
 avoid.
 
 **`ZOOM_OUT_LIMIT` was 2.0, and the hex map is the reason it is 1.15.** On the
 star map, seeing the whole thing at once was deliberately impossible: the field
-was mostly scenery, the widest useful view was a stretch of regions rather than
+was mostly scenery, the widest useful view was a stretch of provinces rather than
 the poster, and a higher floor also kept the smallest an emoji ever rendered
 legible. **None of those three still hold.** The ground is drawn art rather than a
 dot on a dark field, so it reads far smaller than a glyph did; the coastline is
@@ -1215,7 +1236,7 @@ Three details, each of which the first run of the buttons found:
   map's, and it *sets* `user_zoomed`, because the result is still a view the
   player chose.
 
-Opening a game focuses your capital once (`present()` posts `focus` for a new
+Opening a game focuses your seat once (`present()` posts `focus` for a new
 seed when the view knows one), since the opening frame cannot show everything.
 
 The camera owns the step size and the range; the buttons only say which
@@ -1266,14 +1287,14 @@ Two traps, both found by trying it:
 
 The store is cleared *after* the map has gone. Wiping it while the map was still
 running left it rendering a game it no longer had - a map with no owner,
-offering a new galaxy.
+offering a new realm.
 
 ### Client screens (Monarch) and UI (Druid)
 
 `main/main.collection` is a bootstrap holding `main/app.script` plus one Monarch
 screen proxy per screen. **The empire screen was removed** in the rebuild: with
 no production and no research there was nothing on it the map does not already
-show, and the captain strip is the roster. The proxies are **embedded instances** with their
+show, and the commander strip is the roster. The proxies are **embedded instances** with their
 `screen_id` set inline, matching Monarch's own example — a `screen_id` override
 placed in a separate `.go` file did not take effect, and every screen silently
 registered under Monarch's default id (`UNIQUE ID HERE`), so `monarch.show`
@@ -1282,7 +1303,7 @@ found nothing.
 | screen | collection | role |
 |---|---|---|
 | `lobby` | `main/screens/lobby.collection` | list/create/join/start games |
-| `map` | `main/screens/map.collection` | the galaxy view (was the old bootstrap) |
+| `map` | `main/screens/map.collection` | the realm view (was the old bootstrap) |
 | `report` | `main/screens/report.collection` | turn digest; a **popup** over the map |
 | `slot` | `main/screens/slot.collection` | one upgrade slot; a **popup** over the map |
 | `buy` | `main/screens/buy.collection` | what to put in an empty berth; a **popup** |
@@ -1325,7 +1346,7 @@ that lifecycle:
 |---|---|
 | `plan_signature()` | a stable string for the batch; compared against `sent_signature` to answer "is anything unsent?" — more reliable than a dirty flag every staging site has to remember to set |
 | `plan_sent(turn)` | the server took it exactly as it stands |
-| `plan_consumed(turn)` | the turn it was for resolved, so throw it away: re-sending would aim last turn's move at this turn's map, at a fleet that may not exist |
+| `plan_consumed(turn)` | the turn it was for resolved, so throw it away: re-sending would aim last turn's move at this turn's map, at an army that may not exist |
 
 `orders_turn` is what tells a live plan from a stale one, and the HUD adopts the
 coming turn on the frame anything is first staged — every frame, so there is no
@@ -1339,7 +1360,7 @@ bottom whatever the card does, so SEND never moves out from under a thumb — th
 list grows into the new space above it. Past `MANIFEST_LINES` the rest collapse
 into a count, because the bar still has to leave a map behind it. The lines are
 rebuilt only when a signature-and-state key changes; without that gate this
-formatted three strings and walked the fleet list every frame, and nothing else
+formatted three strings and walked the army list every frame, and nothing else
 in this project does per-frame CPU work.
 
 SEND has **four states, and only one of them is interactive** — because "I tapped
@@ -1359,9 +1380,9 @@ still animates a press is indistinguishable from a broken one:
 ### Showing a route, without a second pathfinder
 
 **The map draws the path a force will take, and the server computes it.** A
-committed route is already in the wire (`view.fleets[].route`, expanded by the
+committed route is already in the wire (`view.armies[].route`, expanded by the
 resolver). A *staged* order is not: the client only picks a destination, and the
-resolver expands it lane by lane when the turn runs.
+resolver expands it tile by tile when the turn runs.
 
 The obvious shortcut is to run `path.find` client-side for the preview - the
 generator is right there and the map is public. Don't. It is a second
@@ -1377,10 +1398,10 @@ Two things fell out of that which are worth keeping:
   `max_route_hops`; before it, such an order sat in the bar looking fine and was
   rejected at resolution.
 - The preview fields (`path`, `path_from`) are stripped from the batch before it
-  is sent. They exist to draw a line; the server expands the waypoints itself,
+  is sent. They exist to draw a line; the server expands the wilds itself,
   against the map as it will be then.
 
-Route segments are pooled GUI nodes, like the fleet markers and the labels, for
+Route segments are pooled GUI nodes, like the army markers and the labels, for
 the same reasons: constant thickness at every zoom, and no vertex buffer to
 rebuild when a plan changes.
 
@@ -1388,12 +1409,12 @@ rebuild when a plan changes.
 
 A row of faces under the overview bar, one per force in the field, each showing
 its strength. Tapping one selects that commander **and glides the camera to
-them** - to where they actually are, part way along a lane if they are under
+them** - to where they actually are, part way along a tile if they are under
 way, so the view lands on the marker rather than behind it.
 
 It is the roster and the way around the map at once. With a cap of four there
 are never enough commanders to need a list, and a player thinks in terms of
-"where is Kess", not "which system was that".
+"where is Kess", not "which tile was that".
 
 The camera **eases** rather than cuts (`focus` in `main/camera.script`): the map
 is the one thing the player holds a mental picture of, and a cut leaves them
@@ -1402,27 +1423,27 @@ glide - it is theirs again the moment they reach for it.
 
 The strip is rebuilt only when the roster changes, keyed on who is in the field,
 where, how strong and which is selected. It has its own Druid instance, because
-it is a region that gets rebuilt.
+it is a province that gets rebuilt.
 
 ### What moves, and what must not
 
 Two things on the map animate, and the line between them is deliberate.
 
 - **A force under way pulses**; a parked one is still. Position only changes when
-  a turn resolves, so without this a fleet crossing a lane looks exactly like one
+  a turn resolves, so without this an army crossing a tile looks exactly like one
   sitting on a world.
 - **A committed route flows** - the nodes slide along their legs toward the
   destination, which is pinned and larger. A staged route does not: it is a plan
   in the bar, not a force in motion.
 
-**Animating the actual position would be a lie.** A fleet's progress advances one
+**Animating the actual position would be a lie.** An army's progress advances one
 turn's worth at a time, and where it can be intercepted is decided at the turn
 boundary. A marker gliding smoothly between two turns would be showing the player
 somewhere the simulation says it never was.
 
 ### Keeping up with the turn
 
-**The map polls every ten seconds** (`POLL_SECONDS` in `main/galaxy.script`)
+**The map polls every ten seconds** (`POLL_SECONDS` in `main/realm.script`)
 while a game is open. Turns resolve on a schedule measured in hours, so this only
 has to be brisk enough that a player watching the screen sees the turn land — and
 the request is also what drives the server's lazy resolution, so a polling client
@@ -1474,7 +1495,7 @@ somebody else's is a line in a list, because you were not there to count their
 exchanges.
 
 **It is not a reveal.** The sheet's two comparisons said the fight was winnable
-before the order was given, and a captain that cannot beat both halves does not
+before the order was given, and a commander that cannot beat both halves does not
 attack - so the screen answers "what did it cost", which in an asynchronous game
 is the part that decides the next turn.
 
@@ -1502,15 +1523,15 @@ lands on the recorded hold, that a hold only ever thins, and that what went in
 equals what was lost plus what came out.
 
 **The `hold` on a `battle` event is a snapshot, taken at the moment.** It was
-`captain.units` - the live table - so a captain that marched on and loaded at a
-colony before the turn was serialised left the event reporting the hold it ended
+`commander.units` - the live table - so a commander that marched on and loaded at a
+city before the turn was serialised left the event reporting the hold it ended
 the *turn* with, and the screen unwound its exchanges from the wrong end.
 
 ### Watching the turn, not reading it
 
 **The digest plays back on the map.** A list of forty turns is a changelog; what
 a player wants after two days away is *where the war moved*, and that is a shape
-on a map. Opening a digest replays it: markers walk the lanes they walked,
+on a map. Opening a digest replays it: markers walk the tiles they walked,
 territory recolours as it changed hands, and a transport bar sits where the
 order bar does — play, speed, a scrub track with a tick on every turn that had a
 fight, and LOG to read it as a list instead.
@@ -1518,36 +1539,36 @@ fight, and LOG to read it as a list instead.
 **The past is rebuilt, not stored.** The client has never been told who held
 what forty turns ago and the server does not keep it — state is one current
 record, deliberately. It does not have to: **the event log is reversible.**
-`claimed` says a system was unowned before it and `battle` names who it was
+`claimed` says a tile was unowned before it and `battle` names who it was
 taken from, so winding today's ownership backwards through the digest gives the
 ownership at any earlier turn *exactly*. `main/playback.lua` does that and
 nothing else; `tools/test_playback.lua` plays a real game, snapshots who owned
 what at the start of every turn, and checks the reconstruction against those
-snapshots system by system.
+snapshots tile by tile.
 
 Three things this needed from elsewhere, and would silently be wrong without:
 
-- **`captain_moved` carries the path actually walked.** A captain crossing its
+- **`commander_moved` carries the path actually walked.** A commander crossing its
   own territory changed nothing and so emitted nothing at all, which meant the
   one thing worth watching was the one thing the log did not contain.
 - **`contact_moved` is what a rival's march looked like from here** — only the
-  part inside your detection range, so a fleet crosses your border, is watched
-  for a lane or two, and is lost again in the dark.
-- **`knowledge()` in `main/galaxy.script` is the single place ownership colour
+  part inside your detection range, so an army crosses your border, is watched
+  for a tile or two, and is lost again in the dark.
+- **`knowledge()` in `main/realm.script` is the single place ownership colour
   is decided**, so overriding it with `store.playback_owners` moves the wash,
-  the borders and the star tints together. Only those two layers are rebuilt per
-  step (`repaint`); the nebula, dust, lanes and glow do not depend on ownership,
+  the borders and the tile tints together. Only those two layers are rebuilt per
+  step (`repaint`); the nebula, dust, tiles and glow do not depend on ownership,
   and rebuilding six layers to change two would make the transport a slideshow.
 
 **Fog is not rewound with it.** What a player could see forty turns ago is not
 in the digest, and dimming half the map to guess at it would hide the very
 movement the playback exists to show.
 
-**A replay is the one place a marker may animate between systems.** The live map
-must not: a fleet gliding along a lane would be claiming a position the
+**A replay is the one place a marker may animate between tiles.** The live map
+must not: an army gliding along a tile would be claiming a position the
 simulation says it never had, and where it can be intercepted is decided at the
-turn boundary. In a replay the turn is over, the captain really did cross those
-lanes in that order, and the only thing invented is how the seconds were spread
+turn boundary. In a replay the turn is over, the commander really did cross those
+tiles in that order, and the only thing invented is how the seconds were spread
 across them.
 
 **It frames what it is showing.** The map opens at the fit zoom where a marker is
@@ -1559,7 +1580,7 @@ corner ends every digest somewhere they did not choose to be.
 **A digest with nothing in it goes back to being a list.** Forty turns of
 "nothing moved" is the changelog this replaced, only slower.
 
-**The transport owns its own Druid region**, so a relayout — a window change, or
+**The transport owns its own Druid province**, so a relayout — a window change, or
 the safe-area insets arriving a couple of hundred milliseconds in — does not
 rebuild it and it would otherwise stay positioned against the old insets.
 `build_chrome` clears `pb_layout` for that reason. Its control row also leaves
@@ -1612,7 +1633,7 @@ war moved, and that is a shape. `title_card` in `main/hud.gui_script` holds
 "SINCE YOU WERE AWAY" and the turn range over the map for a second and a half,
 then `playback_start` runs. Three details it needs:
 
-- **A scrim.** Region names are set large and pale and land exactly where a
+- **A scrim.** Province names are set large and pale and land exactly where a
   centred caption does; without something to sit on the two read as one
   sentence. Each node fades from the alpha it was given, or the scrim brightens
   to full on its way out.
@@ -1625,10 +1646,10 @@ then `playback_start` runs. Three details it needs:
 **The chrome gets out of the way of the thing it describes.** Three rules, each
 of which was learned by watching the interface fail at them:
 
-- **A selected system must not sit under its own card.** The sheet covers the
-  bottom half, so `focus_pending` in the HUD lifts the star into the visible
+- **A selected tile must not sit under its own card.** The sheet covers the
+  bottom half, so `focus_pending` in the HUD lifts the tile into the visible
   band after the sheet is built - deferred, because how much map is left depends
-  on how tall the sheet turned out. It intervenes *only* when the star would
+  on how tall the sheet turned out. It intervenes *only* when the tile would
   otherwise be hidden; moving the map on every selection is its own kind of
   clunky.
 - **Aiming hands the screen to the map.** `build_sheet` returns nothing while
@@ -1637,11 +1658,11 @@ of which was learned by watching the interface fail at them:
   covering half the destinations.
 - **The camera clamps against the visible band, not the window.**
   `store.hud_band` is what the map can actually be seen through. Without it the
-  galaxy fits the *window* at fit zoom, the camera is pinned by
-  `clamp_position`, and a system under the sheet can never be lifted out.
+  realm fits the *window* at fit zoom, the camera is pinned by
+  `clamp_position`, and a tile under the sheet can never be lifted out.
 
-**The system sheet is a rack of slots, not a document.** It was read top to
-bottom - a name, a region, a captain, a sentence of capture arithmetic, a
+**The tile sheet is a rack of slots, not a document.** It was read top to
+bottom - a name, a province, a commander, a sentence of capture arithmetic, a
 shipyard of labelled rows with `-  n  +` steppers, a button through to a second
 screen, and four upgrade boxes at the very bottom, past 900 units of card with
 no scroll behind it. That is a page, and a page on the bottom half of a map is a
@@ -1649,50 +1670,50 @@ page nobody reads. Everything that was a *sentence* has gone.
 
 | in order | and why |
 |---|---|
-| a colour dot, the name, CAPITAL, and `X` | whose it is, whether it decides the game, and the way out |
+| a colour dot, the name, SEAT, and `X` | whose it is, whether it decides the game, and the way out |
 | UPGRADES | four boxes: what this world can be made into |
 | SHIPYARD | `garrison_cap` circles: what is standing here |
-| CAPTAIN | `max_units` circles: what leaves with them |
+| COMMANDER | `max_units` circles: what leaves with them |
 
 **The order is the order the decisions happen in**, which is why upgrades moved
-from last to first: dwellings decide what there is to buy at all, so a colony
+from last to first: dwellings decide what there is to buy at all, so a city
 with none now has an empty shipyard for a reason the card can see. You buy into
 the garrison, so that comes next; you load out of the garrison, so the hold sits
 directly under what fills it.
 
 - **Whose it is, before what it is.** The dot is the same mark the map draws
-  round the system, so the two are read the same way and the card needs no
-  sentence for the common case. The region line and "Held by X" went with the
+  round the tile, so the two are read the same way and the card needs no
+  sentence for the common case. The province line and "Held by X" went with the
   prose: colour already says whose, and what kind of place it is is told by what
-  the card offers underneath - a shipyard is a colony.
-- **"CAPITAL", not "Your capital".** Whose it is, the dot has already said.
-- **A system that is not yours is a dot, a name and an `X`.** Nothing else. That
-  is why `SHEET_MIN` came down from 200 to 120: at 200 a bare system sat in an
+  the card offers underneath - a shipyard is a city.
+- **"SEAT", not "Your seat".** Whose it is, the dot has already said.
+- **A tile that is not yours is a dot, a name and an `X`.** Nothing else. That
+  is why `SHEET_MIN` came down from 200 to 120: at 200 a bare tile sat in an
   empty box that read as broken rather than as brief.
 - **`X` is the first dismiss gesture the card has ever had.** The sheet
   publishes its own rectangle into `store.hud_zones` and `gestures.lua` latches
   `blocked` on any touch starting inside one, so a tap on the card never reaches
-  `pick_star` and could not deselect. The only way out was a tap on bare map.
+  `pick_tile` and could not deselect. The only way out was a tap on bare map.
 - **`SHEET_MAX` has stopped binding.** Three rows of slots is around 530 whatever
   is built, against a 960 cap. It is kept because the clamp costs nothing and
   the camera reads the height either way (`store.hud_band`, which is what stops
-  a tall card trapping its own star).
+  a tall card trapping its own tile).
 - **The unit names say what the unit is for.** They were Line, Lance and Siege,
   which mean something only to somebody who already knows the rule. Escort,
   Interceptor and Bombard say which one to buy for what. A hold in storage is
   keyed by id, so `units.normalise` carries the old keys across - without that
-  every captain in flight comes back empty, and nobody notices until their army
+  every commander in flight comes back empty, and nobody notices until their army
   has quietly evaporated.
 
 **What this gives up is the two comparisons** - "you need 16 against its
 defences, you bring only 6" - which were the one piece of arithmetic a player
-does before committing a captain to a turn that resolves twelve hours later.
+does before committing a commander to a turn that resolves twelve hours later.
 They are shown nowhere else in the client now. If they come back, the place for
 them is the aim flow in the order bar, where that decision is actually being
 made, rather than on a card about somewhere you are standing. `draw_halves` and
 `best_powers` went with them.
 
-#### Two racks, and the whole colony loop between them
+#### Two racks, and the whole city loop between them
 
 A slot is 94 design units - 54 dp, well over the 48 dp floor the rest of the kit
 holds to, and it matters more here than anywhere else in the interface because
@@ -1704,16 +1725,16 @@ nine gets two rows rather than nine smaller circles.
 ring on anything that is not there yet - the same vocabulary as a staged order
 in the bar. Nothing on the card is a delta the player has to add up.
 
-**Neither rack is colony-only.** `resolve.transfers` checks that a captain is
-standing on ground its owner holds and nothing else, so an outpost with units
+**Neither rack is city-only.** `resolve.transfers` checks that a commander is
+standing on ground its owner holds and nothing else, so a holding with units
 left on it is a real place with a real garrison and the card says so. Only
-*buying* needs dwellings. The captain rack is drawn only when one of yours is
-actually standing here - a captain under way has no rack, because there is
+*buying* needs dwellings. The commander rack is drawn only when one of yours is
+actually standing here - a commander under way has no rack, because there is
 nothing to trade with.
 
-**The captain's face sits on the caption line, not in the leading slot.** The
+**The commander's face sits on the caption line, not in the leading slot.** The
 mock-up put it there and it only works while capacity is exactly six: it is
-`captain_units + level - 1`, so a veteran needs nine or ten cells and a face in
+`commander_units + level - 1`, so a veteran needs nine or ten cells and a face in
 the grid spills the rack onto a second row for nothing.
 
 **A tap is the fast path, a drag is the deliberate one.**
@@ -1726,9 +1747,9 @@ the grid spills the rack onto a second row for nothing.
 
 Filling a hold is six taps, which is what stands in for the transfer screen's
 TAKE ALL. Both directions go through `stage_transfer`, which takes the hold the
-captain should **end the turn with** rather than a delta - so a move reads
+commander should **end the turn with** rather than a delta - so a move reads
 whatever is already staged, changes it by one, and states the whole thing again.
-An order that asks for the hold the captain already has is dropped rather than
+An order that asks for the hold the commander already has is dropped rather than
 sent, so tapping a unit across and back leaves the plan exactly as it was.
 
 **The gesture is hand-rolled, not a Druid drag component**, for the reason
@@ -1754,10 +1775,10 @@ could show it. A row is closed for one of three reasons and says which, because
 a disabled control that does not explain itself is indistinguishable from a
 broken one.
 
-Buying fills the garrison, so it needs no captain present and spends no order —
+Buying fills the garrison, so it needs no commander present and spends no order —
 the bar reads "0 of 3 orders used" while a purchase is staged, which is the whole
 point of it being free. And because buys settle before transfers
-(`galaxy/sim/resolve.lua`), a unit bought this turn can be dragged aboard the
+(`realm/sim/resolve.lua`), a unit bought this turn can be dragged aboard the
 same turn: the rack counts the staged basket as standing here.
 
 **The transfer screen is gone.** Its two columns of steppers were the one place
@@ -1768,7 +1789,7 @@ them.
 
 **Upgrades are four boxes, and each one opens a popup.** They were four rows with
 a name, a line of what they do and a price - a catalogue on the bottom of the
-longest card in the game, which never said the one fact that matters: a colony
+longest card in the game, which never said the one fact that matters: a city
 gets *four* of these, ever. Four boxes say that without a sentence.
 
 | box | says | opens |
@@ -1791,53 +1812,53 @@ their popup says so; only the Admiralty says "tap to use". Labelling all five th
 same and then opening a card that says there is nothing to do is how an
 interface loses the word.
 
-**Ordering a captain starts in one place: the round face in the strip.** Tapping
+**Ordering a commander starts in one place: the round face in the strip.** Tapping
 it aims, tapping the same face again cancels - aiming takes the whole map, and a
 mode you can only leave by finishing it or by hunting for CANCEL is a mode that
-catches people. The sheet's captain row is a statement, not a second way in;
-when it was one, tapping a colony had to hand the map over instead of opening
-its card, which is why **tapping a system now always opens the sheet unless a
+catches people. The sheet's commander row is a statement, not a second way in;
+when it was one, tapping a city had to hand the map over instead of opening
+its card, which is why **tapping a tile now always opens the sheet unless a
 move is being aimed**.
 
-**The map has three interactive layers.** The *system sheet* is rebuilt whenever
-the selection changes, because its content varies enormously — a waypoint you
-have never visited is three lines, a developed colony is garrison, population,
-defence, three installations and a list of fleets. *Fleet markers* are GUI nodes
+**The map has three interactive layers.** The *tile sheet* is rebuilt whenever
+the selection changes, because its content varies enormously — open country you
+have never visited is three lines, a developed city is garrison, population,
+defence, three installations and a list of armies. *Army markers* are GUI nodes
 rather than world geometry: a marker wants to stay a constant size at every zoom
 and carry a crisp glyph, which is exactly what the labels already do, and it
-avoids rebuilding a vertex buffer whenever a fleet moves. `store.aiming` is the
-one piece of interaction state — set by SEND or by tapping a fleet, consumed by
-the next tap on a system.
+avoids rebuilding a vertex buffer whenever an army moves. `store.aiming` is the
+one piece of interaction state — set by SEND or by tapping an army, consumed by
+the next tap on a tile.
 
-**A name is not scenery.** The map is deliberately two hundred stars most of
+**A name is not scenery.** The map is deliberately two hundred tiles most of
 which a player never touches, and naming them all turned it into a wall of words
-with the lane graph buried underneath. Labels are chosen by **relevance to the
-player**, rebuilt whenever what makes a system relevant changes - the selection,
-the turn, the captains - and never per frame, because it walks every star and
+with the tile graph buried underneath. Labels are chosen by **relevance to the
+player**, rebuilt whenever what makes a tile relevant changes - the selection,
+the turn, the commanders - and never per frame, because it walks every tile and
 sorts them.
 
 | tier | what |
 |---|---|
 | selected | what the sheet is describing |
-| capital | anyone's |
-| captain | where one stands, and everywhere its route goes |
+| seat | anyone's |
+| commander | where one stands, and everywhere its route goes |
 | held | somewhere someone holds, including you |
-| frontier | unclaimed, but adjacent to something of yours - where a captain can be sent next |
+| frontier | unclaimed, but adjacent to something of yours - where a commander can be sent next |
 
 Everything else is never named. Zoom decides which tiers are admitted, pulled
 back rather than pushed out: at a distance you want to know whose space you are
 looking at, not what every rock is called.
 
-The ranking this replaced was static - colony beats outpost beats waypoint, then
-by how brightly the star was drawn, computed once per galaxy. It had no idea
-which systems were yours or where your captain stood, so it faithfully named the
-prettiest forty stars and none of the six that mattered. **Colour carries
+The ranking this replaced was static - city beats holding beats wilds, then
+by how brightly the tile was drawn, computed once per realm. It had no idea
+which tiles were yours or where your commander stood, so it faithfully named the
+prettiest forty tiles and none of the six that mattered. **Colour carries
 ownership** now, so whose space it is reads without being read, and the label
 budget is a filter (22 at most) rather than the truncation of a much larger set.
 
-**Glyph size still ranks what a system is for, but the emoji itself is the
-cue now.** `star_half` in `main/galaxy.script` scales a colony at 1.45, an
-outpost at 1.15, a waypoint at 0.70 and a capital at 1.9, with star-class
+**Glyph size still ranks what a tile is for, but the emoji itself is the
+cue now.** `tile_half` in `main/realm.script` scales a city at 1.45, an
+holding at 1.15, open country at 0.70 and a seat at 1.9, with tile-class
 variance deliberately damped (`0.85 + 0.3r`) — a glyph squeezed small stops
 being readable long before a disc does. Note the sizing helpers have to be
 declared *above* the mesh builders — a Lua local is not visible to a function
@@ -1849,13 +1870,13 @@ unusable without it.** Druid manages input focus for you: an instance posts
 `acquire_input_focus` when it gains an input component and, in
 `druid_instance:final()`, posts **`release_input_focus`** — and that message goes
 to `.`, the whole script, not to that instance. This project runs *several*
-Druid instances in one gui script (see the region rule below), so finaling any
+Druid instances in one gui script (see the province rule below), so finaling any
 one of them made the entire scene deaf, and the surviving instance never
 recovered: its own `input_inited` flag was still true, so it never re-posted
 `acquire_input_focus`.
 
 The symptom is savage to read, because nothing errors and the *first* few
-interactions work. Staging an order rebuilt the system sheet, which finaled the
+interactions work. Staging an order rebuilt the tile sheet, which finaled the
 sheet's instance — and from that moment SEND, EMPIRE and the turn card were all
 dead, on device and desktop alike, while the map still panned. Every gui script
 here already acquires its own focus in `init`, so Druid's automation was pure
@@ -1874,7 +1895,7 @@ liability. Turning it off is the supported switch, not a workaround.
   buttons near the top silently did nothing, in every coordinate space. Since
   every node here is created in code with a known position, size and pivot, an
   axis-aligned test against those is exact. Call it before `druid.new`.
-- **A region that gets rebuilt needs its own Druid instance**, not per-component
+- **A province that gets rebuilt needs its own Druid instance**, not per-component
   bookkeeping. Helpers register components the caller never sees — `ui.tabs`
   makes one button per tab, `ui.scroll` makes a scroll — so a screen that
   carefully removed *its* buttons still left those behind, pointing at nodes it
@@ -1892,7 +1913,7 @@ liability. Turning it off is the supported switch, not a workaround.
         get_parent → get_closest_stencil_node → button.on_late_init → late_init
 
   That makes it a **race**, not a mistake in the teardown order — it only throws
-  when a region is rebuilt within a frame of a button being made in it: a fast
+  when a province is rebuilt within a frame of a button being made in it: a fast
   second tap, a relayout landing on the frame a card was built, a playback
   stepping at 4x. Which is why it was intermittent, and why it appeared to come
   from screens with no connection to whatever had just been touched.
@@ -1917,7 +1938,7 @@ liability. Turning it off is the supported switch, not a workaround.
   The lobby's game list did exactly this, and the race window is the gap between
   a row button being created and Druid's first update over it — which an async
   `game.list` response lands in whenever two arrive close together. The empire screen's tab body and
-  the HUD's system sheet each own one.
+  the HUD's tile sheet each own one.
 - **A Druid click callback carries no touch position.** It is
   `on_click:trigger(context, params, button)` — the third argument is the button
   component, so reading `event.x` off it gets nil and the handler quietly does
@@ -1975,7 +1996,7 @@ targets 48 dp (88 units).
 
 Fonts are **Space Grotesk** (SIL Open Font License 1.1,
 `main/fonts/SpaceGrotesk-LICENSE.txt`). `ui.font` / `ui_bold.font` have no
-outline; `map.font` keeps one, because star names sit over a nebula and need it.
+outline; `map.font` keeps one, because tile names sit over a nebula and need it.
 The engine ships only a monospace face, so this is vendored.
 
 google/fonts carries Space Grotesk **only as a variable font**, and Defold's font
@@ -2093,7 +2114,7 @@ inset is `top 66` view units and zero elsewhere — the punch-hole camera, with 
 bottom inset because `android.immersive_mode` hides the navigation bar.
 
 Map labels are held inside the horizontal insets too, and any name that will not
-fit on either side of its star is simply not drawn: a name sliced by the screen
+fit on either side of its tile is simply not drawn: a name sliced by the screen
 edge is worse than no name.
 
 ### Input and gestures
@@ -2115,7 +2136,7 @@ is the only way to verify pinch at all.
 
 **Input ownership is decided by geometry, not by focus order.** The HUD
 publishes the rectangles it occupies into `store.hud_zones` — the overview bar,
-the order controls, and the selected-system card while it is up — and:
+the order controls, and the selected-tile card while it is up — and:
 
 - the recogniser ignores any gesture that *starts* inside one, and reports
   `blocked` so the camera can decline the input as well rather than consuming a
@@ -2140,7 +2161,7 @@ if action_id ~= act then return end
 called the `TOUCH_MULTI` trigger `"multitouch"`, so on a device Druid received
 *no* drag events at all — and the failure was invisible, because buttons take a
 different path (`pressed`/`released` on the synthesised `"touch"` action) and
-kept working. Every scroll region in the game was inert on hardware until the
+kept working. Every scroll province in the game was inert on hardware until the
 binding was renamed. `main/camera.script` is unaffected either way: it keys on
 `action.touch` being present rather than on the action id.
 
@@ -2148,7 +2169,7 @@ binding was renamed. `main/camera.script` is unaffected either way: it keys on
 runs the popup's Druid instance and then returns `true` unconditionally, so the
 map and its camera get nothing while the popup is up. The obvious alternative —
 a Druid `blocker` covering the screen — also sits in front of the popup's own
-scroll regions and eats their drags.
+scroll provinces and eats their drags.
 
 ### One coordinate space
 
@@ -2163,7 +2184,7 @@ source of two separate bugs before it was unified:
 - The render script therefore builds the world projection itself from
   `store.camera` rather than using a camera component, so the visible world width
   is exactly `design_width / zoom`. That relationship is what lets the HUD place a
-  label with `(world_x - cam_x) * zoom + width/2` and have it land on the star.
+  label with `(world_x - cam_x) * zoom + width/2` and have it land on the tile.
 
 `main/store.lua` is the shared state between camera, map and HUD — a plain module,
 which works because `script.shared_state` is on (see below). The render script
@@ -2186,7 +2207,7 @@ which is a different space again.
   resolution and, per above, the only coordinate space in the project.
 - **`display.high_dpi = 1`** — the backbuffer is larger than the design
   resolution. Never assume window pixels equal design units.
-- **`bootstrap.render = /main/render/galaxy.render`** — a custom pipeline. Not for
+- **`bootstrap.render = /main/render/realm.render`** — a custom pipeline. Not for
   blend modes any more (there is one sprite predicate); it is the only writer of
   `store.screen` and it builds the world projection from `store.camera`. See
   Rendering above.
@@ -2196,20 +2217,20 @@ which is a different space again.
   rather than a slowdown.
 - **`android.immersive_mode = 1`** — hides the Android status and navigation
   bars, which otherwise sit on top of the HUD.
-- **`android.package = com.dg.galaxy`** — Defold's default is the placeholder
+- **`android.package = com.dg.realm`** — Defold's default is the placeholder
   `com.example.todo`, which collides with every project that never changed it.
 - **`safearea.resize_game_view = 0`** — custom mode; see Safe area above. The
   default shrinks the view and letterboxes the remainder.
 - **`graphics.max_font_batches = 512`** (default 128) — the interface interleaves
   text and box nodes heavily, and every text node between two boxes is its own
   batch. Past the limit the font renderer silently *stops drawing*: the
-  selected-system card came up completely blank with nothing in the log but a
+  selected-tile card came up completely blank with nothing in the log but a
   `Fontrenderer: Render object count reached limit` warning. `max_draw_calls` is
   raised alongside it for the same reason.
 - **`druid.no_auto_input = 1`** — stops Druid managing input focus. Its
   `final()` posts `release_input_focus` for the whole script, which deafens a
   scene that runs more than one Druid instance. See Druid above.
-- **`native_extension.app_manifest = /galaxy.appmanifest`** — excludes physics
+- **`native_extension.app_manifest = /realm.appmanifest`** — excludes physics
   from the built engine. Nothing has ever used it, and dropping Box2D, Bullet and
   the `[physics]` settings took the stripped release `libgalaxy.so` from 4.1 MB
   to 3.6 MB (APK 6.3 → 5.8 MB). The stub `physics_null` has to be linked in its
@@ -2232,7 +2253,7 @@ adb forward tcp:8001 tcp:8001          # device; desktop uses the editor's port
 python3 tools/drive.py state           # transform, selection, staged orders
 python3 tools/drive.py find EMPIRE     # visible text and where it is
 python3 tools/drive.py click RESUME    # click by meaning, not by pixel
-python3 tools/drive.py star "Rigel VI" # where a star is, in device pixels
+python3 tools/drive.py tile "Rigel VI" # where a tile is, in device pixels
 python3 tools/drive.py tapstar "Rigel VI"
 ```
 
@@ -2251,15 +2272,15 @@ and this project renders through a GUI projection the render script builds
 itself - the identical reason `ui.install_druid_picking` had to replace
 `gui.pick_node`. So the game publishes the transform (view size, framebuffer
 size, camera, zoom) as bridge state, and the client converts world to device
-exactly as the map does. Star positions are regenerated from the seed under
-luajit rather than transmitted, since the galaxy is a pure function of it.
+exactly as the map does. Tile positions are regenerated from the seed under
+luajit rather than transmitted, since the realm is a pure function of it.
 
 Working this out by hand first is what makes the point: two reference taps gave a
 camera of `(-191.75, 243.29)` at zoom `0.37181` against the true
-`(-184.38, 256.88)` at `0.37131`, and every star tap missed.
+`(-184.38, 256.88)` at `0.37131`, and every tile tap missed.
 
-**Known limitation:** the element query returns the star labels and the top bar,
-but not the system sheet's own buttons. `state` and `tapstar` are unaffected -
+**Known limitation:** the element query returns the tile labels and the top bar,
+but not the tile sheet's own buttons. `state` and `tapstar` are unaffected -
 they do not depend on it - and `click` works for anything it can see.
 
 ## File formats
@@ -2278,36 +2299,36 @@ will bite whoever touches them.
 
 - **The map does not show who owns what.** Ownership, province borders and fog of
   war were all deferred out of the substrate swap, so a player sees terrain and
-  nothing else — the system sheet's owner dot and the commander strip carry it
+  nothing else — the tile sheet's owner dot and the commander strip carry it
   alone, which means the map cannot be played *from*. This is the first thing to
   restore, and it needs no shader: ownership is a hex-outline sprite pre-tinted
   per player (ten images in the tile atlas, picked by name), fog is two
   parchment-coloured scrims. `knowledge()` and `repaint()` in
-  `main/galaxy.script` are kept as no-ops because that is where it goes.
+  `main/realm.script` are kept as no-ops because that is where it goes.
 - **Nothing is drawn for a drop shadow**, so the glyphs sit flat on the hexes
   rather than reading as stickers on paper. Same fix shape as above.
 - **The code has not been renamed.** The fiction is a medieval realm and the
-  modules still say `galaxy`, `stars`, `lanes`, `captain`, `region`. It is ~2,200
+  modules still say `realm`, `tiles`, `tiles`, `commander`, `province`. It is ~2,200
   identifier occurrences across 58 files, purely mechanical, and it is held back
   as a commit of its own so the full suite plus an unchanged digest is the proof.
-  Read `stars` as tiles.
-- **`STAR_LABEL_MIN_ZOOM` and the lowest `LABEL_TIER_ZOOM` entries are stale.**
+  Read `tiles` as tiles.
+- **`TILE_LABEL_MIN_ZOOM` and the lowest `LABEL_TIER_ZOOM` entries are stale.**
   They were anchored to the old fit zoom and the floor has moved twice since, so
   they sit below anything reachable — always-on rather than wrong, but they no
   longer describe a range.
 - **Two textures, 16.8 MB.** The tile atlas is 2048x1024 with mips (11.2 MB) and
-  the emoji atlas 1024x1024 (5.6 MB). Fine today. `galaxy.texture_profiles` is
+  the emoji atlas 1024x1024 (5.6 MB). Fine today. `realm.texture_profiles` is
   where device compression or a `max_texture_size` cap would go if it ever
   matters, and shipping fewer biomes is the other lever.
 - **The continent's coast is partly the growable disc.** About 8 tiles a map sit
   on the boundary of the disc the land is grown inside — a suspiciously circular
   arc in an otherwise ragged coast. A looser disc fixes it and costs sprites,
-  monotonically; `galaxy/config.lua` carries the measured trade. At the shipped
+  monotonically; `realm/config.lua` carries the measured trade. At the shipped
   `field_fill` it is 7.8 tiles for 438 sprites.
 - **Terrain does not cost movement.** On a lattice, drawn mountains would make a
   varied step cost *legible* for the first time — the one thing the star map's
-  invisible lane lengths could never be. It is deliberately not taken, because it
-  would reprice `captain_steps`, `steps_at_rank` and every pacing number the
+  invisible tile lengths could never be. It is deliberately not taken, because it
+  would reprice `commander_steps`, `steps_at_rank` and every pacing number the
   sweep established.
 - **Water is scenery with no rules attached.** It blocks movement only because it
   is not in the graph. There is no naval movement, no crossing, no ferry — an
@@ -2329,7 +2350,7 @@ will bite whoever touches them.
 - **The debug strip in the lobby is a back door, not a feature.** `main/dev.lua`
   gates it on `sys.get_engine_info().is_debug`, so it costs a release build
   nothing — but it should come out in one piece when it goes.
-- **Nothing is ever lost at the border.** A captain that cannot beat both halves
+- **Nothing is ever lost at the border.** A commander that cannot beat both halves
   does not attack, so there are no failed assaults — only battles that were not
   started. That keeps the sheet's arithmetic honest but means the map has no
   gambles in it at all.
@@ -2337,13 +2358,13 @@ will bite whoever touches them.
   obvious thing for a fifth building to buy, and the obvious thing to scale with
   empire size; neither exists.
 - **The two comparisons are shown nowhere in the client.** "To take it, you need
-  16 against its defences — you bring only 6" was on the system sheet and went
+  16 against its defences — you bring only 6" was on the tile sheet and went
   with the rest of its prose. That arithmetic is the whole of combat and the
-  thing a player does before committing a captain to a turn that resolves twelve
+  thing a player does before committing a commander to a turn that resolves twelve
   hours later, so this is a real hole. The place for it is the aim flow in the
   order bar, where the decision is being made.
-- **A rival captain standing on a tile is no longer named on its card.**
-- **Only one captain's rack is shown when two are standing on the same tile.**
+- **A rival commander standing on a tile is no longer named on its card.**
+- **Only one commander's rack is shown when two are standing on the same tile.**
 - **Half of each race is still inert.** `modifiers.of` folds speed, hops, vision,
   attack and defence; growth, industry, research, capacity and the cost keys are
   read by nothing until production returns.
@@ -2363,7 +2384,7 @@ will bite whoever touches them.
 - **The hex map itself is unverified on a device.** It has been driven end to end
   on desktop through the real Nakama — create, start, generate on the server,
   render, resolve a turn, zoom — but `adb` and a real screen have not seen it.
-- **`drive.py` cannot see the system sheet's own buttons.** The bridge's element
+- **`drive.py` cannot see the tile sheet's own buttons.** The bridge's element
   query returns labels, the top bar and a popup's own text, but not the sheet or
   the order bar, so those still have to be tapped by position.
 - **The bridge redirects, and the redirect downgrades POST to GET.** On desktop
@@ -2372,11 +2393,11 @@ will bite whoever touches them.
   method_not_allowed` while `elements` and `screenshot` work fine. Pass `--port`
   the *redirect target* (`lsof -nP -iTCP -sTCP:LISTEN | grep dmengine` lists
   both). In practice: `elements`/`state` on one port, `click`/`tap` on the other.
-- **A route can only be set one waypoint at a time from the map.**
+- **A route can only be set one wilds at a time from the map.**
 - **A real two-finger pinch has still never been performed.** The zoom buttons
   cover the range, so this is no longer load-bearing, but `gestures.lua`'s pinch
   path is verified only by `tools/test_gestures.lua`.
-- **A fleet marker's name can land on top of a tile label.** The label pass
+- **An army marker's name can land on top of a tile label.** The label pass
   rejects label-on-label overlaps, but markers are a separate pool.
 - **A route longer than `ROUTE_POOL` segments draws only its first 64 legs.**
 - The safearea extension logs `ERROR:ENGINE: Could not find '@render' socket`

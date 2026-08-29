@@ -47,16 +47,16 @@ print("plan: counting")
 reset()
 check("empty plan counts zero", store.plan_count() == 0)
 check("empty plan has nothing unsent", not unsent())
-store.orders[1] = { kind = "move", captain = 4, route = { 2 } }
+store.orders[1] = { kind = "move", commander = 4, route = { 2 } }
 check("one order counts one", store.plan_count() == 1)
 
 print("plan: unsent detection")
 reset()
-store.orders[1] = { kind = "move", captain = 7, route = { 3 } }
+store.orders[1] = { kind = "move", commander = 7, route = { 3 } }
 check("a fresh order is unsent", unsent())
 store.plan_sent(50)
 check("sending clears it", not unsent())
-store.orders[2] = { kind = "move", captain = 1, route = { 9 } }
+store.orders[2] = { kind = "move", commander = 1, route = { 9 } }
 check("adding one makes it unsent again", unsent())
 store.plan_sent(50)
 check("sending again clears it", not unsent())
@@ -65,7 +65,7 @@ check("revising an order in place is unsent", unsent())
 
 print("plan: a send does not wipe what it sent")
 reset()
-store.orders[1] = { kind = "move", captain = 3, route = { 9 } }
+store.orders[1] = { kind = "move", commander = 3, route = { 9 } }
 local first = payload()
 check("first send carries one order", #first == 1, "#=" .. #first)
 store.plan_sent(50)
@@ -73,17 +73,17 @@ check("the plan survives the send", store.plan_count() == 1,
 	"count=" .. store.plan_count())
 
 -- The defect, exactly: notice a second move and send again.
-store.orders[2] = { kind = "move", captain = 5, route = { 11 } }
+store.orders[2] = { kind = "move", commander = 5, route = { 11 } }
 local second = payload()
 check("the second send carries BOTH orders", #second == 2, "#=" .. #second)
 check("...including the one from the first send",
-	second[1].kind == "move" and second[1].captain == 3)
+	second[1].kind == "move" and second[1].commander == 3)
 check("...and the second order",
-	second[2].kind == "move" and second[2].captain == 5)
+	second[2].kind == "move" and second[2].commander == 5)
 
 print("plan: a resolving turn consumes it")
 reset()
-store.orders[1] = { kind = "move", captain = 2, route = { 8 } }
+store.orders[1] = { kind = "move", commander = 2, route = { 8 } }
 store.plan_sent(60)
 check("an earlier turn resolving leaves it alone", not store.plan_consumed(59))
 check("...and it still holds it", store.plan_count() == 1)
@@ -97,7 +97,7 @@ check("...and nothing marked sent", store.sent_signature == nil
 -- turn they were aimed at has gone, and a launch route is only valid against
 -- the map that produced it.
 reset()
-store.orders[1] = { kind = "move", captain = 3, route = { 4, 5 } }
+store.orders[1] = { kind = "move", commander = 3, route = { 4, 5 } }
 store.orders_turn = 61
 check("an unsent plan is consumed too", store.plan_consumed(61))
 check("...leaving nothing staged", store.plan_count() == 0)
@@ -105,21 +105,21 @@ check("...leaving nothing staged", store.plan_count() == 0)
 -- A plan with no turn against it cannot be stale: the HUD adopts the coming
 -- turn on the frame anything is staged, so this is the pre-staging state.
 reset()
-store.orders[1] = { kind = "move", captain = 9, route = { 1 } }
+store.orders[1] = { kind = "move", commander = 9, route = { 1 } }
 check("a plan with no turn is left alone", not store.plan_consumed(99))
 check("...and keeps its order", store.plan_count() == 1)
 
 print("plan: signatures are stable and specific")
 reset()
-store.orders[1] = { kind = "move", captain = 1, route = { 3, 4 } }
+store.orders[1] = { kind = "move", commander = 1, route = { 3, 4 } }
 local a = store.plan_signature()
 check("the same plan signs the same twice", a == store.plan_signature())
 store.orders[1].route = { 3, 5 }
 check("a different route signs differently", a ~= store.plan_signature())
 store.orders[1].route = { 3, 4 }
 check("and back again", a == store.plan_signature())
-store.orders[1].captain = 2
-check("a different captain signs differently", a ~= store.plan_signature())
+store.orders[1].commander = 2
+check("a different commander signs differently", a ~= store.plan_signature())
 
 
 print("a turn is worth only so many orders")
@@ -136,13 +136,13 @@ do
 	check("there is room at the start", store.plan_has_room("move"))
 
 	store.orders = {
-		{ kind = "move", captain = 1, route = { 2 } },
+		{ kind = "move", commander = 1, route = { 2 } },
 		{ kind = "build", at = 5, building = "yards" },
 	}
 	check("each staged order costs one", store.plan_spent() == 2)
 	check("with room for one more", store.plan_has_room("build"))
 
-	store.orders[3] = { kind = "resupply", captain = 1, units = 2 }
+	store.orders[3] = { kind = "resupply", commander = 1, units = 2 }
 	check("a full turn has spent its allowance", store.plan_spent() == 3)
 	check("and there is no room for a fourth", not store.plan_has_room("move"))
 

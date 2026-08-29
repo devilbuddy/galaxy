@@ -1,0 +1,415 @@
+--- Builds the map out of sprites and hands it to the rest of the game.
+--
+-- Two layers, both stock Defold sprites, both from an atlas by *name*:
+--
+--   ground   one hex per land and sea tile, from /main/tiles.atlas
+--   glyph    one emoji per place worth naming, from /main/emoji.atlas
+--
+-- No material, no shader, no vertex buffer, no per-sprite constant - so the
+-- whole map is two draw calls (one per atlas) by construction rather than by
+-- care. What this replaced was seven mesh layers built from dynamic vertex
+-- buffers in Lua, six fragment shaders and a Voronoi territory module.
+--
+-- **Open country gets no glyph.** The hex underneath already says it is forest,
+-- so only a seat, a city or a holding is drawn on top - which is also what keeps
+-- the glyph layer to about a hundred sprites rather than one per tile.
+--
+-- The sprites are built once per **seed** and then left alone. Nothing here runs
+-- per frame, and a turn resolving does not touch them: fog and ownership are not
+-- drawn yet (see `knowledge`), and when they come back they come back as more
+-- sprites, not as a rebuild.
+
+local generate = require("realm.generate")
+local store = require("main.store")
+local seen = require("main.seen")
+local backend = require("main.backend")
+local monarch = require("monarch.monarch")
+local theme = require("main.theme")
+
+-- A go.property number is stored as a 32-bit float, so any integer above 2^24
+-- cannot round-trip: 20260823 silently comes back as 20260824. For a game whose
+-- whole premise is "this seed reproduces this map", that is a correctness bug,
+-- so seeds are kept inside the exactly-representable range and the property is
+-- floored on the way in. Leave it at 0 to use the configured seed.
+go.property("seed", 0)
+
+local MAX_SEED = 16777215
+
+-- Sprite z. Only the ordering matters - depth testing is off and sprites sort by
+-- z - but a whole unit between them documents that *every* glyph draws above
+-- *every* tile, not just the one it stands on. A glyph at the same z as the
+-- ground would be covered by whichever neighbouring hex happened to sort later.
+local Z_GROUND, Z_GLYPH = 0, 1
+
+--- Per-tile knowledge for the current game, or nil when just browsing a seed.
+--
+-- **Returns nothing useful yet.** Fog and ownership are not drawn in this pass -
+-- the ground is the biome's own colour and nothing is tinted - so this exists as
+-- the single place that decision will be made when they come back, exactly as it
+-- was before. `store.playback_owners` still routes through here, which is what
+-- lets a digest replay recolour the map without the playback knowing how the map
+-- is drawn.
+local function knowledge(self, id)
+	local view = self.view
+	if not view then return 0 end
+	local entry = view.tiles[tostring(id)]
+	if not entry then return 0 end
+	local past = store.playback_owners
+	return past and (past[id] or 0) or (entry.owner or 0)
+end
+
+--- Whether the game view knows this tile as somebody's seat. Game state, not map
+--- data - browsing a bare seed never draws a castle.
+local function is_seat(self, id)
+	local view = self.view
+	if not view then return false end
+	local entry = view.tiles[tostring(id)]
+	return entry ~= nil and (entry.seat_of or 0) ~= 0
+end
+
+--- Throw away the sprites of the map currently on screen.
+--
+-- Deleting the game objects rather than hiding them: a map is rebuilt only when
+-- the seed changes, which is at most once per screen, and several hundred
+-- objects left parked would count against `collection.max_instances` for the
+-- rest of the session.
+local function clear_sprites(self)
+	local live = self.sprites
+	if not live then return end
+	for i = 1, #live do go.delete(live[i]) end
+	self.sprites = nil
+end
+
+--- Spawn the ground and the glyphs.
+--
+-- A tile PNG is exactly the bounding box of a flat-top hexagon (main/theme.lua's
+-- M.TILE_PX, proved by tools/test_hex.lua), so drawing it `2 * hex_size` wide at
+-- the tile's own centre *is* the tiling. The transparent corners overlap the
+-- neighbour, which costs nothing: textures are premultiplied, so a transparent
+-- pixel over an opaque one is an exact no-op.
+local function build_sprites(self, g)
+	clear_sprites(self)
+
+	local live = {}
+	local tile_scale = (2 * g.hex_size) / theme.TILE_PX.w
+	local scale = vmath.vector3(tile_scale, tile_scale, 1)
+
+	-- The sea first. It is scenery in the most literal sense - not in the graph,
+	-- never owned, never selected - so it is drawn and then never referred to.
+	local sea = hash(theme.sea_tile())
+	for i = 1, #g.water do
+		local w = g.water[i]
+		local id = factory.create("#tilefactory",
+			vmath.vector3(w.x, w.y, Z_GROUND), nil, nil, scale)
+		sprite.play_flipbook(msg.url(nil, id, "sprite"), sea)
+		live[#live + 1] = id
+	end
+
+	for i = 1, #g.tiles do
+		local s = g.tiles[i]
+		local id = factory.create("#tilefactory",
+			vmath.vector3(s.x, s.y, Z_GROUND), nil, nil, scale)
+		sprite.play_flipbook(msg.url(nil, id, "sprite"), hash(theme.tile_for(g, i)))
+		live[#live + 1] = id
+	end
+
+	-- Glyphs, for the places worth naming. `emoji_for` returns nil for open
+	-- country, which is the whole reason this loop is shorter than the one above.
+	local images = require("main.emoji_ui")
+	for i = 1, #g.tiles do
+		local seat = is_seat(self, i)
+		local name = theme.emoji_for(g, i, seat)
+		if name then
+			local s = g.tiles[i]
+			local frac = seat and theme.SEAT_GLYPH_SCALE
+				or theme.GLYPH_SCALE[require("realm.sim.tiles").kind(g, i)]
+			if frac and frac > 0 then
+				local gs = (2 * g.hex_size * frac) / theme.GLYPH_PX
+				local id = factory.create("#placefactory",
+					vmath.vector3(s.x, s.y, Z_GLYPH), nil, nil,
+					vmath.vector3(gs, gs, 1))
+				sprite.play_flipbook(msg.url(nil, id, "sprite"), hash(images[name]))
+				live[#live + 1] = id
+			end
+		end
+	end
+
+	self.sprites = live
+	return #live
+end
+
+--- Recolour just what encodes who owns what.
+--
+-- A playback step changes ownership and nothing else. Nothing draws ownership
+-- yet, so this is a no-op - but it is kept, and `store.playback_revision` still
+-- drives it, because this is where the ownership sprites will be updated and the
+-- playback must not have to learn a new handshake when they arrive.
+local function repaint(self, g) -- luacheck: ignore
+end
+
+--- Build the map for a realm and hand the camera its extent.
+--
+-- Called for a new map *and* whenever a turn resolves, because it is also where
+-- the selection and the camera framing are settled. Only a genuinely new seed is
+-- allowed to disturb what the player is looking at - a poll that finds a
+-- resolved turn must not reset the zoom or close the card the player is reading.
+local function present(self, g, source, note)
+	local new_realm = self.presented_seed ~= g.seed
+	local t0 = os.clock()
+	-- Only a different seed needs new sprites. Ownership and fog do not exist on
+	-- the map yet, so a resolved turn changes nothing drawn - and respawning
+	-- several hundred game objects every ten-second poll would be the most
+	-- expensive thing in the project.
+	local count = self.sprites and #self.sprites or 0
+	if new_realm or not self.sprites then
+		count = build_sprites(self, g)
+	end
+	local built = (os.clock() - t0) * 1000
+
+	store.realm = g
+	store.source = source
+	store.status = nil
+	-- Only a different map invalidates the selection. Clearing it on every
+	-- rebuild deselected the player's tile, and closed the card describing it,
+	-- each time a turn resolved.
+	if new_realm then store.selected = nil end
+	store.revision = store.revision + 1
+	self.presented_seed = g.seed
+
+	print(string.format(
+		"map seed=%d  %d land  %d sea  %d provinces  degree %.2f  source=%s%s",
+		g.seed, g.stats.tile_count, g.stats.water_count, g.stats.province_count,
+		g.stats.mean_degree, source, note and ("  " .. note) or ""))
+	print(string.format("  %d sprites in %.0f ms", count, built))
+
+	msg.post("/camera#camera_script", "map_ready", {
+		world = g.world_size,
+		centre_x = g.content.centre_x,
+		centre_y = g.content.centre_y,
+		content_width = g.content.width,
+		content_height = g.content.height,
+	})
+
+	-- Opening a game lands on your seat, not the middle of the map. The widest
+	-- zoom does not show the whole map, so the geometric centre could be a
+	-- screenful of ocean with your realm off the edge. Once per game: after that
+	-- the camera is the player's.
+	if new_realm and self.view and self.view.seat then
+		local cap = g.tiles[self.view.seat]
+		if cap then
+			msg.post("/camera#camera_script", "focus", { x = cap.x, y = cap.y })
+		end
+	end
+end
+
+--- Load a game: its state, then the realm its seed describes.
+--
+-- The state comes first because it carries the seed, and because the view has
+-- to be in place before the meshes are built - the fog decides how every layer
+-- is shaded, so building first and re-shading after would mean doing it twice.
+local function load_game(self, game_id, silent)
+	if not silent then store.status = "loading game..." end
+
+	-- How far this device has read *this* game's digest. Held per game and
+	-- across restarts (main/seen.lua), so opening a game does not replay
+	-- everything the server is still willing to send.
+	if store.game_id ~= game_id then
+		store.seen_turn = seen.get(game_id)
+	end
+
+	backend.game_state(game_id, store.seen_turn, function(res, err)
+		if err then
+			store.status = nil
+			print("realm: could not load game (" .. tostring(err) .. ")")
+			return
+		end
+
+		self.game = res.game
+		self.view = res.view
+		self.me = res.you
+		store.now_estimate = res.now or store.now_estimate
+		store.game = res.game
+		store.game_view = res.view
+		store.game_id = game_id
+
+		local events = res.events or {}
+		local turn = res.view and res.view.turn or 0
+
+		local function show(realm, source)
+			-- The meshes encode fog and ownership, which only change when a
+			-- turn resolves. A poll that finds nothing new does not need to
+			-- rebuild them - roughly 30 ms of work, ten seconds apart, for no
+			-- visible difference.
+			if self.presented_seed ~= realm.seed or self.presented_turn ~= turn then
+				self.presented_turn = turn
+				present(self, realm, source)
+			end
+			-- A resolved turn consumes the plan. The orders it carried have
+			-- either taken effect or been rejected, and sending them again
+			-- would aim last turn's move at this turn's map - at an army that
+			-- may no longer exist.
+			store.plan_consumed(turn)
+
+			local digest = {
+				events = events, you = res.you, turn = turn,
+				-- The server caps how far back a digest reaches; passing the
+				-- first turn it covers lets the report say so instead of
+				-- implying this is everything that happened.
+				from_turn = res.events_from,
+				since_turn = store.seen_turn,
+			}
+			if #events > 0 and turn > store.seen_turn then
+				if silent then
+					-- **A turn that lands while you are watching plays out.**
+					-- It used to be parked, and the turn card went accent with
+					-- "new - tap to read" - which is an odd thing to offer
+					-- somebody who is looking straight at the map it happened
+					-- on. They should see it happen instead, and then there is
+					-- nothing left to read.
+					--
+					-- `live` is what separates this from arriving at a game:
+					-- there is no title card, because you were not away.
+					--
+					-- `seen_turn` is still left alone here. The HUD may decline
+					-- - mid-aim, or with a popup up - and advancing it would
+					-- drop the digest for good, since the next request asks for
+					-- events *since* that turn.
+					digest.live = true
+					store.pending_report = digest
+					store.report_now = true
+				else
+					-- Arriving at the map, so there is nobody mid-read to
+					-- interrupt: the digest is offered straight away. *How* it
+					-- is offered is the HUD's decision and not this script's,
+					-- so it goes through the same handoff as a live turn -
+					-- including **who marks it read**, which is the HUD, when a
+					-- playback actually starts. Marking it here meant a digest
+					-- with nothing to animate was read without being seen.
+					store.pending_report = digest
+					store.report_now = true
+				end
+			else
+				store.seen_turn = turn
+				seen.set(game_id, turn)
+			end
+		end
+
+		-- The realm is immutable and cacheable, so it is fetched separately
+		-- from the mutable state rather than bundled into every state response.
+		if self.realm_seed == res.game.seed and self.realm then
+			show(self.realm, store.source or "server")
+			return
+		end
+
+		backend.fetch_realm(res.game.seed, function(realm, gerr)
+			if not realm then
+				print("realm: falling back to local generation (" .. tostring(gerr) .. ")")
+				realm = generate.build(res.game.seed)
+				self.realm, self.realm_seed = realm, res.game.seed
+				show(realm, "local")
+			else
+				self.realm, self.realm_seed = realm, res.game.seed
+				show(realm, "server")
+			end
+		end)
+	end)
+end
+
+--- Fetch a realm for `seed` and show it.
+--
+-- The server is authoritative when it is reachable. Local generation is a
+-- fallback so the prototype still runs with no backend up - the client has the
+-- same generator, and a seed produces the same map either way (verified by
+-- tools/verify_cross_runtime.sh), so falling back changes nothing but the
+-- source of truth.
+local function load_realm(self, seed)
+	self.seed = seed
+
+	if not backend.ready() then
+		present(self, generate.build(seed), "local")
+		return
+	end
+
+	store.status = "requesting realm " .. seed
+	backend.fetch_realm(seed, function(g, err, info)
+		if g then
+			present(self, g, "server",
+				info and string.format("digest=%s %d bytes", tostring(info.digest), info.bytes))
+		else
+			print("realm: server request failed (" .. tostring(err) .. "), generating locally")
+			present(self, generate.build(seed), "local")
+		end
+	end)
+end
+
+--- Clamp anything arriving from outside into a seed we can represent exactly.
+local function sanitise_seed(value, fallback)
+	local seed = math.floor(tonumber(value) or 0)
+	if seed <= 0 then return fallback end
+	return seed % MAX_SEED
+end
+
+-- How often to re-ask the server while the map is open. Turns resolve on a
+-- schedule measured in hours, so this only needs to be brisk enough that a
+-- player watching the screen sees the turn land.
+local POLL_SECONDS = 10
+
+function init(self)
+	self.since_poll = 0
+	self.view = nil
+
+	-- Monarch hands the screen its parameters; a game id means play, no game id
+	-- means browse a generated seed, which keeps the map useful with no backend.
+	local data = monarch.data(hash("map"))
+	if data and data.game_id and backend.ready() then
+		load_game(self, data.game_id)
+		return
+	end
+
+	self.seed = sanitise_seed(self.seed, require("realm.config").default_seed)
+	load_realm(self, self.seed)
+end
+
+function update(self, dt)
+	-- A playback step has changed what the map should be showing.
+	if self.repainted ~= store.playback_revision then
+		self.repainted = store.playback_revision
+		if store.realm then repaint(self, store.realm) end
+	end
+
+	-- While a game is open, keep asking: a turn may resolve at any moment, and
+	-- the request is also what drives the server's lazy turn resolution.
+	--
+	-- Not during a playback: a turn landing mid-replay would jump the map back
+	-- to today, and the digest the player is watching would be superseded by one
+	-- they have not seen.
+	if self.game and store.game_id and not store.playback_active then
+		-- Advance the sampled server clock so the countdown ticks smoothly
+		-- between polls rather than jumping every ten seconds.
+		store.now_estimate = store.now_estimate + dt
+		self.since_poll = self.since_poll + dt
+		if self.since_poll >= POLL_SECONDS then
+			self.since_poll = 0
+			load_game(self, store.game_id, true)
+		end
+	end
+
+end
+
+--- Monarch is tearing the screen down. The sprites are game objects in this
+--- collection so they go with it either way, but deleting them explicitly keeps
+--- the instance count honest if the screen is ever reused rather than unloaded.
+function final(self)
+	clear_sprites(self)
+end
+
+function on_message(self, message_id, message)
+	if message_id == hash("regenerate") and not store.game_id then
+		-- Walking the seed by one gives a completely different realm (the seed
+		-- is hashed per subsystem) while staying reproducible: the player can
+		-- always count back to one they liked.
+		local next_seed = message.seed and sanitise_seed(message.seed, self.seed)
+			or (self.seed % MAX_SEED) + 1
+		load_realm(self, next_seed)
+	end
+end

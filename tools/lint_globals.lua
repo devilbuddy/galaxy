@@ -1,11 +1,11 @@
 -- Finds reads of globals that are almost certainly typos.
 --
--- Written because one slipped through everything else. `main/galaxy.script` had
+-- Written because one slipped through everything else. `main/realm.script` had
 -- `build_dust(seed, world)` where `seed` was never a local - it had been a
 -- global read of nil since the first commit. Nothing caught it: the code
 -- compiles, `rng.stream(nil, ...)` politely falls back to zero, and the dust
 -- rendered, so the only symptom was that the starfield backdrop was byte
--- identical for every galaxy in the game. The editor's language server found it
+-- identical for every realm in the game. The editor's language server found it
 -- eventually; this makes it a check that runs.
 --
 -- The trick is to ask LuaJIT rather than to pattern-match the source. Its
@@ -35,7 +35,7 @@ for name in ([[
 	ALLOWED[name] = true
 end
 
-local DIRS = { "galaxy", "main", "server", "tools" }
+local DIRS = { "realm", "main", "server", "tools" }
 local EXTENSIONS = {
 	["lua"] = true, ["script"] = true, ["gui_script"] = true,
 	["render_script"] = true,

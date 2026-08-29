@@ -9,7 +9,7 @@
 
 local M = {}
 
-local APP_NAME = "galaxy"
+local APP_NAME = "realm"
 local FILENAME = "device_id"
 
 --- 32 hex characters. Nakama requires 10-128.
@@ -41,7 +41,7 @@ function M.get()
 	if not sys.save(path, { id = id }) then
 		-- Saving can fail on a read-only filesystem; a session-scoped id still
 		-- lets the player in, they just get a fresh account next launch.
-		print("galaxy: could not persist device id, using a session-scoped one")
+		print("realm: could not persist device id, using a session-scoped one")
 	end
 	return id
 end

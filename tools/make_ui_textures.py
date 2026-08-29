@@ -262,8 +262,8 @@ def icon_capacity():
     return img
 
 
-def icon_star():
-    """Four-pointed star: a system."""
+def icon_tile():
+    """Four-pointed tile: a tile."""
     img, d = canvas(ICON)
     poly(d, [(36, 4), (44, 28), (68, 36), (44, 44), (36, 68), (28, 44),
              (4, 36), (28, 28)])
@@ -313,7 +313,7 @@ def icon_minus():
 
 
 def icon_frame():
-    """Four corner brackets: fit the whole galaxy on screen."""
+    """Four corner brackets: fit the whole realm on screen."""
     img, d = canvas(ICON)
     near, far, arm, weight = 15, 57, 16, 6
     for x_out, y_out in ((near, near), (far, near), (near, far), (far, far)):
@@ -365,7 +365,7 @@ ICONS = {
     "icon_vision": icon_vision,
     "icon_trade": icon_trade,
     "icon_capacity": icon_capacity,
-    "icon_star": icon_star,
+    "icon_tile": icon_tile,
     "icon_flag": icon_flag,
     "icon_clock": icon_clock,
     "icon_menu": icon_menu,

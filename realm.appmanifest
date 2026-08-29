@@ -1,0 +1,21 @@
+# Engine features this project does not use, excluded from the built engine.
+#
+# Nothing here has ever used physics: the collision, dynamics and joint code was
+# inherited from the project template and `physics.scale` / `physics.gravity_y`
+# sat in game.project describing a simulation with no participants. The map is
+# six mesh components and a GUI; the closest thing to a body in the whole game
+# is a army marker, and it is a box node.
+#
+# `physics_null` replaces the real library rather than simply dropping it: the
+# engine links against the physics interface unconditionally, so the stub is what
+# satisfies it. Removing the stub too is a link error, not a smaller binary.
+#
+# Excluding anything here means the engine has to be relinked, so bundles now go
+# through the native extension build server. That is already true because of the
+# automation bridge dependency.
+platforms:
+    common:
+        context:
+            excludeLibs: ["physics", "LinearMath", "BulletDynamics", "BulletCollision", "Box2D", "Box2DDefold"]
+            excludeSymbols: ["ScriptBox2DExt"]
+            libs: ["physics_null"]

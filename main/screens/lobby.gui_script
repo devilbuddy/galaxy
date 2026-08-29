@@ -15,7 +15,7 @@ local backend = require("main.backend")
 local store = require("main.store")
 local ui = require("main.ui")
 local safearea = require("main.safearea")
-local races = require("galaxy.sim.races")
+local races = require("realm.sim.races")
 local dev = require("main.dev")
 
 local PAD = 26
@@ -38,7 +38,7 @@ local EFFECT_LABEL = {
 	attack = "attack", defence = "defence", capture = "capture",
 	fortress = "fortresses", speed = "speed", hops = "range",
 	-- Only the mobility keys currently do anything (see
-	-- galaxy/sim/modifiers.lua); the rest are the design intent for when
+	-- realm/sim/modifiers.lua); the rest are the design intent for when
 	-- production is built back, and are still worth showing so a race reads as
 	-- a character rather than a speed stat.
 	industry = "output", growth = "growth", capacity = "capacity",
@@ -52,7 +52,7 @@ local EFFECT_ORDER = {
 	"research", "vision", "tech_cost",
 }
 
--- Counts of lanes, not percentages.
+-- Counts of tiles, not percentages.
 local WHOLE_NUMBER = { hops = true, vision = true }
 
 local function screen()
@@ -196,7 +196,7 @@ local function build(self)
 	ui.sprite(0, h, w, h, "solid", ui.BG)
 
 	local top = h - pad.top
-	ui.h1(pad.left + 6, top - 32, "Galaxy")
+	ui.h1(pad.left + 6, top - 32, "Realm")
 	ui.small(pad.left + 6, top - 74, "Asynchronous conquest", ui.DIM)
 	self.status_label = ui.small(pad.left + 6, top - 104, "", ui.FAINT)
 

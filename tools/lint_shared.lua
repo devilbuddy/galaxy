@@ -1,13 +1,13 @@
 -- Guards against Lua idioms that Nakama's runtime miscompiles.
 --
--- galaxy/ runs on both the Defold client (LuaJIT) and the Nakama server
+-- realm/ runs on both the Defold client (LuaJIT) and the Nakama server
 -- (gopher-lua). The server's runtime evaluates a multiple-assignment swap
 -- sequentially rather than simultaneously:
 --
 --     local a, b = 1, 2
 --     a, b = b, a          --> a = 2, b = 2   (should be 2, 1)
 --
--- That is silent and produced a corrupt lane graph for a long time before it
+-- That is silent and produced a corrupt tile graph for a long time before it
 -- was traced. Since it cannot be detected at runtime without paying for it on
 -- every call, it is banned by lint in the code the server shares.
 --
@@ -18,7 +18,7 @@
 --
 -- Run: luajit tools/lint_shared.lua
 
-local DIRS = { "galaxy" }
+local DIRS = { "realm" }
 
 local problems = 0
 
@@ -49,7 +49,7 @@ local function check(path)
 	f:close()
 end
 
--- `find`, not `ls dir/*.lua`: galaxy/sim/ runs on the server too, and a glob
+-- `find`, not `ls dir/*.lua`: realm/sim/ runs on the server too, and a glob
 -- that stops at the top level silently exempted the entire simulation from
 -- this check.
 local checked = 0

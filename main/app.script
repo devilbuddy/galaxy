@@ -28,7 +28,7 @@ end
 function on_message(self, message_id, message, sender)
 	if message_id == hash("boot") then
 		if not backend.enabled() then
-			print("galaxy: offline mode, skipping sign-in")
+			print("realm: offline mode, skipping sign-in")
 			store.status = nil
 			monarch.show(hash("lobby"))
 			return
@@ -37,9 +37,9 @@ function on_message(self, message_id, message, sender)
 		store.status = "signing in to " .. backend.address()
 		backend.connect(function(ok, err)
 			if ok then
-				print("galaxy: signed in to " .. backend.address())
+				print("realm: signed in to " .. backend.address())
 			else
-				print("galaxy: backend unavailable (" .. tostring(err) .. "), running offline")
+				print("realm: backend unavailable (" .. tostring(err) .. "), running offline")
 			end
 			store.status = nil
 			monarch.show(hash("lobby"))

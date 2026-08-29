@@ -10,7 +10,7 @@
 -- Rather than have the client guess, the game publishes the one thing that
 -- resolves it: the transform. From the view size, the framebuffer size and the
 -- camera, a client can convert any world position to a device pixel exactly the
--- way the map does, and stop trying to infer star positions from screenshots.
+-- way the map does, and stop trying to infer tile positions from screenshots.
 --
 -- Everything here is guarded: `automation_bridge` exists only in debug builds,
 -- so on a release build this module is inert and costs a nil check.
@@ -42,7 +42,7 @@ function M.update(dt)
 	local screen = store.screen
 	local cam = store.camera
 	local view = store.game_view
-	bridge.publish("galaxy.view", {
+	bridge.publish("realm.view", {
 		-- The space every GUI node and the world projection live in.
 		view_width = screen.width,
 		view_height = screen.height,
@@ -53,13 +53,13 @@ function M.update(dt)
 		camera_y = cam.y,
 		zoom = cam.zoom,
 		-- Enough state to assert against without reading the screen.
-		seed = store.galaxy and store.galaxy.seed or 0,
+		seed = store.realm and store.realm.seed or 0,
 		turn = view and view.turn or 0,
 		selected = store.selected or 0,
-		selected_captain = store.selected_captain or 0,
+		selected_commander = store.selected_commander or 0,
 		aiming = store.aiming and store.aiming.kind or "",
 		staged_orders = store.plan_count and store.plan_count() or 0,
-		captains = view and #view.captains or 0,
+		commanders = view and #view.commanders or 0,
 	})
 end
 

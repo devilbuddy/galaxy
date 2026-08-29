@@ -1,4 +1,4 @@
-# Local Nakama backend for the galaxy prototype.
+# Local Nakama backend for the realm prototype.
 #
 #   docker compose up -d      start
 #   docker compose logs -f nakama
@@ -8,10 +8,10 @@
 # run under emulation on Apple Silicon, which made generation ~5x slower again
 # on top of the interpreter cost.
 #
-# The server generates galaxies with the *same* Lua modules the client uses:
-# ./galaxy is mounted straight into Nakama's module path, so there is no second
+# The server generates realms with the *same* Lua modules the client uses:
+# ./realm is mounted straight into Nakama's module path, so there is no second
 # implementation to drift. Nakama's runtime is gopher-lua and has no bit
-# library, which galaxy/rng.lua handles with an arithmetic fallback that
+# library, which realm/rng.lua handles with an arithmetic fallback that
 # produces bit-identical results (tools/verify_cross_runtime.sh).
 
 services:
@@ -56,7 +56,7 @@ services:
       # The server-side entry points (RPC registration).
       - ./server/modules:/nakama/data/modules
       # The generator itself, shared verbatim with the Defold client.
-      - ./galaxy:/nakama/data/modules/galaxy
+      - ./realm:/nakama/data/modules/realm
     healthcheck:
       test: ["CMD", "/nakama/nakama", "healthcheck"]
       interval: 10s
