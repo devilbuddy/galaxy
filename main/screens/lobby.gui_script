@@ -282,7 +282,7 @@ end
 function final(self)
 	ui.region(self.rows_druid, self.rows)
 	self.rows_druid = nil
-	self.druid:final()
+	ui.dismiss(self.druid)
 end
 
 function update(self, dt)

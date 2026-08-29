@@ -310,7 +310,7 @@ end
 function final(self)
 	ui.region(self.body_druid, self.nodes)
 	self.body_druid = nil
-	self.druid:final()
+	ui.dismiss(self.druid)
 end
 
 -- How long an exchange is held when the replay is running itself. Slow enough

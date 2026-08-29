@@ -155,7 +155,7 @@ local function describe(event, me)
 			detail = detail .. string.format("  -  walls %d, brought %d",
 				event.fortification, event.siege)
 		elseif (event.army or 0) > 0 then
-			detail = detail .. string.format("  -  ships %d, brought %d",
+			detail = detail .. string.format("  -  army %d, brought %d",
 				event.army, event.army_power or 0)
 		end
 		return {
@@ -414,7 +414,7 @@ function init(self)
 	build(self, monarch.data(hash("report")))
 end
 
-function final(self) self.druid:final() end
+function final(self) ui.dismiss(self.druid) end
 function update(self, dt) self.druid:update(dt) end
 function on_input(self, action_id, action)
 	-- A full-screen popup claims every action, so the map behind it neither

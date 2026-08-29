@@ -203,7 +203,7 @@ function init(self)
 end
 
 function final(self)
-	if self.body_druid then self.body_druid:final() end
+	ui.dismiss(self.body_druid)
 end
 
 function update(self, dt)

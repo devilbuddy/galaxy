@@ -81,7 +81,7 @@ function init(self)
 end
 
 function final(self)
-	if self.druid then self.druid:final() end
+	ui.dismiss(self.druid)
 end
 
 function update(self, dt)

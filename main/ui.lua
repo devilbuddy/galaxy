@@ -735,6 +735,29 @@ end
 -- without anybody having to remember to track every component they created -
 -- which is exactly what went wrong: `ui.tabs` and `ui.scroll` each quietly
 -- registered one and the caller only tracked its buttons.
+--- Final a Druid instance safely, cancelling its pending late-init first.
+--
+-- **Every teardown has to go through here, not just a rebuilt province.**
+-- `ui.region` cancelled the timer and a screen's own `final()` did not, so a
+-- popup torn down within a frame of creating a button - which is exactly what
+-- tapping a row in the buy or slot popup does, since acting closes it - left
+-- `late_init` to fire against a scene Monarch was already deleting:
+--
+--     druid/helper.lua:338: Deleted node
+--       get_parent -> get_closest_stencil_node -> button.on_late_init
+--
+-- The cancel lived inside `ui.region` because that is where the race was first
+-- found. It belongs to *finaling*, which is what actually leaves the timer
+-- dangling.
+function M.dismiss(instance)
+	if not instance then return end
+	if instance._late_init_timer_id then
+		timer.cancel(instance._late_init_timer_id)
+		instance._late_init_timer_id = nil
+	end
+	instance:final()
+end
+
 function M.region(instance, nodes)
 	if instance then
 		-- **Cancel Druid's pending late-init first.** `late_init` is not run
@@ -757,11 +780,7 @@ function M.region(instance, nodes)
 		-- Draining the queue instead of cancelling it would be worse: `final`
 		-- leaves the interest lists populated, so `late_init` would also
 		-- re-acquire input focus for an instance that is being thrown away.
-		if instance._late_init_timer_id then
-			timer.cancel(instance._late_init_timer_id)
-			instance._late_init_timer_id = nil
-		end
-		instance:final()
+		M.dismiss(instance)
 	end
 	if nodes then
 		for i = 1, #nodes do
