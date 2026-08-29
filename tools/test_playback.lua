@@ -150,6 +150,112 @@ do
 	end)())
 end
 
+print("where everyone was standing, wound back from today")
+do
+	-- The markers on a replay are the whole of what a player sees - ownership
+	-- is not drawn on the map yet - so a step that names only the officers who
+	-- moved makes the rest of the roster blink out of existence. This checks
+	-- the presence track the same way the ownership rewind is checked: against
+	-- a real game, snapshotted as it was played.
+	local state = new_game(4)
+	local standing, events = {}, {}
+	for _ = 1, TURNS do
+		local turn = state.turn + 1
+		local mark = {}
+		for i = 1, #state.commanders do
+			local c = state.commanders[i]
+			if c.owner == 1 then mark[c.id] = c.at end
+		end
+		standing[turn] = mark
+		local produced = res.turn(REALM, state, bots.all_orders(REALM, state))
+		for i = 1, #produced do events[#events + 1] = produced[i] end
+	end
+
+	local tiles = {}
+	for id, sys in pairs(state.tiles) do tiles[tostring(id)] = { owner = sys.owner } end
+
+	-- Today, in the shape `view.commanders` hands over.
+	local today = {}
+	for i = 1, #state.commanders do
+		local c = state.commanders[i]
+		if c.owner == 1 then
+			today[#today + 1] = { id = c.id, at = c.at, name = c.name }
+		end
+	end
+
+	local steps = playback.build({ events = events, you = 1 }, tiles, today)
+
+	check("a step names somebody", (function()
+		for i = 1, #steps do
+			if #(steps[i].actors or {}) > 0 then return true end
+		end
+		return false
+	end)())
+
+	local missing, wrong, counted = nil, nil, 0
+	for i = 1, #steps do
+		local step = steps[i]
+		local truth = standing[step.turn]
+		local drawn = {}
+		for k = 1, #(step.actors or {}) do
+			local a = step.actors[k]
+			drawn[a.id] = a
+			counted = counted + 1
+		end
+		if truth then
+			for id, at in pairs(truth) do
+				local a = drawn[id]
+				if not a then
+					missing = string.format("turn %d: commander %d is not in the step",
+						step.turn, id)
+				elseif a.from ~= at then
+					wrong = string.format("turn %d: commander %d opens at %s, was at %s",
+						step.turn, id, tostring(a.from), tostring(at))
+				end
+				if missing or wrong then break end
+			end
+		end
+		if missing or wrong then break end
+	end
+	check("every officer is in every step, moving or not", missing == nil, missing)
+	check("and each one opens the turn where it really stood", wrong == nil, wrong)
+	check("and that is a real check, not an empty loop", counted > 40, counted)
+
+	check("a march ends on the last tile it walked", (function()
+		for i = 1, #steps do
+			for k = 1, #(steps[i].actors or {}) do
+				local a = steps[i].actors[k]
+				if a.moved and a.path[#a.path] ~= a.at then return false end
+			end
+		end
+		return true
+	end)())
+	check("standing still is said in the same shape as marching", (function()
+		for i = 1, #steps do
+			for k = 1, #(steps[i].actors or {}) do
+				local a = steps[i].actors[k]
+				if not a.moved and (a.at ~= a.from or #a.path ~= 0) then return false end
+			end
+		end
+		return true
+	end)())
+	check("the roster is in a stable order", (function()
+		for i = 1, #steps do
+			local last = nil
+			for k = 1, #(steps[i].actors or {}) do
+				local id = steps[i].actors[k].id
+				if last and id <= last then return false end
+				last = id
+			end
+		end
+		return true
+	end)())
+	check("and a digest with no roster still builds", (function()
+		local bare = playback.build({ events = events, you = 1 }, tiles)
+		return #bare == #steps and #(bare[1].actors or {}) == 0
+	end)())
+end
+
 print("a battle, unwound")
 do
 	local units = require("realm.sim.units")

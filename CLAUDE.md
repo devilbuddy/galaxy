@@ -214,6 +214,7 @@ luajit tools/test_sim.lua             # turn resolution, combat, fog of war
 luajit tools/test_wire.lua            # client/server wire format round-trips
 luajit tools/test_gestures.lua        # pan / pinch / tap recognition
 luajit tools/test_playback.lua        # the past, rebuilt from the event log
+                                      # - ownership *and* where everyone stood
 luajit tools/test_plan.lua            # staged orders survive a send; a turn consumes them
 luajit tools/lint_shared.lua          # no idioms gopher-lua miscompiles
 luajit tools/play.lua                 # pacing: one full game
@@ -1223,6 +1224,25 @@ a face can only be one of them:
 | the pip | where it is going: `icon_chevron_right`, just outside the ring, rotated to the heading. A parked army has none |
 | the caption | the name and the army power, in the same colour as the ring |
 
+**A pool node belongs to an officer, not to a loop counter.** Slots were handed
+out in iteration order, so which node drew which commander changed whenever the
+drawn set did - which is exactly what happens at the boundary between the live
+map and a replay, and between two steps of one. The `portrait_id` cache then
+re-played a flipbook on a node that had been somebody else, and the overlap
+nudge measured against a marker belonging to a different commander.
+`self.marker_slots` keeps the binding across frames, keyed by commander id (a
+sighting has none, so it is keyed by where it is - a rival moving to a new tile
+is a new marker rather than the same one gliding, which is all the wire ever
+claimed).
+
+**And a marker is culled on its own extent, not on its centre point.** It used
+to be rejected the moment its centre crossed `hud_band`, while routes had always
+been given ±40 - so an officer near the top of the tile sheet simply vanished,
+and the band moves by the whole height of that sheet the moment a tile is
+selected. `MARKER_REACH` is the ring plus the caption hanging below it. The
+chrome is created after the markers and therefore draws over them, so one that
+reaches under a panel is hidden by it rather than floating on top.
+
 **The ring exists because a portrait cannot be tinted.** The marker used to be a
 tinted `icon_warship` — the glyph *was* the player colour — and until the
 ownership wash is drawn that tint is the only thing on the map saying whose army
@@ -1604,6 +1624,28 @@ Three things this needed from elsewhere, and would silently be wrong without:
   step (`repaint`); the nebula, dust, tiles and glow do not depend on ownership,
   and rebuilding six layers to change two would make the transport a slideshow.
 
+**Positions are rewound with ownership, and for the same reason.** The log says
+what moved an officer *from* where: `commander_moved` carries `from`,
+`commander_broken` carries the tile it was thrown off as well as the seat it
+reformed at, and `recruited` means it did not exist yet. So winding today's
+roster backwards gives where everybody stood at the start of any turn in the
+digest, exactly. `step.actors` is that: **every one of your officers, on every
+step, marching or not.**
+
+It had to exist because the replay drew `step.moves` alone, so a commander with
+nothing to do that turn was not drawn *at all* — it blinked out of the map until
+it next moved, which reads as the game having lost track of it rather than as
+somebody standing still. A stationary actor is stated in the same shape as a
+marching one (`at == from`, empty path), so the caller needs no second case: an
+empty path means no next hop, which means no heading pip and no pulse, which is
+already how a parked commander draws on the live map.
+
+**Rivals deliberately get none of this.** `view.contacts` carries no id — you
+see an army, not a plan — so there is no key to wind a sighting back against,
+and `contact_moved` is only the stretch of a march that was inside your
+detection range anyway. A sighting goes on being drawn from `step.moves`, and
+goes on starting and stopping in mid-air.
+
 **Fog is not rewound with it.** What a player could see forty turns ago is not
 in the digest, and dimming half the map to guess at it would hide the very
 movement the playback exists to show.
@@ -1615,11 +1657,25 @@ turn boundary. In a replay the turn is over, the commander really did cross thos
 tiles in that order, and the only thing invented is how the seconds were spread
 across them.
 
+**A step ends on its destination, and that took one character.** `playback_update`
+zeroed `elapsed` when it reached the last step *and did not advance the index*,
+so the marker was recomputed from the beginning of that step: every officer
+snapped back to the tile it had set out from and froze there until DONE was
+tapped. It is clamped now. The arithmetic was always right; it was only ever fed
+the wrong number.
+
 **It frames what it is showing.** The map opens at the fit zoom where a marker is
 four pixels wide, so a playback zooms to `PLAYBACK_ZOOM` and eases the camera to
 the average of everywhere something happened that turn — then returns to the
 whole map when it ends, because leaving the player zoomed into the last turn's
 corner ends every digest somewhere they did not choose to be.
+
+**A live turn frames far less.** The player set that view deliberately, so it
+zooms *in* only when they are further out than `PLAYBACK_ZOOM` — never out — and
+`playback_look` moves the camera only when the turn happened off the edge of
+`hud_band`, the same rule the tile sheet's own lift already keeps. With both,
+the camera restore on the way out is usually a no-op, which is the point: the
+map should not move at all when it did not have to.
 
 **A digest with nothing in it goes back to being a list.** Forty turns of
 "nothing moved" is the changelog this replaced, only slower.
@@ -1632,11 +1688,48 @@ the same clearance below it that the order bar's does; six units against the
 bar's sixteen reads as the replay being jammed against the bottom of the screen
 while nothing else is.
 
-**A turn that lands while you are watching plays out on the spot.** It used to
-be parked behind the turn card — accent, "new, tap to read" — which is an odd
-thing to offer somebody looking straight at the map it happened on. It plays
-immediately instead, with no title card, because they were not away. The HUD
-declines mid-aim or under a popup — interrupting somebody part-way through an
+**A turn that lands while you are watching is its own mode.** It used to be
+parked behind the turn card — accent, "new, tap to read" — which is an odd thing
+to offer somebody looking straight at the map it happened on. Then it played
+through the *digest's* machinery, which is worse in a different way: a transport
+with a scrub track, a speed control, LOG and DONE, parked over the order bar and
+waiting to be dismissed. That is the right instrument for catching up on seven
+turns and the wrong one for the turn you just watched resolve. What a player
+wants there is to *see it happen*, not to be handed a timeline to operate.
+
+So a live turn is announced and then simply plays: a `TURN 12` card for a
+second, the map animating with **no chrome at all**, and then the HUD back. It
+closes itself — there is nothing to scrub back through and no transport to leave
+up. Several turns can resolve between two ten-second polls, so each one gets its
+own card (`LIVE_CARD_CHAINED`, 0.6 s against the arrival card's 1.5) rather than
+two turns of movement running together into one confusing sweep; a *quiet* turn
+gets neither card nor animation, because flashing a turn number over a map where
+nothing moves is the badge earning distrust.
+
+**It is a flag on `self.pb`, not a second implementation.** `p.live` is read at
+about ten sites and every one of them is a short branch — the thing being shown
+is identical, and only the chrome and the ending are not. Three of those
+branches are less obvious than they look:
+
+- **The band does not move.** `floor_y` becomes `pad.bottom + PLAYBACK_H` for an
+  *arrival* replay only. The camera clamps against that band, so changing it at
+  the moment the map starts animating slides the whole realm out from under the
+  player. For the same reason the commander strip stays up: the roster on screen
+  is the one this turn just produced, and blanking it for two seconds is chrome
+  popping in and out for nothing.
+- **The order bar stands down without moving.** SEND goes disabled and the
+  manifest is cleared once, on the way in — the turn resolving consumed the
+  plan, so the lines still on the card describe orders that have already
+  happened.
+- **The replay owns the screen, and a tap gives it back.** With no transport
+  there is no `pb_zone` to gate on, so `publish_zones` publishes the whole
+  screen and `on_input` claims every touch — otherwise a stray tap still reaches
+  SEND, which with nothing staged reads END TURN and sends an empty batch that
+  both ends the turn and *replaces* whatever orders were already in. A tap
+  (within `PB_TAP_SLOP`; a drag is left alone) ends the replay early, because a
+  mode you cannot leave is the thing the aim flow was careful to avoid.
+
+The HUD declines mid-aim or under a popup — interrupting somebody part-way through an
 action is worse than being a moment late — and declining costs nothing:
 **`seen_turn` advances only when a playback actually starts**, so the next poll
 offers the same digest again. Advancing it on the background poll was exactly
@@ -1668,7 +1761,22 @@ symptom:
   *replaces* any orders already in. This predates live turns (every DONE tap
   ever did it) but they made it constant. While a replay is up, a touch inside
   `pb_zone` now goes to the transport's instance alone - ownership by
-  geometry, the same rule as the map boundary.
+  geometry, the same rule as the map boundary. A live turn has no transport, so
+  there the zone is the whole screen; same rule, wider rectangle.
+- **The send that ends a turn often runs it.** `game.orders` calls `catch_up`
+  before it answers, so against bots - who never have to submit - the turn is
+  already over by the time SEND comes back, and the client sat on a map that had
+  moved on for up to `POLL_SECONDS`, staged route still hanging off a commander
+  that had already marched. It posts `refresh` to `main/realm.script` when the
+  response reports `resolved`, which reloads silently and therefore down the
+  live path: a card, then the turn on the map, straight after SEND.
+- **Two polls in flight could move the map backwards.** `since_poll` is reset
+  *before* the request goes out and nothing guarded against a slow one, so
+  whichever response *returned* last won - and a late turn-N reply landing after
+  turn-N+1 put every commander back on the tile it had already left, which reads
+  exactly like the map undoing the turn it had just shown. `load_game` now takes
+  one request at a time and discards a response describing a turn already
+  presented, the same rule `seen.set` keeps for the read cursor.
 
 **Arriving is a title card, then a replay - never a list.** Coming back to a game
 used to open the digest as a screen of rows, which is a changelog in front of a
@@ -1961,10 +2069,18 @@ liability. Turning it off is the supported switch, not a workaround.
   second tap, a relayout landing on the frame a card was built, a playback
   stepping at 4x. Which is why it was intermittent, and why it appeared to come
   from screens with no connection to whatever had just been touched.
-  `ui.region` cancels the pending timer before finaling, which closes the class
-  wherever it happens. Draining the queue instead would be worse: `final` leaves
-  the interest lists populated, so `late_init` would re-acquire input focus for
-  an instance being thrown away.
+  **`ui.dismiss(instance)` cancels the pending timer and then finals**, and
+  every teardown goes through it — `ui.region` for a rebuilt province, and each
+  screen's own `final()`. The cancel first lived inside `ui.region` alone,
+  because that is where the race was found, and that left the commonest case
+  open: a *popup* torn down within a frame of creating a button, which is
+  exactly what tapping a row in the buy or slot popup does, since acting on a
+  row closes it. Monarch deletes the scene's nodes and `late_init` walks one of
+  them. The cancel belongs to finaling, not to rebuilding.
+
+  Draining the queue instead would be worse: `final` leaves the interest lists
+  populated, so `late_init` would re-acquire input focus for an instance being
+  thrown away.
 
   **`druid:remove()` is not an alternative either, because it is usually
   deferred.**
@@ -2484,12 +2600,38 @@ will bite whoever touches them.
 - **The order allowance is fixed at three and nothing raises it.** It is the
   obvious thing for a fifth building to buy, and the obvious thing to scale with
   empire size; neither exists.
-- **The two comparisons are shown nowhere in the client.** "To take it, you need
-  16 against its defences — you bring only 6" was on the tile sheet and went
+- **The two comparisons are shown nowhere *before* the order.** "To take it, you
+  need 16 against its defences — you bring only 6" was on the tile sheet and went
   with the rest of its prose. That arithmetic is the whole of combat and the
   thing a player does before committing a commander to a turn that resolves twelve
   hours later, so this is a real hole. The place for it is the aim flow in the
   order bar, where the decision is being made.
+
+  What exists now is the consolation prize, *after* the fact: `blocked_notice`
+  in `main/hud.gui_script` flashes "Kess was turned back at Clez - walls 16, you
+  brought 6" when a **live** digest carries a `commander_blocked` for you.
+  **Without it that turn is completely silent**, and this is the
+  worst silence in the game: the commander stops before the border and its route
+  is *dropped*, so the turn has no movement and no ground changing hands,
+  `playback.build` correctly calls it quiet and declines to animate it, and a
+  live turn then marks it read. A player sends an order, watches the turn
+  resolve, and sees nothing whatsoever happen — repeatedly, because re-sending
+  the same order does the same thing. The digest row explaining it was already
+  there; nothing led anyone to it.
+
+  Two things it got wrong first, both found by instrumenting the running game
+  rather than by reading the code. It keyed off the digest's *latest turn*, and
+  the client polls every ten seconds while a turn can resolve faster than that -
+  so a live digest routinely carries two or three turns and the block is almost
+  never in the last one. And it set `self.flash` directly, which a playback then
+  covered: the transport stands the order bar down, and a turn carrying a block
+  usually carries something to animate too, so the message lived its whole four
+  seconds underneath. It is **held in `self.pending_block` and applied once
+  nothing is playing** - deferred rather than dropped, because a commander whose
+  route was dropped goes on standing there until it is given a new one.
+
+  Arrival digests are deliberately excluded: those already get a title card, a
+  replay and the report behind the turn card.
 - **A rival commander standing on a tile is no longer named on its card.**
   Their *face* is on the map marker now, which is what the wire always
   intended - but the card still says nothing about them.
@@ -2498,6 +2640,17 @@ will bite whoever touches them.
   desktop; a commander actually *under way* was not reachable in the
   session that built it, so the chevron's placement and rotation are
   argued rather than observed.
+- **The live turn playback has never been seen render.** The position rewind is
+  covered offline against a real 45-turn game (`tools/test_playback.lua`), the
+  `refresh` after an early resolution was watched working through the real
+  Nakama, and the build is clean - but the `TURN NN` card, the walk, the chained
+  cards and the auto-close are argued rather than observed. Two attempts lost
+  the staged order to the turn timer between staging and sending, so the batch
+  went as empty and nothing moved. To reproduce, stage and SEND inside one turn
+  interval: `drive.py state` reports `staged_orders`, the commander face in the
+  strip sits around framebuffer (126, 320) and SEND around (1050, 1943) at a
+  1440x2102 window, and input must go to the engine service port *directly* -
+  the other one redirects and downgrades POST to GET.
 - **Only one commander's rack is shown when two are standing on the same tile.**
 - **Half of each race is still inert.** `modifiers.of` folds speed, hops, vision,
   attack and defence; growth, industry, research, capacity and the cost keys are

@@ -91,18 +91,100 @@ local function undo_turn(owners, bucket)
 	end
 end
 
+--- Undo one turn's *movement*, newest first.
+--
+-- The same reversibility the ownership rewind rests on, applied to where people
+-- were standing. Three kinds move an officer, and every one of them records
+-- what it moved them from:
+--
+--   `commander_moved`    `from` is the tile the march began on
+--   `commander_broken`   `lost` is the tile they were thrown off
+--   `recruited`          they did not exist yet, so they leave the table
+--
+-- Nothing else can move anybody - a purchase, a transfer, a build all happen
+-- where the commander already is - which is what makes this exact rather than a
+-- reconstruction that is usually right.
+--
+-- **Only officers already in the table are touched.** `contact_moved` carries a
+-- rival's commander id in the same global id space, and answering it here would
+-- invent an entry for somebody whose position the client was never told.
+local function undo_positions(where, bucket)
+	for i = #bucket, 1, -1 do
+		local event = bucket[i]
+		local id = event.commander
+		if id and where[id] ~= nil then
+			if event.kind == "commander_moved" then
+				where[id] = event.from
+			elseif event.kind == "commander_broken" then
+				where[id] = event.lost
+			elseif event.kind == "recruited" then
+				where[id] = nil
+			end
+		end
+	end
+end
+
+--- Your officers as they stood during one turn, in id order.
+--
+-- **One entry each, marching or not.** A marker that only exists on the turns
+-- its officer moved blinks out of the map for whole stretches of a replay,
+-- which reads as the game having lost track of them rather than as a commander
+-- standing still.
+--
+-- Sorted rather than left to `pairs`: the caller draws them in this order and
+-- binds a pooled node per officer, and an unspecified order would shuffle both
+-- the draw order and the overlap nudge from one frame to the next.
+local function actors_at(standing, roster, marched, you)
+	local ids = {}
+	for id in pairs(standing or {}) do ids[#ids + 1] = id end
+	table.sort(ids)
+
+	local out = {}
+	for i = 1, #ids do
+		local id = ids[i]
+		local known = roster[id] or {}
+		local march = marched[id]
+		if march then
+			out[#out + 1] = {
+				id = id, player = march.player or you,
+				at = march.at, from = march.from, path = march.path or {},
+				name = march.name or known.name,
+				rank = march.rank or known.rank,
+				portrait = march.portrait or known.portrait,
+				moved = true,
+			}
+		else
+			out[#out + 1] = {
+				id = id, player = you,
+				-- Standing still, said in the same shape as a march so the caller
+				-- needs no second case: it is already where it is going, and the
+				-- empty path is what says there is nothing to walk.
+				at = standing[id], from = standing[id], path = {},
+				name = known.name, rank = known.rank, portrait = known.portrait,
+				moved = false,
+			}
+		end
+	end
+	return out
+end
+
 --- Build a timeline from a digest.
 --
 -- @param digest   { events = , you = , turn = } as `game.state` returns it
 -- @param tiles  the projection's tiles table, keyed by *string* id
+-- @param commanders  `view.commanders` - your officers as they stand today,
+--   which the position rewind runs backwards from. Left out, every march is
+--   still described; what is lost is being able to say where an officer who
+--   did not move that turn was standing.
 -- @return array of steps oldest first, each:
 --   turn      the turn number
 --   owners    who held what at the **start** of the turn, keyed by number
 --   moves     { player, commander, from, path, mine } - a march, or a sighting
+--   actors    your officers, one entry each, marching or not, in id order
 --   changes   { at, to, from, battle } - ownership, in the order it happened
 --   battles   { at, player, against, resistance }
 --   quiet     true when nothing at all happened
-function M.build(digest, tiles)
+function M.build(digest, tiles, commanders)
 	local events = (digest and digest.events) or {}
 	local turns, order = by_turn(events)
 
@@ -115,13 +197,35 @@ function M.build(digest, tiles)
 		if id then owners[id] = sys.owner or 0 end
 	end
 
+	-- And where your officers stand today, which the position rewind runs
+	-- backwards from exactly as the ownership rewind runs backwards from the
+	-- map above. Both seeds are the present, so the newest end of the timeline
+	-- is always exact and any error is at the far end of a forty-turn catch-up.
+	--
+	-- **Yours only.** `view.contacts` deliberately carries no id - you see an
+	-- army, not a plan - so a rival has no key to wind back against, which is
+	-- the right answer anyway: a sighting is only the stretch of a march that
+	-- was inside your detection range, and is meant to start and stop in
+	-- mid-air.
+	local where, roster = {}, {}
+	for i = 1, #(commanders or {}) do
+		local c = commanders[i]
+		if c.id then
+			where[c.id] = c.at
+			roster[c.id] = c
+		end
+	end
+	local you = digest and digest.you
+
 	-- Wind backwards to the start of the earliest turn in the digest, keeping
 	-- the snapshot each turn opened with on the way past.
-	local opening = {}
+	local opening, standing = {}, {}
 	for i = #order, 1, -1 do
 		local turn = order[i]
 		undo_turn(owners, turns[turn])
+		undo_positions(where, turns[turn])
 		opening[turn] = copy(owners)
+		standing[turn] = copy(where)
 	end
 
 	local steps = {}
@@ -138,9 +242,15 @@ function M.build(digest, tiles)
 		-- from them. Tile names live on the realm and province names on the
 		-- events; neither belongs in here.
 		step.events = bucket
+		-- Who marched, so a stationary officer can be told from a marching one
+		-- without walking the bucket twice.
+		local marched = {}
 		for k = 1, #bucket do
 			local e = bucket[k]
 			if e.kind == "commander_moved" or e.kind == "contact_moved" then
+				if e.kind == "commander_moved" and e.commander then
+					marched[e.commander] = e
+				end
 				step.moves[#step.moves + 1] = {
 					player = e.player, commander = e.commander,
 					from = e.from, path = e.path or {},
@@ -161,6 +271,10 @@ function M.build(digest, tiles)
 		-- Applied to a copy, because `step.owners` *is* `opening[turn]` and has
 		-- to keep saying what the map looked like before the turn played. The
 		-- next step's snapshot is the state after.
+		-- Everyone of yours, standing where the turn opened on them. This is
+		-- what makes a replay draw the same set of officers on every step
+		-- instead of only the ones with something to do.
+		step.actors = actors_at(standing[turn], roster, marched, you)
 		step.changes = apply_turn(copy(opening[turn] or {}), bucket)
 		step.quiet = #step.moves == 0 and #step.changes == 0
 		steps[#steps + 1] = step

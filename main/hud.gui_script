@@ -50,6 +50,13 @@ local MARKER_PIP = 16
 
 -- How far apart two army markers must stay on screen before one is nudged.
 local MARKER_CLEARANCE = 46
+-- How far a marker reaches from its own centre: the ring, and the caption
+-- hanging below it. Culling on the bare centre point - which is what this did -
+-- blinked an officer out of existence while most of the disc was still on
+-- screen, and the band it is culled against moves by the whole height of the
+-- tile sheet the moment a tile is selected. The routes have always had this
+-- slack; the markers never did.
+local MARKER_REACH = 46
 local ROUTE_WIDTH = 3
 local ROUTE_NODE = 9
 
@@ -146,6 +153,16 @@ local PLAYBACK_H = 236
 -- forty turns is under a minute at 1x and a few seconds at 4x.
 local PLAYBACK_BASE = 0.9
 local PLAYBACK_SPEEDS = { 1, 2, 4 }
+-- How long a live turn's card is held. The first one announces that something
+-- is about to happen; the ones between chained turns only have to say which
+-- turn this is.
+local LIVE_CARD = 1.0
+local LIVE_CARD_CHAINED = 0.6
+-- How far a finger may travel and still count as "give me the map back". The
+-- same job `gestures.lua` does with `tap_slop`, in the one place that cannot
+-- ask it: the recogniser never sees these touches, because the replay has
+-- published the whole screen as its own.
+local PB_TAP_SLOP = 24
 -- Close enough that a commander crossing a tile is a thing you can watch. The map
 -- opens at the fit zoom, where the whole realm is on screen and a marker is
 -- four pixels wide - which is fine for reading borders and useless for
@@ -233,9 +250,104 @@ local function publish_zones(self)
 	if self.bar_zone then zones[#zones + 1] = self.bar_zone end
 	if self.commander_zone then zones[#zones + 1] = self.commander_zone end
 	if self.zoom_zone then zones[#zones + 1] = self.zoom_zone end
-	if self.pb_zone then zones[#zones + 1] = self.pb_zone end
+	if self.pb and self.pb.live then
+		-- No transport to own the touch, so the replay owns the screen. The
+		-- camera declines any gesture starting inside a published zone, which
+		-- is what stops a tap reaching `pick_tile` and a drag panning the map
+		-- out from under the thing it is showing. Computed here rather than
+		-- stored, so a window change cannot leave a stale rectangle behind.
+		zones[#zones + 1] = { 0, 0, store.screen.width, store.screen.height }
+	elseif self.pb_zone then
+		zones[#zones + 1] = self.pb_zone
+	end
 	if self.sheet_zone then zones[#zones + 1] = self.sheet_zone end
 	store.hud_zones = zones
+end
+
+--- World position to screen, the same relationship the render script builds its
+--- projection from. Everything the HUD draws over the map goes through this.
+local function project(cam, w, h, wx, wy)
+	return (wx - cam.x) * cam.zoom + w * 0.5, (wy - cam.y) * cam.zoom + h * 0.5
+end
+
+--- A title card over the map, held for a moment and then gone.
+--
+-- **Arriving is not a changelog.** The digest used to open as a list the moment
+-- a player came back to a game, which is a wall of forty rows in front of a map
+-- they have not seen yet - and the thing they actually want to know, where the
+-- war moved, is a shape rather than a sentence. So the list is no longer the
+-- greeting: this says what is about to happen, then the replay says what
+-- happened.
+--
+-- Its own node list, deleted rather than hidden: it exists for a second and a
+-- half of the session and should not survive a relayout in the wrong place.
+local TITLE_SECONDS = 1.5
+local TITLE_FADE = 0.4
+
+local function title_clear(self)
+	if self.title_nodes then ui.region(nil, self.title_nodes) end
+	self.title_nodes = nil
+	self.title_alpha = nil
+	self.title_timer = nil
+	self.title_then = nil
+	self.title_held = nil
+	self.title_fade = nil
+end
+
+--- @param seconds  how long to hold it, defaulting to the arrival card's 1.5.
+---   A turn announcing itself between two animations gets far less: a second
+---   and a half of scrim between them reads as the replay having stalled.
+local function title_card(self, w, h, heading, detail, then_do, seconds)
+	title_clear(self)
+	self.title_nodes = {}
+	self.title_alpha = {}
+	local previous = ui.collect(self.title_nodes)
+	-- **A scrim, because the map is behind it.** Province names are set large and
+	-- pale and land exactly where a centred caption does; without something to
+	-- sit on, the two read as one sentence.
+	local scrim = ui.sprite(0, h, w, h, "solid", ui.BG)
+	gui.set_color(scrim, vmath.vector4(ui.BG.x, ui.BG.y, ui.BG.z, 0.82))
+	local y = h * 0.5
+	ui.text(w * 0.5, y + 18, heading:upper(), ui.H2, ui.TEXT,
+		{ pivot = gui.PIVOT_CENTER, bold = true, tracking = 0.10 })
+	if detail then
+		ui.small(w * 0.5, y - 26, detail, ui.DIM, { pivot = gui.PIVOT_CENTER })
+	end
+	ui.collect(previous)
+	for i = 1, #self.title_nodes do
+		self.title_alpha[i] = gui.get_color(self.title_nodes[i]).w
+	end
+	self.title_timer = 0
+	self.title_then = then_do
+	self.title_held = seconds or TITLE_SECONDS
+	-- The fade has to fit inside the card. A fixed 0.4 s is a quarter of the
+	-- arrival card and two thirds of a chained one, where it would read as a
+	-- caption that was never fully there.
+	self.title_fade = math.min(TITLE_FADE, self.title_held * 0.35)
+end
+
+local function title_update(self, dt)
+	if not self.title_timer then return end
+	self.title_timer = self.title_timer + dt
+	-- Faded out on the way, so the replay does not start behind a caption. Each
+	-- node fades from whatever it was, or the scrim would brighten to full on
+	-- its way out.
+	local held = self.title_held or TITLE_SECONDS
+	local fade = self.title_fade or TITLE_FADE
+	local left = held - self.title_timer
+	if left < fade then
+		local k = math.max(0, left / fade)
+		for i = 1, #self.title_nodes do
+			local c = gui.get_color(self.title_nodes[i])
+			gui.set_color(self.title_nodes[i],
+				vmath.vector4(c.x, c.y, c.z, (self.title_alpha[i] or 1) * k))
+		end
+	end
+	if self.title_timer >= held then
+		local then_do = self.title_then
+		title_clear(self)
+		if then_do then then_do() end
+	end
 end
 
 -- Playback -----------------------------------------------------------------------
@@ -312,7 +424,26 @@ local function playback_look(self, step)
 	end
 	for i = 1, #step.changes do add(step.changes[i].at) end
 	if n == 0 then return end
-	msg.post("camera#camera_script", "focus", { x = sx / n, y = sy / n })
+	local x, y = sx / n, sy / n
+
+	-- **A live turn only moves the camera when it has to.** An arrival digest
+	-- is days old and the player had chosen nothing, so framing each turn is
+	-- the whole service. A turn landing while they watch is the other case:
+	-- they set this view deliberately, and hauling it somewhere else twice a
+	-- turn takes away the thing `pb_camera` exists to give back. So intervene
+	-- only when the alternative is watching something off the edge of the
+	-- band - the same rule the tile sheet's own lift already keeps.
+	if self.pb and self.pb.live then
+		local cam = store.camera
+		local w, h = store.screen.width, store.screen.height
+		local px, py = project(cam, w, h, x, y)
+		local margin = 60
+		if px > margin and px < w - margin
+			and py > self.floor_y + margin and py < self.ceiling_y - margin then
+			return
+		end
+	end
+	msg.post("camera#camera_script", "focus", { x = x, y = y })
 end
 
 local function playback_publish(self)
@@ -326,6 +457,11 @@ end
 local function playback_stop(self)
 	if not self.pb then return end
 	self.pb = nil
+	-- A live turn announces each step with a card, so leaving - or a second
+	-- digest arriving - can catch one on screen with a callback pointing at a
+	-- playback that no longer exists. The callback is guarded as well, but a
+	-- caption left hanging over the map is its own fault.
+	title_clear(self)
 	store.playback_active = false
 	-- Back to today. The live view has been correct the whole time; only the
 	-- two ownership layers were being drawn from the past.
@@ -359,11 +495,36 @@ local function playback_stop(self)
 	publish_zones(self)
 end
 
+--- Announce the turn about to play, and hold it there until the card is gone.
+--
+-- The card *is* the pause: nothing advances behind it, and its callback is the
+-- only thing that sets the step running. So a live digest carrying two turns
+-- reads as `TURN 11`, a march, `TURN 12`, a march - each one named, rather than
+-- two turns of movement running together into one confusing sweep.
+local function playback_card(self, seconds)
+	local p = self.pb
+	if not p then return end
+	p.playing = false
+	p.elapsed = 0
+	local step = p.steps[p.index]
+	if not step then return end
+	title_card(self, store.screen.width, store.screen.height,
+		"Turn " .. tostring(step.turn), nil,
+		-- Guarded on identity, not on existence: a relayout fires this the
+		-- instant the safe-area insets land (see `update`), and the player can
+		-- leave, or a second digest can start, in the second it is up.
+		function() if self.pb == p then p.playing = true end end,
+		seconds)
+end
+
 --- Begin watching a digest. Returns false if there is nothing to watch.
 local function playback_start(self, digest)
 	local view = store.game_view
 	if not view then return false end
-	local steps, final = playback.build(digest, view.tiles)
+	-- The roster goes with the map: `playback.build` winds ownership back from
+	-- today's tiles and positions back from today's officers, so both seeds are
+	-- the present and both ends of the timeline are exact.
+	local steps, final = playback.build(digest, view.tiles, view.commanders)
 	if #steps == 0 then return false end
 	-- Forty turns of "nothing moved" is the list this replaces, only slower.
 	-- A playback has to have something in it to be worth watching, so a digest
@@ -382,7 +543,16 @@ local function playback_start(self, digest)
 	self.sheet_dirty = true
 	self.pb = {
 		steps = steps, final = final, index = 1, elapsed = 0,
-		playing = true, speed = 1, you = digest.you or (view and view.you) or 0,
+		-- A live turn opens behind its own card and starts when the card is
+		-- done; an arrival digest has already had one and plays straight away.
+		playing = not digest.live, speed = 1,
+		you = digest.you or (view and view.you) or 0,
+		-- **The whole of what makes a live turn different.** It is a flag
+		-- rather than a second implementation, because the thing being shown
+		-- is identical and only the chrome and the ending are not: a turn you
+		-- watched land wants announcing and then getting out of the way, and a
+		-- fortnight you missed wants a timeline you can operate.
+		live = digest.live and true or false,
 		-- Kept so the transport can hand it to the list. A replay is better at
 		-- "where did the war move"; the log is better at "what exactly did that
 		-- battle cost", and there is no reason to make the player choose once.
@@ -395,11 +565,23 @@ local function playback_start(self, digest)
 			x = store.camera.x, y = store.camera.y, zoom = store.camera.zoom,
 		}
 	end
-	msg.post("camera#camera_script", "zoom_level", { zoom = PLAYBACK_ZOOM })
+	-- **Closer, never further out.** An arrival digest opens at the fit zoom,
+	-- where a marker is four pixels wide, so framing it is the whole service.
+	-- A player watching a turn land has already chosen a view, and one sitting
+	-- closer than this does not want pulling back from it.
+	if not digest.live or store.camera.zoom < PLAYBACK_ZOOM then
+		msg.post("camera#camera_script", "zoom_level", { zoom = PLAYBACK_ZOOM })
+	end
 	playback_publish(self)
 	self.commander_key = nil
 	self.label_dirty = true
 	self.pb_layout = nil
+	-- A live turn publishes the whole screen as its own; an arrival digest
+	-- publishes the transport once it is built. Either way the zones have to be
+	-- right from the first frame, or the touch that started this can pan the
+	-- map before anything is drawn on it.
+	publish_zones(self)
+	if digest.live then playback_card(self, LIVE_CARD) end
 	return true
 end
 
@@ -737,9 +919,15 @@ local function build_commanders(self, w, h, pad)
 	self.commander_nodes = {}
 
 	local view = store.game_view
-	-- Nobody is in the field during a replay: the strip is today's roster, and
-	-- the markers on the map are the ones the log recorded.
-	local armies = (not self.pb and view and view.commanders) or {}
+	-- Nobody is in the field during an *arrival* replay: the strip is today's
+	-- roster and the digest is days old, so the faces would describe a map
+	-- nobody is looking at. A turn playing out live is the other case - the
+	-- roster on screen is the one this turn has just produced - and blanking it
+	-- for two seconds is chrome popping in and out for nothing. It also holds
+	-- `ceiling_y` still, and a band that moves under a marker is one more way
+	-- for a marker to vanish halfway through walking.
+	local past = self.pb and not self.pb.live
+	local armies = (not past and view and view.commanders) or {}
 	self.commander_zone = nil
 	self.commander_w, self.commander_h = w, h
 	if #armies == 0 then
@@ -1676,20 +1864,40 @@ local function playback_update(self, dt)
 		p.elapsed = p.elapsed + dt * p.speed
 		local held = playback.duration(p.steps[p.index], PLAYBACK_BASE)
 		if p.elapsed >= held then
-			p.elapsed = 0
 			if p.index >= #p.steps then
+				-- **Held at the end, not rewound to the start.** `elapsed` used
+				-- to be zeroed here as well, and since the index does not
+				-- advance, `update_commanders` recomputed the step from the
+				-- beginning: every marker snapped back to the tile it set out
+				-- from and froze there until DONE was tapped. Clamping leaves
+				-- the walk finished, which is where the officers actually are.
+				p.elapsed = held
 				-- Stop on the last turn rather than closing: the player has
 				-- just been shown something and may want to scrub back through
 				-- it. DONE is how they leave.
 				p.playing = false
 				self.pb_layout = nil
 			else
+				p.elapsed = 0
 				p.index = p.index + 1
 				playback_publish(self)
 				self.label_dirty = true
 				self.pb_layout = nil
+				-- Each turn names itself. Briefly - the player is mid-replay
+				-- and only needs to know which turn this is.
+				if p.live then playback_card(self, LIVE_CARD_CHAINED) end
 			end
 		end
+	end
+	-- **A live turn closes itself.** There is no transport to leave up and
+	-- nothing to scrub back through: the player was watching, so when it is
+	-- over it is over and the map is theirs again.
+	if p.live then
+		if not p.playing and p.index >= #p.steps and not self.title_timer then
+			playback_stop(self)
+			return false
+		end
+		return true
 	end
 	-- Rebuilt on a change, not per frame: the caption, the scrub position and
 	-- the button captions are the only things that move, and all of them change
@@ -1700,12 +1908,6 @@ local function playback_update(self, dt)
 		build_playback_bar(self, store.screen.width, store.screen.height, self.pad)
 	end
 	return true
-end
-
---- World position to screen, the same relationship the render script builds its
---- projection from. Everything the HUD draws over the map goes through this.
-local function project(cam, w, h, wx, wy)
-	return (wx - cam.x) * cam.zoom + w * 0.5, (wy - cam.y) * cam.zoom + h * 0.5
 end
 
 --- Draw the path a force will actually take.
@@ -1725,7 +1927,11 @@ end
 local function update_routes(self, g, cam, w, h)
 	local view = store.game_view
 	local used = 0
-	if not view then
+	-- **Nothing during a replay.** Both kinds of route describe the present -
+	-- a committed one is where a force is going *now*, a staged one is a plan
+	-- for a turn that has not happened - and drawing either across a map
+	-- showing a turn that already resolved is the map contradicting itself.
+	if not view or self.pb then
 		for i = 1, ROUTE_POOL do
 			gui.set_enabled(self.route_nodes[i].bar, false)
 			gui.set_enabled(self.route_nodes[i].dot, false)
@@ -1829,15 +2035,31 @@ end
 -- GUI nodes rather than world geometry: a marker wants to stay a constant size
 -- at every zoom and to carry a crisp glyph, which is what the labels already do.
 -- It also avoids rebuilding a vertex buffer whenever an army moves.
+--
+-- **A pool node belongs to an officer, not to a loop counter.** Slots used to be
+-- handed out in iteration order, so the node an officer was drawn on changed
+-- whenever the drawn set did - which is exactly what happens at the boundary
+-- between the live map and a replay, and between two steps of one. The
+-- `portrait_id` cache then re-played a flipbook on a node that had been somebody
+-- else, and the overlap nudge measured against a marker belonging to a different
+-- commander. `self.marker_slots` keeps the binding across frames.
 local function update_commanders(self, g, cam, w, h)
 	local view = store.game_view
-	local used = 0
+
+	-- Which node each officer had last frame, and which they get this one. A
+	-- key that was drawn before keeps its node; anything new takes the first
+	-- free one. Rebuilt rather than accumulated, so a commander that is gone for
+	-- good does not hold a slot for the rest of the session.
+	local prior = self.marker_slots or {}
+	local slots, taken = {}, {}
+	local placed = {}
+
 	if view then
 
+		--- @param key   who this marker is, so it keeps the same node next frame
 		--- @param portrait  the officer's own face, as the wire reports it
 		--- @param frac  how far along the tile toward `next_hop`, for a replay
-		local function place(at, next_hop, label, colour, mine, portrait, frac)
-			if used >= COMMANDER_POOL then return end
+		local function place(key, at, next_hop, label, colour, mine, portrait, frac)
 			local a = g.tiles[at]
 			if not a then return end
 			-- On the tile, pointed at the one it leaves for next. Movement is
@@ -1857,7 +2079,16 @@ local function update_commanders(self, g, cam, w, h)
 				wy = a.y + (b.y - a.y) * frac
 			end
 			local sx, sy = project(cam, w, h, wx, wy)
-			if sx < -60 or sx > w + 60 or sy < self.floor_y or sy > self.ceiling_y then
+			-- Culled on the marker's own extent, not on the bare centre point.
+			-- `floor_y` moves by the whole height of the tile sheet when a tile
+			-- is selected, so a centre-point test blinked an officer out of
+			-- existence while most of the disc was still on screen. The chrome
+			-- is created after these nodes and therefore draws over them, so a
+			-- marker that reaches under a panel is hidden by it rather than
+			-- floating on top.
+			if sx < -MARKER_REACH or sx > w + MARKER_REACH
+				or sy < self.floor_y - MARKER_REACH
+				or sy > self.ceiling_y + MARKER_REACH then
 				return
 			end
 
@@ -1865,8 +2096,8 @@ local function update_commanders(self, g, cam, w, h)
 			-- placed. At fit zoom - the only zoom reachable without a pinch -
 			-- neighbouring tiles are a few units apart, and two markers there
 			-- become one unreadable knot of triangles and numbers.
-			for prior = 1, used do
-				local other = self.commander_markers[prior]
+			for i = 1, #placed do
+				local other = placed[i]
 				local dx = sx - other.at_x
 				local dy = sy - other.at_y
 				if dx * dx + dy * dy < MARKER_CLEARANCE * MARKER_CLEARANCE then
@@ -1874,7 +2105,7 @@ local function update_commanders(self, g, cam, w, h)
 					if away < 0.001 then
 						-- Exactly co-located: fan around the first one instead
 						-- of dividing by nothing.
-						local turn = prior * 2.4
+						local turn = i * 2.4
 						dx, dy, away = math.cos(turn), math.sin(turn), 1
 					end
 					sx = other.at_x + dx / away * MARKER_CLEARANCE
@@ -1882,9 +2113,21 @@ local function update_commanders(self, g, cam, w, h)
 				end
 			end
 
-			used = used + 1
-			local marker = self.commander_markers[used]
+			-- The node this officer had last frame, or the first free one.
+			local index = prior[key]
+			if not index or taken[index] then
+				index = nil
+				for i = 1, COMMANDER_POOL do
+					if not taken[i] then index = i break end
+				end
+			end
+			if not index then return end
+			taken[index] = true
+			slots[key] = index
+
+			local marker = self.commander_markers[index]
 			marker.at_x, marker.at_y = sx, sy
+			placed[#placed + 1] = marker
 			gui.set_enabled(marker.face, true)
 			gui.set_enabled(marker.ring, true)
 			gui.set_enabled(marker.text, true)
@@ -1897,7 +2140,8 @@ local function update_commanders(self, g, cam, w, h)
 			gui.set_color(marker.text, colour)
 			gui.set_text(marker.text, label or "")
 			-- Only on a change: this runs every frame for up to COMMANDER_POOL
-			-- markers, and a marker's face changes about never.
+			-- markers, and a marker's face changes about never - which is only
+			-- true because the node belongs to one officer.
 			if marker.portrait_id ~= portrait then
 				marker.portrait_id = portrait
 				pcall(gui.play_flipbook, marker.face, portrait or "portrait_terran_01")
@@ -1934,6 +2178,18 @@ local function update_commanders(self, g, cam, w, h)
 			end
 		end
 
+		--- Where along its own path a marker is, `through` of the way into the
+		--- step. Whole legs, so a three-tile march reads as three tiles and not
+		--- as one long jump.
+		local function walk(from, path, through)
+			local legs = #path
+			if legs == 0 then return from, nil, nil end
+			local along = through * legs
+			local leg = math.min(legs, math.floor(along) + 1)
+			local start = (leg == 1) and from or path[leg - 1]
+			return start, path[leg], along - (leg - 1)
+		end
+
 		-- During a replay the markers are the ones the log recorded, not the
 		-- ones standing on the map today.
 		local p = self.pb
@@ -1941,50 +2197,71 @@ local function update_commanders(self, g, cam, w, h)
 			local step = p.steps[p.index]
 			local held = playback.duration(step, PLAYBACK_BASE)
 			local through = math.min(1, p.elapsed / math.max(0.0001, held))
+
+			-- **Your whole roster, every step.** `step.actors` names every
+			-- officer the rewind could place, marching or not, so a commander
+			-- with nothing to do this turn stands on its tile instead of
+			-- vanishing until it next moves. A stationary one has an empty path,
+			-- so `walk` hands back no next hop and it draws parked - no heading
+			-- pip, no pulse - exactly as it would on the live map.
+			for i = 1, #(step.actors or {}) do
+				local a = step.actors[i]
+				local start, hop, frac = walk(a.from, a.path, through)
+				place(a.id, start, hop, a.name or "", player_ink(a.player),
+					true, a.portrait, frac)
+			end
+
+			-- Then the rivals, which are sightings rather than officers: only
+			-- the stretch of a march that was inside your detection range, so
+			-- they start and stop in mid-air on purpose and exist only on the
+			-- steps they were seen on. `view.contacts` carries no id, so there
+			-- is nothing to give them a presence track with even if it were
+			-- honest to.
 			for i = 1, #step.moves do
 				local m = step.moves[i]
-				-- Spread the turn's whole path across the step, so a
-				-- three-tile march reads as three tiles and not one jump.
-				local legs = #m.path
-				local along = through * legs
-				local leg = math.min(legs, math.floor(along) + 1)
-				local from = (leg == 1) and m.from or m.path[leg - 1]
-				local label = m.mine and (m.name or "") or (m.rank or "")
-				place(from, m.path[leg], label, player_ink(m.player),
-					m.mine, m.portrait, along - (leg - 1))
+				if not m.mine then
+					local start, hop, frac = walk(m.from, m.path, through)
+					place("contact:" .. tostring(m.commander or i),
+						start, hop, m.rank or "", player_ink(m.player),
+						false, m.portrait, frac)
+				end
 			end
-			for i = used + 1, COMMANDER_POOL do
-				hide_marker(self.commander_markers[i])
+		else
+			local mine_colour = player_ink(view.you)
+			for i = 1, #view.commanders do
+				local f = view.commanders[i]
+				-- Name and strength: which commander, and what it can pay for. The
+				-- rank is on the strip and the sheet; the number is the one thing
+				-- that has to be readable while looking at the map.
+				-- Name and what it brings to an army fight - the number that decides
+				-- whether the marker beside it can be taken on.
+				place(f.id, f.at, f.next_hop,
+					f.name .. "  " .. tostring(f.army_power or 0), mine_colour, true,
+					f.portrait)
 			end
-			return
-		end
-
-		local mine_colour = player_ink(view.you)
-		for i = 1, #view.commanders do
-			local f = view.commanders[i]
-			-- Name and strength: which commander, and what it can pay for. The
-			-- rank is on the strip and the sheet; the number is the one thing
-			-- that has to be readable while looking at the map.
-			-- Name and what it brings to an army fight - the number that decides
-			-- whether the marker beside it can be taken on.
-			place(f.at, f.next_hop,
-				f.name .. "  " .. tostring(f.army_power or 0), mine_colour, true,
-				f.portrait)
-		end
-		for i = 1, #view.contacts do
-			local c = view.contacts[i]
-			-- A rival's number without their rank, which would be twice the
-			-- width for a Grand Admiral and is a tap away on the sheet.
-			-- Their face is public and always was - realm/sim/view.lua has put
-			-- it on the wire since contacts existed, and nothing drew it. It is
-			-- how a player learns *whose* army is on their border without being
-			-- handed the officer's name.
-			place(c.at, c.next_hop, tostring(c.army_power or 0),
-				player_ink(c.owner), false, c.portrait)
+			for i = 1, #view.contacts do
+				local c = view.contacts[i]
+				-- A rival's number without their rank, which would be twice the
+				-- width for a Grand Admiral and is a tap away on the sheet.
+				-- Their face is public and always was - realm/sim/view.lua has put
+				-- it on the wire since contacts existed, and nothing drew it. It is
+				-- how a player learns *whose* army is on their border without being
+				-- handed the officer's name.
+				--
+				-- Keyed by where they are, because a contact has no id: it is the
+				-- best stable name available, and a sighting that moves to a new
+				-- tile is a new marker rather than the same one gliding, which is
+				-- all the wire ever claimed.
+				place("contact:" .. tostring(c.at), c.at, c.next_hop,
+					tostring(c.army_power or 0),
+					player_ink(c.owner), false, c.portrait)
+			end
 		end
 	end
-	for i = used + 1, COMMANDER_POOL do
-		hide_marker(self.commander_markers[i])
+
+	self.marker_slots = slots
+	for i = 1, COMMANDER_POOL do
+		if not taken[i] then hide_marker(self.commander_markers[i]) end
 	end
 end
 
@@ -2329,6 +2606,12 @@ local function submit_orders(self)
 		print(string.format("realm: %d order(s) accepted for turn %s%s",
 			res.accepted or 0, tostring(res.for_turn),
 			(res.resolved or 0) > 0 and " (resolved immediately)" or ""))
+		-- The send ran the turn as well as ending it, so there is a digest
+		-- waiting and the poll is up to ten seconds away - at the one moment
+		-- the player is certainly watching. Ask for it now.
+		if (tonumber(res.resolved) or 0) > 0 then
+			msg.post("/realm#realm_script", "refresh", {})
+		end
 		store.plan_sent(tonumber(res.for_turn) or store.orders_turn)
 		store.turn_ended = tonumber(res.for_turn) or true
 		store.aiming = nil
@@ -2456,6 +2739,29 @@ end
 local function refresh_bar(self, g)
 	local game = store.game
 	local in_game = (game and game.status == "active") and true or false
+
+	-- **A turn playing out owns the screen for a second or two.** The bar does
+	-- not move - shifting it would shift the map underneath it - but nothing on
+	-- it is offered, because "I tapped it and nothing happened" is the exact
+	-- complaint SEND's four states exist to answer, and a live-looking control
+	-- that cannot be pressed is the same fault wearing different clothes.
+	if self.pb and self.pb.live then
+		self.cancel.set_visible(false)
+		self.send.set_visible(true)
+		self.send.set_enabled(false)
+		self.send.set_style("disabled")
+		gui.set_text(self.status, "")
+		-- Once, on the way in. The turn resolving consumed the plan, so the
+		-- lines still on the card describe orders that have already happened -
+		-- and this is the last moment it is safe to resize the bar, because the
+		-- band the camera clamps against is measured from it.
+		if self.manifest_key ~= "|live" then
+			self.manifest_key = "|live"
+			refresh_manifest(self, {}, true)
+			layout_bar(self, -1)
+		end
+		return
+	end
 
 	local aiming = store.aiming ~= nil
 	self.cancel.set_visible(in_game and aiming)
@@ -2619,77 +2925,59 @@ end
 
 function final(self)
 	drop_ghost(self)
-	if self.sheet_druid then self.sheet_druid:final() end
-	if self.commander_druid then self.commander_druid:final() end
-	if self.chrome_druid then self.chrome_druid:final() end
+	ui.dismiss(self.sheet_druid)
+	ui.dismiss(self.commander_druid)
+	ui.dismiss(self.chrome_druid)
 	store.hud_zones = {}
 end
 
---- A title card over the map, held for a moment and then gone.
+--- Say it when a commander was turned back, because nothing else will.
 --
--- **Arriving is not a changelog.** The digest used to open as a list the moment
--- a player came back to a game, which is a wall of forty rows in front of a map
--- they have not seen yet - and the thing they actually want to know, where the
--- war moved, is a shape rather than a sentence. So the list is no longer the
--- greeting: this says what is about to happen, then the replay says what
--- happened.
+-- **This is the one outcome the map cannot show.** A commander that cannot beat
+-- both halves stops *before* the border and its route is dropped, so the turn
+-- produces no movement and no ground changing hands - which `playback.build`
+-- correctly calls a quiet turn and declines to animate, and which a live turn
+-- then marks read. The player is left having sent an order, watched the turn
+-- resolve, and seen nothing whatsoever happen; the digest carries a row saying
+-- why, but only inside a digest they now have no reason to open.
 --
--- Its own node list, deleted rather than hidden: it exists for a second and a
--- half of the session and should not survive a relayout in the wrong place.
-local TITLE_SECONDS = 1.5
-local TITLE_FADE = 0.4
+-- **Live digests only, and the most recent block in one.** A digest you
+-- *arrived* to already gets a title card, a replay and the report behind the
+-- turn card, so it has ways to tell you; the live case is the one with no
+-- channel at all. Tying this to the digest's latest *turn* instead was wrong:
+-- the client polls every ten seconds and a turn resolves faster than that, so a
+-- live digest routinely carries two or three turns and the block is almost
+-- never in the last one. Measured, it fired for none of them.
+local function blocked_notice(self, digest)
+	if not (digest and digest.live) then return end
+	local view = store.game_view
+	local you = view and view.you
+	local events = digest.events
+	if not (you and events) then return end
 
-local function title_clear(self)
-	if self.title_nodes then ui.region(nil, self.title_nodes) end
-	self.title_nodes = nil
-	self.title_alpha = nil
-	self.title_timer = nil
-	self.title_then = nil
-end
-
-local function title_card(self, w, h, heading, detail, then_do)
-	title_clear(self)
-	self.title_nodes = {}
-	self.title_alpha = {}
-	local previous = ui.collect(self.title_nodes)
-	-- **A scrim, because the map is behind it.** Province names are set large and
-	-- pale and land exactly where a centred caption does; without something to
-	-- sit on, the two read as one sentence.
-	local scrim = ui.sprite(0, h, w, h, "solid", ui.BG)
-	gui.set_color(scrim, vmath.vector4(ui.BG.x, ui.BG.y, ui.BG.z, 0.82))
-	local y = h * 0.5
-	ui.text(w * 0.5, y + 18, heading:upper(), ui.H2, ui.TEXT,
-		{ pivot = gui.PIVOT_CENTER, bold = true, tracking = 0.10 })
-	if detail then
-		ui.small(w * 0.5, y - 26, detail, ui.DIM, { pivot = gui.PIVOT_CENTER })
-	end
-	ui.collect(previous)
-	for i = 1, #self.title_nodes do
-		self.title_alpha[i] = gui.get_color(self.title_nodes[i]).w
-	end
-	self.title_timer = 0
-	self.title_then = then_do
-end
-
-local function title_update(self, dt)
-	if not self.title_timer then return end
-	self.title_timer = self.title_timer + dt
-	-- Faded out on the way, so the replay does not start behind a caption. Each
-	-- node fades from whatever it was, or the scrim would brighten to full on
-	-- its way out.
-	local left = TITLE_SECONDS - self.title_timer
-	if left < TITLE_FADE then
-		local k = math.max(0, left / TITLE_FADE)
-		for i = 1, #self.title_nodes do
-			local c = gui.get_color(self.title_nodes[i])
-			gui.set_color(self.title_nodes[i],
-				vmath.vector4(c.x, c.y, c.z, (self.title_alpha[i] or 1) * k))
+	for i = #events, 1, -1 do
+		local e = events[i]
+		if e.kind == "commander_blocked" and e.player == you then
+			-- **Which half turned them back**, because that is the whole of
+			-- what the player does next: bring siege, or bring an army. Same
+			-- wording as the digest row, so the two read as one explanation.
+			local detail
+			if (e.siege or 0) < (e.fortification or 0) then
+				detail = string.format("walls %d, you brought %d",
+					e.fortification or 0, e.siege or 0)
+			else
+				detail = string.format("army %d, you brought %d",
+					e.army or 0, e.army_power or 0)
+			end
+			-- **Held, not shown.** A playback stands the order bar down and
+			-- replaces it with the transport, and a turn that carries a block
+			-- usually carries something to animate as well - so setting the
+			-- flash here put it under the transport for the whole four seconds
+			-- it lives. It is applied in `update` once nothing is playing.
+			self.pending_block = string.format("%s was turned back at %s - %s",
+				e.name or "A commander", tile_name(e.blocked_by), detail)
+			return
 		end
-	end
-	if self.title_timer >= TITLE_SECONDS then
-		local then_do = self.title_then
-		title_clear(self)
-		if then_do then then_do() end
 	end
 end
 
@@ -2715,6 +3003,15 @@ function update(self, dt)
 	if self.pb_druid then self.pb_druid:update(dt) end
 	playback_update(self, dt)
 	title_update(self, dt)
+
+	-- The turned-back notice, once the map is free to show it. Deferred rather
+	-- than dropped: the commander is standing still with its route gone and
+	-- will keep standing there until it is given a new one, so this is the one
+	-- message worth waiting for a gap to deliver.
+	if self.pending_block and not self.pb and not self.title_timer then
+		self.flash, self.flash_timer = self.pending_block, 0
+		self.pending_block = nil
+	end
 
 	if self.flash then
 		self.flash_timer = self.flash_timer + dt
@@ -2776,6 +3073,11 @@ function update(self, dt)
 		--- card to offer in your own time.
 		local function watch(held)
 			store.pending_report = nil
+			-- Before the playback decides whether there is anything to show:
+			-- a turn where the only thing that happened is that you were
+			-- stopped has nothing to animate, and is exactly the turn that
+			-- most needs saying out loud.
+			blocked_notice(self, held)
 			local watched = playback_start(self, held)
 			if watched or held.live then
 				store.seen_turn = held.turn or store.seen_turn
@@ -2928,7 +3230,11 @@ function update(self, dt)
 		build_commanders(self, w, h, self.pad)
 	end
 
-	self.floor_y = self.pb
+	-- The transport is only built for an arrival digest, so only that one takes
+	-- the bottom of the screen. A live turn leaves the band exactly where it
+	-- was: the camera clamps against it, and moving it at the moment the map
+	-- starts animating slides the whole realm out from under the player.
+	self.floor_y = (self.pb and not self.pb.live)
 		and (self.pad.bottom + PLAYBACK_H)
 		or (self.pad.bottom + BAR_H + bar_extra(self) + self.sheet_height)
 	self.ceiling_y = h - self.pad.top - TOP_H - (self.commander_h or 0)
@@ -2979,6 +3285,38 @@ end
 function on_input(self, action_id, action)
 	if not self.chrome_druid then return false end
 	local converted = ui.gui_action(action)
+
+	-- **A live replay takes the whole screen, and a tap gives it back.**
+	--
+	-- Every Druid instance here is fed every action and the chrome is not
+	-- rebuilt for a playback, so without this a stray touch still reaches SEND
+	-- - which with nothing staged reads END TURN, sends an empty batch, and
+	-- both ends the turn and *replaces* whatever orders were already in. That
+	-- is the fault the transport's geometry gate was added for; a live turn has
+	-- no transport, so the gate is the screen.
+	--
+	-- Ending on a tap rather than swallowing it: three turns landing at once is
+	-- four or five seconds, and a player with no way out of a mode they did not
+	-- ask to enter is precisely what the aim flow was careful to avoid. A tap
+	-- on the map already means "give me the map back". A *drag* does not, so
+	-- the press position is kept and anything that travelled is left alone.
+	if self.pb and self.pb.live then
+		local x, y = converted.x, converted.y
+		if converted.touch and converted.touch[1] then
+			x, y = converted.touch[1].x, converted.touch[1].y
+		end
+		if action.pressed then
+			self.pb_press_x, self.pb_press_y = x, y
+		elseif action.released and x and y and self.pb_press_x then
+			local dx = x - self.pb_press_x
+			local dy = y - self.pb_press_y
+			self.pb_press_x, self.pb_press_y = nil, nil
+			if dx * dx + dy * dy < PB_TAP_SLOP * PB_TAP_SLOP then
+				playback_stop(self)
+			end
+		end
+		return true
+	end
 	-- Kept for the playback's scrub track: Druid's click callback carries no
 	-- position, so anything that needs one has to have been told.
 	local touch_x = converted.x

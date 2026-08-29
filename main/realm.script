@@ -208,6 +208,12 @@ end
 -- to be in place before the meshes are built - the fog decides how every layer
 -- is shaded, so building first and re-shading after would mean doing it twice.
 local function load_game(self, game_id, silent)
+	-- **One request at a time.** `since_poll` is reset before the request goes
+	-- out, so a slow response used to leave two in flight - and whichever
+	-- *returned* last won the assignment below. A late turn-N reply landing
+	-- after turn-N+1 put every commander back on the tile it had already left,
+	-- which reads exactly like the map undoing the turn it just showed.
+	if self.fetching then return end
 	if not silent then store.status = "loading game..." end
 
 	-- How far this device has read *this* game's digest. Held per game and
@@ -217,10 +223,23 @@ local function load_game(self, game_id, silent)
 		store.seen_turn = seen.get(game_id)
 	end
 
+	self.fetching = true
 	backend.game_state(game_id, store.seen_turn, function(res, err)
+		self.fetching = false
 		if err then
 			store.status = nil
 			print("realm: could not load game (" .. tostring(err) .. ")")
+			return
+		end
+
+		-- **Never backwards.** The guard above makes two in-flight requests
+		-- rare rather than impossible - a `refresh` can still overtake a poll
+		-- that was already out - and a response describing a turn we have
+		-- already presented has nothing to add and a stale view to impose. The
+		-- same rule `seen.set` keeps for the read cursor.
+		local arrived = (res.view and res.view.turn) or 0
+		if self.presented_turn and arrived < self.presented_turn
+			and self.realm_seed == res.game.seed then
 			return
 		end
 
@@ -404,6 +423,19 @@ function final(self)
 end
 
 function on_message(self, message_id, message)
+	-- A turn resolved inside the send that ended it. `game.orders` runs
+	-- `catch_up` before it answers, so in a game against bots - where nobody
+	-- else has to submit - the turn is already over by the time SEND comes
+	-- back, and waiting out the ten-second poll leaves the player looking at a
+	-- map that has moved on without it. Silent, so the digest arrives down the
+	-- live path and the turn plays out where they are already looking.
+	if message_id == hash("refresh") then
+		if store.game_id and not store.playback_active then
+			self.since_poll = 0
+			load_game(self, store.game_id, true)
+		end
+		return
+	end
 	if message_id == hash("regenerate") and not store.game_id then
 		-- Walking the seed by one gives a completely different realm (the seed
 		-- is hashed per subsystem) while staying reproducible: the player can
