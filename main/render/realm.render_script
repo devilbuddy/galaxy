@@ -1,9 +1,10 @@
 --- Render pipeline for the map.
 --
--- The map is **two sprite layers and nothing else**: hand-drawn hex tiles from
--- /main/tiles.atlas, and Noto emoji from /main/emoji.atlas drawn on top of them.
--- Both go through Defold's builtin sprite material, so both fall under the one
--- `tile` predicate and the whole world is a single `render.draw`.
+-- The map is **three sprite layers and nothing else**: hand-drawn hex tiles from
+-- /main/tiles.atlas, generated political outlines from /main/influence.atlas,
+-- and Noto emoji from /main/emoji.atlas drawn on top. All use Defold's builtin
+-- sprite material, so they fall under the one `tile` predicate and one
+-- `render.draw`; atlas and tint changes determine the internal batches.
 --
 -- What used to be here was seven predicates - nebula, dust, wash, tiles, glow,
 -- owners, tiles - one per mesh layer, each with its own material and fragment
@@ -73,8 +74,8 @@ local function update_window(self)
 end
 
 function init(self)
-	-- "tile" is the tag on Defold's builtin sprite material, which both the
-	-- ground tiles and the glyphs are drawn with.
+	-- "tile" is the tag on Defold's builtin sprite material, which all three map
+	-- layers are drawn with.
 	self.sprite_predicate = render.predicate({ "tile" })
 	self.gui_predicate = render.predicate({ "gui" })
 	self.text_predicate = render.predicate({ "debug_text" })
@@ -106,7 +107,7 @@ local function set_world_camera(self)
 	local hw = (self.width * 0.5) / zoom
 	local hh = (self.height * 0.5) / zoom
 	render.set_view(vmath.matrix4())
-	-- Near/far are generous: the sprites sit at z 0..1 and nothing should ever
+	-- Near/far are generous: the sprites sit at z 0..2 and nothing should ever
 	-- be clipped by the depth range in a 2D map.
 	render.set_projection(vmath.matrix4_orthographic(
 		cam.x - hw, cam.x + hw, cam.y - hh, cam.y + hh, -1000, 1000))

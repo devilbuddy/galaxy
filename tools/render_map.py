@@ -48,6 +48,14 @@ HEX_SIZE = TILE_W / 2.0
 EMOJI_SCALE = {"city": 0.46, "holding": 0.40, "wilds": 0.0}
 SEAT_SCALE = 0.56
 
+# Political masks mirror tools/make_influence_atlas.py. The game selects one of
+# 63 generated images; drawing the same segments directly here keeps the sketch
+# quick to inspect without teaching Pillow how to consume a Defold atlas.
+INFLUENCE_STROKE = 8
+INFLUENCE_INSET = 6
+HEX_DIRECTIONS = ((1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1))
+EDGE_VERTICES = ((1, 0), (0, 5), (5, 4), (4, 3), (3, 2), (2, 1))
+
 
 def font(sz):
     try:
@@ -120,6 +128,44 @@ def render(data, size=1500, labels=True):
         img.alpha_composite(sea, place(w["x"], w["y"]))
     for t in tiles:
         img.alpha_composite(tile(t["tile"], tw, th), place(t["x"], t["y"]))
+
+    # Ownership between ground and glyphs. Each tile owns its inset half of a
+    # rival boundary, hence two parallel identity lines where colours meet.
+    by_cell = {(t["q"], t["r"]): t for t in tiles}
+    palette = data.get("player_palette_ink", [])
+    overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
+    outline = ImageDraw.Draw(overlay)
+    native_apothem = math.sqrt(3.0) * (TILE_W / 2.0) / 2.0
+    inset_scale = (native_apothem - INFLUENCE_INSET) / native_apothem
+    stroke = max(1, int(round(INFLUENCE_STROKE * tw / float(TILE_W))))
+    radius = stroke / 2.0
+    for t in tiles:
+        owner = int(t.get("owner") or 0)
+        if owner <= 0 or not palette:
+            continue
+        gx, gy = place(t["x"], t["y"])
+        cx, cy = gx + tw / 2.0, gy + th / 2.0
+        raw = ((gx + tw, cy), (gx + tw * 0.75, gy),
+               (gx + tw * 0.25, gy), (gx, cy),
+               (gx + tw * 0.25, gy + th), (gx + tw * 0.75, gy + th))
+        vertices = [(cx + (x - cx) * inset_scale,
+                     cy + (y - cy) * inset_scale) for x, y in raw]
+        rgb = palette[(owner - 1) % len(palette)]
+        alpha = 255 if t.get("live") else int(round(255 * 0.45))
+        colour = tuple(int(round(channel * 255)) for channel in rgb) + (alpha,)
+        for edge, direction in enumerate(HEX_DIRECTIONS):
+            neighbour = by_cell.get((t["q"] + direction[0],
+                                     t["r"] + direction[1]))
+            neighbour_owner = int((neighbour or {}).get("owner") or 0)
+            if neighbour_owner == owner:
+                continue
+            a, b = EDGE_VERTICES[edge]
+            p0, p1 = vertices[a], vertices[b]
+            outline.line((p0, p1), fill=colour, width=stroke)
+            for x, y in (p0, p1):
+                outline.ellipse((x - radius, y - radius,
+                                 x + radius, y + radius), fill=colour)
+    img.alpha_composite(overlay)
 
     # Glyphs on top. Open country resolves to null and gets nothing.
     for t in tiles:

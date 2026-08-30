@@ -1,6 +1,8 @@
 --- What a tile is drawn as: the ground under it, and the glyph on top.
 --
--- Two layers, two mechanisms, and this module is the one resolver for both.
+-- This module resolves the two semantic art layers. The political influence
+-- outline between them is state-dependent and is selected by main/realm.script
+-- through realm/influence.lua instead.
 --
 --   the ground   a hand-drawn hex from /main/tiles.atlas, chosen by the tile's
 --                terrain and biome. What the land *is*.

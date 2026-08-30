@@ -12,6 +12,7 @@ local land_mod = require("realm.land")
 local terrain = require("realm.terrain")
 local gen = require("realm.generate")
 local config = require("realm.config")
+local influence = require("realm.influence")
 
 local failures = 0
 local function check(name, cond, detail)
@@ -80,6 +81,46 @@ do
 		seen[k] = true
 	end
 	check("cell keys are unique across a field", collision == nil, tostring(collision))
+end
+
+print("political influence")
+do
+	local function mask(owner, ...)
+		return influence.mask(owner, { ... })
+	end
+	check("an isolated holding exposes all six sides",
+		mask(1, 0, 0, 0, 0, 0, 0) == 63)
+	check("an adjacent friendly tile removes only their shared side",
+		mask(1, 1, 0, 0, 0, 0, 0) == 62
+			and mask(1, 0, 0, 0, 1, 0, 0) == 55)
+	check("fully enclosed territory has no outline sprite",
+		mask(1, 1, 1, 1, 1, 1, 1) == 0)
+	check("unowned coast closes the outline",
+		mask(1, 1, 1, 1, 0, 1, 1) == 8)
+	check("a rival exposes the shared side",
+		mask(1, 1, 2, 1, 1, 1, 1) == 2)
+	check("unowned tiles never draw influence",
+		mask(0, 1, 1, 1, 1, 1, 1) == 0)
+	check("disconnected holdings are outlined independently",
+		mask(3, 0, 0, 0, 0, 0, 0) == 63
+			and mask(3, 0, 0, 0, 3, 0, 0) == 55)
+
+	local source = io.open("main/influence.atlas", "r")
+	local atlas = source and source:read("*a") or ""
+	if source then source:close() end
+	local all_images, deterministic = source ~= nil, true
+	for value = 1, influence.FULL_MASK do
+		local first = influence.image(value)
+		local second = influence.image(value)
+		if first ~= second then deterministic = false end
+		if not atlas:find("/" .. first .. ".png", 1, true) then all_images = false end
+		local png = io.open("main/assets/influence/" .. first .. ".png", "rb")
+		if not png then all_images = false else png:close() end
+	end
+	check("mask naming is deterministic", deterministic)
+	check("every nonzero mask resolves to an atlas image", all_images,
+		"run python3 tools/make_influence_atlas.py")
+	check("zero has no atlas image", influence.image(0) == nil)
 end
 
 print("the art fits the lattice")

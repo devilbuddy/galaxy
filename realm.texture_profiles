@@ -7,6 +7,10 @@ path_settings {
   profile: "mipmapped"
 }
 path_settings {
+  path: "/main/influence.atlas"
+  profile: "mipmapped"
+}
+path_settings {
   path: "/main/assets/emoji/sheet.png"
   profile: "mipmapped"
 }

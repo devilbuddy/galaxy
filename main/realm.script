@@ -1,23 +1,21 @@
 --- Builds the map out of sprites and hands it to the rest of the game.
 --
--- Two layers, both stock Defold sprites, both from an atlas by *name*:
+-- Three layers, all stock Defold sprites, all from an atlas by *name*:
 --
---   ground   one hex per land and sea tile, from /main/tiles.atlas
---   glyph    one emoji per place worth naming, from /main/emoji.atlas
+--   ground      one hex per land and sea tile, from /main/tiles.atlas
+--   influence   one outline mask per land tile, from /main/influence.atlas
+--   glyph       one emoji per place worth naming, from /main/emoji.atlas
 --
--- No material, no shader, no vertex buffer, no per-sprite constant - so the
--- whole map is two draw calls (one per atlas) by construction rather than by
--- care. What this replaced was seven mesh layers built from dynamic vertex
--- buffers in Lua, six fragment shaders and a Voronoi territory module.
+-- No custom material, shader or vertex buffer. Influence uses the stock sprite
+-- tint to colour white masks; terrain and glyph sprites remain untinted.
 --
 -- **Open country gets no glyph.** The hex underneath already says it is forest,
 -- so only a seat, a city or a holding is drawn on top - which is also what keeps
 -- the glyph layer to about a hundred sprites rather than one per tile.
 --
--- The sprites are built once per **seed** and then left alone. Nothing here runs
--- per frame, and a turn resolving does not touch them: fog and ownership are not
--- drawn yet (see `knowledge`), and when they come back they come back as more
--- sprites, not as a rebuild.
+-- Ground and glyph sprites are built once per **seed** and then left alone.
+-- Influence sprites are also reused: a turn or playback step only changes their
+-- named mask and tint, without rebuilding terrain or place glyphs.
 
 local generate = require("realm.generate")
 local store = require("main.store")
@@ -25,6 +23,9 @@ local seen = require("main.seen")
 local backend = require("main.backend")
 local monarch = require("monarch.monarch")
 local theme = require("main.theme")
+local hex = require("realm.hex")
+local influence = require("realm.influence")
+local config = require("realm.config")
 
 -- A go.property number is stored as a 32-bit float, so any integer above 2^24
 -- cannot round-trip: 20260823 silently comes back as 20260824. For a game whose
@@ -39,23 +40,23 @@ local MAX_SEED = 16777215
 -- z - but a whole unit between them documents that *every* glyph draws above
 -- *every* tile, not just the one it stands on. A glyph at the same z as the
 -- ground would be covered by whichever neighbouring hex happened to sort later.
-local Z_GROUND, Z_GLYPH = 0, 1
+local Z_GROUND, Z_INFLUENCE, Z_GLYPH = 0, 1, 2
 
---- Per-tile knowledge for the current game, or nil when just browsing a seed.
+--- Per-tile known owner and the strength of that knowledge.
 --
--- **Returns nothing useful yet.** Fog and ownership are not drawn in this pass -
--- the ground is the biome's own colour and nothing is tinted - so this exists as
--- the single place that decision will be made when they come back, exactly as it
--- was before. `store.playback_owners` still routes through here, which is what
--- lets a digest replay recolour the map without the playback knowing how the map
--- is drawn.
+-- Live knowledge is opaque; remembered ownership is deliberately subdued. An
+-- absent entry is unknown rather than neutral territory and draws nothing of
+-- its own, but still closes the outline of an adjacent known holding. Playback
+-- rewinds ownership through this one function while retaining today's fog - the
+-- digest does not contain historical visibility and must not invent it.
 local function knowledge(self, id)
 	local view = self.view
-	if not view then return 0 end
+	if not view then return 0, 0 end
 	local entry = view.tiles[tostring(id)]
-	if not entry then return 0 end
+	if not entry then return 0, 0 end
 	local past = store.playback_owners
-	return past and (past[id] or 0) or (entry.owner or 0)
+	local owner = past and (past[id] or 0) or (entry.owner or 0)
+	return owner, entry.live and 1 or 0.45
 end
 
 --- Whether the game view knows this tile as somebody's seat. Game state, not map
@@ -78,6 +79,50 @@ local function clear_sprites(self)
 	if not live then return end
 	for i = 1, #live do go.delete(live[i]) end
 	self.sprites = nil
+	self.influence_sprites = nil
+	self.tile_index = nil
+end
+
+--- Update every reusable political outline sprite from current knowledge.
+--
+-- A side is present whenever the lattice neighbour is not the same known
+-- owner. Rival tiles therefore each draw an inset line in their own colour,
+-- while friendly neighbours remove both halves of the seam.
+local function paint_influence(self, g)
+	local sprites = self.influence_sprites
+	if not sprites then return end
+	local palette = config.player_palette_ink
+	for i = 1, #g.tiles do
+		local owner, alpha = knowledge(self, i)
+		local neighbours = {}
+		local tile = g.tiles[i]
+		for d = 1, #hex.DIRECTIONS do
+			local direction = hex.DIRECTIONS[d]
+			local neighbour = self.tile_index[hex.key(
+				tile.q + direction[1], tile.r + direction[2])]
+			if neighbour then
+				local neighbour_owner = knowledge(self, neighbour)
+				neighbours[d] = neighbour_owner
+			else
+				neighbours[d] = 0
+			end
+		end
+
+		local mask = influence.mask(owner, neighbours)
+		local url = msg.url(nil, sprites[i], "sprite")
+		if mask == 0 then
+			go.set(url, "tint", vmath.vector4(0, 0, 0, 0))
+		else
+			sprite.play_flipbook(url, hash(influence.image(mask)))
+			local colour = palette[((owner - 1) % #palette) + 1]
+			-- The render pipeline uses premultiplied alpha. Tint RGB must therefore
+			-- carry alpha too; otherwise a remembered line would keep its full ink
+			-- energy while claiming to be 45% transparent.
+			go.set(url, "tint",
+				vmath.vector4(colour[1] * alpha, colour[2] * alpha,
+					colour[3] * alpha, alpha))
+		end
+	end
 end
 
 --- Spawn the ground and the glyphs.
@@ -113,6 +158,23 @@ local function build_sprites(self, g)
 		live[#live + 1] = id
 	end
 
+	-- One stable influence object per land tile. Fully enclosed, unowned and
+	-- unknown tiles are hidden by alpha rather than deleted, so a turn resolving
+	-- is only a flipbook/tint update and object ids never churn during playback.
+	local influence_sprites = {}
+	local tile_index = {}
+	for i = 1, #g.tiles do
+		local s = g.tiles[i]
+		tile_index[hex.key(s.q, s.r)] = i
+		local id = factory.create("#influencefactory",
+			vmath.vector3(s.x, s.y, Z_INFLUENCE), nil, nil, scale)
+		influence_sprites[i] = id
+		live[#live + 1] = id
+	end
+	self.influence_sprites = influence_sprites
+	self.tile_index = tile_index
+	paint_influence(self, g)
+
 	-- Glyphs, for the places worth naming. `emoji_for` returns nil for open
 	-- country, which is the whole reason this loop is shorter than the one above.
 	local images = require("main.emoji_ui")
@@ -140,11 +202,10 @@ end
 
 --- Recolour just what encodes who owns what.
 --
--- A playback step changes ownership and nothing else. Nothing draws ownership
--- yet, so this is a no-op - but it is kept, and `store.playback_revision` still
--- drives it, because this is where the ownership sprites will be updated and the
--- playback must not have to learn a new handshake when they arrive.
-local function repaint(self, g) -- luacheck: ignore
+-- A playback step changes ownership and nothing else, so it updates the pooled
+-- influence sprites without touching terrain or glyph objects.
+local function repaint(self, g)
+	paint_influence(self, g)
 end
 
 --- Build the map for a realm and hand the camera its extent.
@@ -156,13 +217,14 @@ end
 local function present(self, g, source, note)
 	local new_realm = self.presented_seed ~= g.seed
 	local t0 = os.clock()
-	-- Only a different seed needs new sprites. Ownership and fog do not exist on
-	-- the map yet, so a resolved turn changes nothing drawn - and respawning
-	-- several hundred game objects every ten-second poll would be the most
-	-- expensive thing in the project.
+	-- Only a different seed needs new sprites. A resolved turn repaints the
+	-- reusable influence layer and leaves several hundred terrain/glyph objects
+	-- alone.
 	local count = self.sprites and #self.sprites or 0
 	if new_realm or not self.sprites then
 		count = build_sprites(self, g)
+	else
+		repaint(self, g)
 	end
 	local built = (os.clock() - t0) * 1000
 

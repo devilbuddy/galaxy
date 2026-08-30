@@ -1,20 +1,25 @@
 -- Dump a full generated map as JSON for the offline renderer.
--- Usage: luajit tools/preview_map.lua <seed> [seats]
+-- Usage: luajit tools/preview_map.lua <seed> [seats] [influence]
 --
 -- `seats` places that many players' seats with the real opening-state
 -- picker (realm/sim/state.lua), so the sketch can judge the seat glyph
 -- without a game running - the placement is exactly what a game would open with.
+-- The optional `influence` mode assigns provinces round-robin to those players,
+-- producing deterministic coast, rival, enclosed, disconnected and remembered
+-- outline cases for visual inspection. It is a renderer fixture, not game state.
 package.path = "./?.lua;" .. package.path
 local gen = require("realm.generate")
 local json = require("tools.dump")
 local tiles_mod = require("realm.sim.tiles")
 local theme = require("main.theme")
+local config = require("realm.config")
 
 local seed = tonumber(arg[1]) or 1
 local g = gen.build(seed)
 
 local seat_count = tonumber(arg[2]) or 0
-local seat_of = {}
+local influence_fixture = arg[3] == "influence"
+local seat_of, owners, live = {}, {}, {}
 if seat_count > 0 then
 	local state = require("realm.sim.state")
 	local players = {}
@@ -25,6 +30,13 @@ if seat_count > 0 then
 	for i = 1, #g.tiles do
 		if st.tiles[i].seat_of ~= 0 then
 			seat_of[i] = st.tiles[i].seat_of
+		end
+		if influence_fixture then
+			owners[i] = ((g.tiles[i].province - 1) % seat_count) + 1
+			live[i] = i % 7 ~= 0
+		else
+			owners[i] = st.tiles[i].owner
+			live[i] = true
 		end
 	end
 end
@@ -40,7 +52,7 @@ for i, s in ipairs(g.tiles) do
 		kind = tiles_mod.kind(g, i),
 		tile = theme.tile_for(g, i),
 		emoji = theme.emoji_for(g, i, seat_of[i] ~= nil),
-		seat = seat_of[i] }
+		seat = seat_of[i], owner = owners[i] or 0, live = live[i] or false }
 end
 
 local water = {}
@@ -53,8 +65,10 @@ for i, r in ipairs(g.provinces) do
 	provinces[i] = { name = r.name, colour = r.colour, cx = r.cx, cy = r.cy, n = r.tile_count }
 end
 
-io.stderr:write(string.format("seed %d: %d land %d sea %d provinces %d seats\n",
-	seed, #tiles, #water, #provinces, seat_count))
+io.stderr:write(string.format("seed %d: %d land %d sea %d provinces %d seats%s\n",
+	seed, #tiles, #water, #provinces, seat_count,
+	influence_fixture and " influence fixture" or ""))
 print(json.tojson({ seed = seed, world = g.world_size, hex_size = g.hex_size,
 	tiles = tiles, water = water, provinces = provinces,
-	sea_tile = theme.sea_tile(), emoji = theme.EMOJI }))
+	sea_tile = theme.sea_tile(), emoji = theme.EMOJI,
+	player_palette_ink = config.player_palette_ink }))
